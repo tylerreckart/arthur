@@ -49,13 +49,6 @@ static uint32_t gWsPingMs = 0;
 #endif
 #define WS_PING_MS 20000
 
-struct RecordStream {
-  bool (*send)(const int16_t *samples, size_t n, void *ctx);
-  void *ctx = nullptr;
-  bool ok = true;
-  size_t sent = 0;
-};
-
 static bool gThinking = false;
 static bool gPlaying = false;
 static bool gThinkLit = false;

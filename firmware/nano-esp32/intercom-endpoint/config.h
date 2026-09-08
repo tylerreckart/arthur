@@ -16,9 +16,9 @@
 
 #ifndef INTERCOM_HOST
 // LAN IP of the machine running Intercom — not 127.0.0.1 (that is the ESP itself).
-#define INTERCOM_HOST "192.168.86.30"
+#define INTERCOM_HOST "192.168.86.41"
 #endif
-#define FIRMWARE_CONFIG_TAG "intercom-lan-v6"
+#define FIRMWARE_CONFIG_TAG "intercom-lan-v7"
 #ifndef INTERCOM_PORT
 #define INTERCOM_PORT 8090
 #endif

@@ -3,7 +3,7 @@
   "name": "Arthur",
   "role": "voice-assistant",
   "mode": "spoken",
-  "model": "meta/muse-spark-1.2",
+  "model": "openai/gpt-6-astra",
   "max_tokens": 768,
   "temperature": 0.55,
   "brevity": "lite",

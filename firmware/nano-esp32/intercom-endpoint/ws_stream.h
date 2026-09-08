@@ -3,6 +3,15 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
+// Live PTT PCM sink. Defined here so Arduino's generated .ino prototypes
+// see the type (they are inserted after #includes, before the sketch body).
+struct RecordStream {
+  bool (*send)(const int16_t *samples, size_t n, void *ctx);
+  void *ctx = nullptr;
+  bool ok = true;
+  size_t sent = 0;
+};
+
 // Minimal RFC 6455 client for Intercom `GET /v1/stream`.
 // Masks outbound frames; plays unmasked inbound binary PCM as it arrives.
 class IntercomWs {
@@ -12,7 +21,8 @@ class IntercomWs {
   bool ensure(const char *host, uint16_t port, const char *token,
               const char *device_id);
   void close();
-  bool connected() const { return c_.connected(); }
+  // WiFiClient::connected() is non-const on arduino-esp32 2.0.x.
+  bool connected() { return c_.connected(); }
 
   bool sendBinary(const uint8_t *data, size_t len);
   bool sendText(const char *json);
