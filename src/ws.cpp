@@ -197,6 +197,22 @@ class SocketAudioSink : public AudioSink {
     return send_frame(fd_, WsOpcode::Binary,
                       std::string_view(reinterpret_cast<const char*>(data), len));
   }
+  void event(const char* type, const std::string& value) override {
+    nlohmann::json j = {{"type", type ? type : ""}};
+    const std::string t = type ? type : "";
+    if (t == "working") {
+      j["tool"] = value;
+    } else if (t == "status") {
+      j["phase"] = value;
+    } else if (!value.empty()) {
+      j["text"] = value;
+    }
+    if (hub_) {
+      hub_->send_json(device_id_, j);
+      return;
+    }
+    send_json(fd_, j);
+  }
 
  private:
   int fd_;

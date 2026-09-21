@@ -43,6 +43,7 @@ struct ArbiterRunState {
   std::string stream_err;
   std::string speak_buf;
   std::string tool_name;
+  int last_forming_ms = -1000;
   std::mutex speak_mu;
 };
 
@@ -249,6 +250,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   auto speak = [&](const std::string& text) -> bool {
     const std::string spoken = to_speakable(text);
     if (spoken.empty()) return true;
+    sink.event("said", spoken);
     const auto t0 = std::chrono::steady_clock::now();
     const bool ok = tts_->synthesize(
         spoken,
@@ -326,6 +328,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     return finish(result);
   }
   result.conversation_id = conv;
+  sink.event("status", "thinking");
 
   ArbiterRunState arb_state;
   std::string spoken_filler;
@@ -348,6 +351,13 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     arb_state.got_first_delta.store(true);
     std::lock_guard<std::mutex> lk(arb_state.speak_mu);
     arb_state.speak_buf += delta;
+    const int now_ms = elapsed_now();
+    if (now_ms - arb_state.last_forming_ms >= 80) {
+      arb_state.last_forming_ms = now_ms;
+      std::string tail = arb_state.speak_buf;
+      if (tail.size() > 96) tail = tail.substr(tail.size() - 96);
+      sink.event("forming", tail);
+    }
   };
   cbs.on_tool_call = [&](const std::string& tool) {
     {
@@ -356,6 +366,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     }
     arb_state.tool_started_ms.store(elapsed_now());
     arb_state.saw_tool.store(true);
+    sink.event("working", tool);
   };
   cbs.on_done = [&](bool ok, const std::string& content, const std::string& error) {
     arb_state.done_ok = ok;
