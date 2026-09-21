@@ -1,10 +1,6 @@
 # Arthur
 
-A custom, local-first voice assistant built against my personal orchestration harness. An ESP32 can send PCM in, Arthur runs **whisper.cpp** STT + **Kokoro** TTS, and Arbiter stays text + SSE in the middle.
-
-![PCB Board Front](.github/board_front.jpg)
-
-HTTP `POST /v1/utterance` on `:8090` remains the fallback if the WebSocket is down.
+A custom, local-first voice assistant. An ESP32 can send PCM in, Arthur runs **whisper.cpp** STT + **Kokoro** TTS, and Arbiter stays text + SSE in the middle.
 
 A native Mac desk app lives in `macos/Arthur`. It speaks through the same WebSocket and `device_token` as the hardware device, and defaults to that device’s `X-Device-Id` so Arthur’s conversation memory is shared.
 
