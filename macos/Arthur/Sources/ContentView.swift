@@ -737,6 +737,15 @@ struct SettingsView: View {
         } footer: {
           Text("Intercom maps each device onto one conversation. This stays in settings so the desk app can share memory with the hallway speaker.")
         }
+
+        McpSettingsSection()
+
+        if !model.mcpSaveError.isEmpty {
+          Section {
+            Text(model.mcpSaveError)
+              .foregroundStyle(.red)
+          }
+        }
       }
       .formStyle(.grouped)
       .navigationTitle("Settings")
@@ -752,8 +761,9 @@ struct SettingsView: View {
           .buttonStyle(.glassProminent)
         }
       }
+      .onAppear { model.loadMcpRegistry() }
     }
-    .frame(minWidth: 420, minHeight: 380)
+    .frame(minWidth: 460, minHeight: 520)
     .preferredColorScheme(.dark)
     .tint(ArthurTheme.accent)
   }

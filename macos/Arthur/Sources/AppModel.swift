@@ -31,6 +31,10 @@ final class AppModel {
   var settingsOpen = false
   var holding = false
   var inputLevel = 0.0
+  var mcpServers: [McpServer] = []
+  var mcpRegistryPath = McpRegistryStore.defaultPath
+  var mcpSaveError = ""
+  var arbiterReachable = false
   var soundOn = true {
     didSet {
       ConfigStore.saveSoundOn(soundOn)
@@ -60,6 +64,7 @@ final class AppModel {
     audio.soundEnabled = soundOn
     transcriptDeviceId = config.deviceId
     discussion = ConfigStore.loadTranscript(deviceId: transcriptDeviceId)
+    loadMcpRegistry()
     client.onEvent = { [weak self] event in
       Task { @MainActor in self?.handle(event) }
     }
@@ -134,6 +139,7 @@ final class AppModel {
       transcriptDeviceId = config.deviceId
       discussion = ConfigStore.loadTranscript(deviceId: transcriptDeviceId)
     }
+    persistMcpRegistry()
     audio.interruptPlayback()
     connect()
   }
@@ -145,6 +151,46 @@ final class AppModel {
     if !keepId.isEmpty { config.deviceId = keepId }
     if !keepHost.isEmpty { config.host = keepHost }
     sessions = ConfigStore.loadSessions(dbPath: config.sessionDb)
+    loadMcpRegistry()
+  }
+
+  func loadMcpRegistry() {
+    mcpRegistryPath = McpRegistryStore.defaultPath
+    mcpServers = McpRegistryStore.load(from: mcpRegistryPath)
+    mcpSaveError = ""
+  }
+
+  func persistMcpRegistry() {
+    do {
+      try McpRegistryStore.save(mcpServers, to: mcpRegistryPath)
+      mcpSaveError = ""
+    } catch {
+      mcpSaveError = "Could not write Arbiter’s MCP registry."
+    }
+  }
+
+  func upsertMcp(_ server: McpServer) {
+    var next = server
+    next.name = McpServer.canonicalName(next.name)
+    guard !next.name.isEmpty, !next.command.isEmpty else { return }
+    if let idx = mcpServers.firstIndex(where: { $0.name == next.name }) {
+      mcpServers[idx] = next
+    } else {
+      mcpServers.append(next)
+      mcpServers.sort { $0.name < $1.name }
+    }
+    persistMcpRegistry()
+  }
+
+  func removeMcp(_ name: String) {
+    mcpServers.removeAll { $0.name == name }
+    persistMcpRegistry()
+  }
+
+  func setMcpEnabled(_ name: String, _ enabled: Bool) {
+    guard let idx = mcpServers.firstIndex(where: { $0.name == name }) else { return }
+    mcpServers[idx].enabled = enabled
+    persistMcpRegistry()
   }
 
   func pttDown() {
@@ -379,12 +425,18 @@ final class AppModel {
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
           let ok = obj["ok"] as? Bool ?? false
           self.healthOK = ok || self.phase != .disconnected
+          if let arb = obj["arbiter"] as? [String: Any] {
+            self.arbiterReachable = arb["reachable"] as? Bool ?? false
+          }
           if self.phase == .disconnected {
             self.healthDetail = ok ? "http up, socket down" : "intercom not ready"
           }
-        } else if self.phase == .disconnected {
-          self.healthOK = false
-          self.healthDetail = "intercom not reachable on :\(self.config.httpPort)"
+        } else {
+          self.arbiterReachable = false
+          if self.phase == .disconnected {
+            self.healthOK = false
+            self.healthDetail = "intercom not reachable on :\(self.config.httpPort)"
+          }
         }
       }
     }.resume()
