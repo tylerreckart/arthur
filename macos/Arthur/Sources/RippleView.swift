@@ -4,11 +4,24 @@ import SwiftUI
 
 struct SpeakingRipple: View {
   var active: Bool
+  var restrained = false
 
   var body: some View {
     RippleMetal(active: active)
-      .opacity(active ? 1 : 0)
+      .opacity(active ? (restrained ? 0.48 : 0.88) : 0)
+      .mask {
+        LinearGradient(
+          stops: [
+            .init(color: .black, location: 0),
+            .init(color: .black.opacity(0.78), location: 0.52),
+            .init(color: .clear, location: 1),
+          ],
+          startPoint: .top,
+          endPoint: .bottom
+        )
+      }
       .animation(.easeInOut(duration: 1.15), value: active)
+      .animation(.easeInOut(duration: 0.35), value: restrained)
       .allowsHitTesting(false)
       .accessibilityHidden(true)
   }

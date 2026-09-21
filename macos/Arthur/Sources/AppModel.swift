@@ -30,6 +30,7 @@ final class AppModel {
   var micGranted = false
   var settingsOpen = false
   var holding = false
+  var inputLevel = 0.0
   var soundOn = true {
     didSet {
       ConfigStore.saveSoundOn(soundOn)
@@ -64,7 +65,14 @@ final class AppModel {
     }
     audio.onCapture = { [weak self] data in
       self?.client.sendPCM(data)
-      DispatchQueue.main.async { self?.pcmBytes += data.count }
+      let level = Self.captureLevel(data)
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.pcmBytes += data.count
+        if self.holding {
+          self.inputLevel = min(1, max(level, self.inputLevel * 0.68))
+        }
+      }
     }
   }
 
@@ -104,6 +112,7 @@ final class AppModel {
     guard !config.deviceToken.isEmpty else {
       become(.disconnected)
       healthDetail = "missing device_token in intercom.json"
+      if errorText.isEmpty { errorText = healthDetail }
       return
     }
     become(.connecting)
@@ -139,7 +148,7 @@ final class AppModel {
   }
 
   func pttDown() {
-    guard phase == .idle || phase == .speaking || phase == .thinking else { return }
+    guard canSend else { return }
     if phase == .speaking || phase == .thinking {
       client.sendCancel()
       audio.interruptPlayback()
@@ -155,6 +164,7 @@ final class AppModel {
       formingText = ""
       try audio.startCapture()
       holding = true
+      inputLevel = 0.12
       pttStarted = Date()
       become(.listening)
       setWork(.none)
@@ -167,6 +177,7 @@ final class AppModel {
   func pttUp() {
     guard holding else { return }
     holding = false
+    inputLevel = 0
     audio.stopCapture()
     let elapsed = Date().timeIntervalSince(pttStarted ?? Date())
     pttStarted = nil
@@ -189,7 +200,7 @@ final class AppModel {
       client.sendCancel()
       audio.interruptPlayback()
     }
-    guard phase == .idle || phase == .speaking || phase == .thinking else { return }
+    guard canSend else { return }
     youSaid = text
     appendDiscussion(fromYou: true, text: text)
     draft = ""
@@ -201,15 +212,51 @@ final class AppModel {
     client.sendText(text)
   }
 
+  var canSend: Bool {
+    phase == .idle || phase == .speaking || phase == .thinking
+  }
+
+  var canTalk: Bool {
+    phase != .disconnected && phase != .connecting
+  }
+
+  var canCancel: Bool {
+    phase == .speaking || phase == .thinking
+  }
+
   var phaseLabel: String {
     switch phase {
-    case .disconnected: return "Offline"
-    case .connecting: return "Calling"
-    case .idle: return "Ready"
+    case .disconnected: return "Disconnected"
+    case .connecting: return "Reaching intercom…"
+    case .idle: return micGranted ? "Connected" : "Mic off"
     case .listening: return "Listening"
-    case .thinking: return work.line.isEmpty ? "Thinking" : work.line
-    case .speaking: return soundOn ? "Speaking" : "Speaking (muted)"
+    case .thinking: return "Writing"
+    case .speaking: return "Speaking"
     }
+  }
+
+  func dismissError() {
+    errorText = ""
+  }
+
+  func cancelTurn() {
+    guard canCancel else { return }
+    client.sendCancel()
+    audio.interruptPlayback()
+    expectingReply = false
+    typedThisTurn = false
+    formingText = ""
+    setWork(.none)
+    become(client.isConnected ? .idle : .disconnected)
+  }
+
+  func prefillDraft(_ text: String) {
+    draft = text
+  }
+
+  func applyStarter(_ text: String, send: Bool) {
+    draft = text
+    if send { sendDraft() }
   }
 
   private func appendDiscussion(fromYou: Bool, text: String) {
@@ -286,12 +333,16 @@ final class AppModel {
     case .disconnected(let msg):
       audio.stopCapture()
       holding = false
+      inputLevel = 0
       expectingReply = false
       typedThisTurn = false
       formingText = ""
       become(.disconnected)
       healthOK = false
       healthDetail = msg
+      if errorText.isEmpty {
+        errorText = msg.isEmpty ? "Disconnected from intercom." : msg
+      }
       scheduleReconnect()
     }
   }
@@ -359,5 +410,19 @@ final class AppModel {
 
   private var textFieldFocused: Bool {
     NSApp.keyWindow?.firstResponder is NSTextView
+  }
+
+  private static func captureLevel(_ data: Data) -> Double {
+    let count = data.count / 2
+    guard count > 0 else { return 0 }
+    return data.withUnsafeBytes { raw in
+      let samples = raw.bindMemory(to: Int16.self)
+      var sum = 0.0
+      for i in 0..<count {
+        let x = Double(samples[i]) / 32768.0
+        sum += x * x
+      }
+      min(1, sqrt(sum / Double(count)) * 3.4)
+    }
   }
 }
