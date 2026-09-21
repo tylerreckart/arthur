@@ -11,6 +11,15 @@ ESP32  <--WS reply PCM-----------  Intercom  <--text------/
 
 HTTP `POST /v1/utterance` on `:8090` remains the fallback if the WebSocket is down.
 
+A native Mac desk app lives in `macos/Arthur`. It speaks through the same Intercom WebSocket and `device_token` as the hallway speaker, and defaults to that speaker’s `X-Device-Id` so Arthur’s conversation memory is shared.
+
+```bash
+macos/Arthur/build.sh
+open macos/Arthur/dist/Arthur.app
+```
+
+Hold space (or the round button) to talk; type if you prefer. Intercom must already be running.
+
 Intercom keeps Whisper and Kokoro loaded in local HTTP servers (`whisper-server` on `:8092`, `scripts/kokoro_server.py` on `:8091`) so each turn does not reload ONNX/ggml. Instant-ack phrases (`Yes, sir.`, `Of course.`, `Very good.`, …) are synthesized once at startup and replayed from PCM cache — including a local ack after `filler.instant_ack_ms` and an earlier tool ack after `filler.tool_ack_ms`. Spoken replies can start after about seven words (`early_flush_words`), not only at a period. Optional WebSocket duplex is `ws://<host>:8093/v1/stream`. Each turn logs a single `intercom latency …` line (`stt_ms`, `arbiter_ttft_ms`, `kokoro_ms`, `ttfa_ms`).
 
 Colocate Intercom on the same host as `arbiter --api` (default `http://127.0.0.1:8080`). Device tokens never see the Arbiter bearer.

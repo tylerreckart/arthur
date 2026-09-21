@@ -268,6 +268,9 @@ bool ArbiterClient::send_message(std::int64_t conversation_id,
 
   auto res = cli->send(req);
 
+  // content_receiver returns false on `done` so httplib reports Canceled.
+  if (got_done) return true;
+
   if (aborted) {
     if (!request_id.empty()) {
       std::string cancel_err;
@@ -277,7 +280,11 @@ bool ArbiterClient::send_message(std::int64_t conversation_id,
     return false;
   }
   if (!res) {
-    if (err) *err = "arbiter send_message: connection failed";
+    if (err) {
+      const auto why = httplib::to_string(res.error());
+      *err = std::string("arbiter send_message: ") +
+             (why == "Connection" ? "connection failed" : why);
+    }
     return false;
   }
   if (res->status != 200) {

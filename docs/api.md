@@ -142,6 +142,10 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 | `{"type":"turn",…}` | Transcript / turn id after the pipeline returns |
 | `{"type":"done","ok","error"}` | Terminal |
 | `{"type":"speak","kind","run_id"}` | Unsolicited speak-back (scheduled reminder) about to stream PCM |
+| `{"type":"status","phase"}` | `thinking` while waiting on Arbiter (desk clients) |
+| `{"type":"working","tool"}` | Master tool started; value is the tool name |
+| `{"type":"said","text"}` | Sentence about to be spoken (same text Kokoro hears) |
+| `{"type":"forming","text"}` | Tail of the answer as tokens arrive (~12 Hz, desk presence) |
 
 Idle devices keep the socket open. When Arbiter fires a `/schedule` (or
 Intercom sees `run.completed` on `GET /v1/notifications/stream`), Intercom

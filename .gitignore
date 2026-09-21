@@ -18,3 +18,4 @@ compile_commands.json
 CMakeUserPresets.json
 firmware/nano-esp32/secrets.h
 firmware/nano-esp32/intercom-endpoint/secrets.h
+macos/Arthur/dist/
