@@ -100,7 +100,7 @@ Debug: `{ device_id, conversation_id, last_turn_id, updated_at }`.
 | Each turn | `POST /v1/conversations/:id/messages` + SSE |
 | `message` | STT transcript only (no voice-intercom suffix) |
 | body | `{ "message", "channel": "voice", "agent_def" }` — `agent_def` includes a fresh local date/time rule each turn |
-| Arthur | `mode: "spoken"`, `intent.mode: "off"` |
+| Arthur | `mode: "spoken"`, `intent.mode: "off"`. Spoken cadence is owned by Arbiter's constitution — Arthur's `agent_def` does not restack a sentence-count cap. |
 | Cancel | `POST /v1/requests/:id/cancel` |
 | Idempotency-Key | Intercom `turn_id` |
 
