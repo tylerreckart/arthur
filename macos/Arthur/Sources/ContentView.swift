@@ -3,19 +3,25 @@ import SwiftUI
 struct ContentView: View {
   @Environment(AppModel.self) private var model
   @FocusState private var typing: Bool
+  @State private var scrolledAway = false
+  @State private var showReturnHint = false
+  @State private var didShowReturnHint = false
 
   var body: some View {
     @Bindable var model = model
     ZStack(alignment: .top) {
-      SpeakingRipple(active: model.phase == .speaking)
+      SpeakingRipple(active: model.phase == .speaking, restrained: rippleRestrained)
         .frame(maxWidth: .infinity)
-        .frame(height: 420)
+        .frame(height: rippleRestrained ? 128 : 152)
         .allowsHitTesting(false)
       NavigationStack {
         transcript
           .navigationTitle("Arthur")
           .toolbarTitleDisplayMode(.inline)
           .toolbar {
+            ToolbarItem(placement: .navigation) {
+              StatusChip()
+            }
             ToolbarItemGroup(placement: .primaryAction) {
               Button {
                 model.soundOn.toggle()
@@ -37,10 +43,23 @@ struct ContentView: View {
           }
           .scrollEdgeEffectStyle(.soft, for: .top)
           .safeAreaBar(edge: .bottom) {
-            ComposerBar(typing: $typing)
-              .padding(.horizontal, 16)
-              .padding(.bottom, 12)
-              .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 8) {
+              if !model.errorText.isEmpty {
+                ErrorBanner(text: model.errorText) {
+                  model.dismissError()
+                }
+              }
+              if showReturnHint, !model.holding {
+                Text("Return to send · Shift-Return for a new line")
+                  .font(.caption2)
+                  .foregroundStyle(.tertiary)
+                  .padding(.horizontal, 6)
+              }
+              ComposerBar(typing: $typing)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+            .padding(.top, 2)
           }
           .sheet(isPresented: $model.settingsOpen) {
             SettingsView()
@@ -70,6 +89,13 @@ struct ContentView: View {
     .preferredColorScheme(.dark)
     .tint(ArthurTheme.accent)
     .background(.clear)
+    .onChange(of: typing) { _, on in
+      if on, !didShowReturnHint {
+        showReturnHint = true
+        didShowReturnHint = true
+      }
+      if !on { showReturnHint = false }
+    }
   }
 
   @ViewBuilder
@@ -79,26 +105,26 @@ struct ContentView: View {
     } else {
       ScrollViewReader { proxy in
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 28) {
-            if !model.errorText.isEmpty {
-              Text(model.errorText)
-                .font(.callout)
-                .foregroundStyle(.red)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fadeUnderHeader()
-            }
+          LazyVStack(alignment: .leading, spacing: 20) {
             ForEach(transcriptClusters) { cluster in
-              TranscriptClusterView(cluster: cluster)
+              TranscriptClusterView(
+                cluster: cluster,
+                showStop: stopTarget == cluster.id,
+                onEdit: { text in
+                  model.prefillDraft(text)
+                  typing = true
+                }
+              )
+            }
+            if showWorkTrail {
+              WorkTrail(line: model.work.line)
             }
             if showForming {
-              ArthurCopy(texts: [model.formingText], live: true)
-            } else if model.phase == .thinking, model.formingText.isEmpty {
-              Text(model.work.line.isEmpty ? "…" : model.work.line)
-                .font(.callout)
-                .foregroundStyle(.tertiary)
-                .padding(.leading, 2)
-                .fadeUnderHeader()
+              ArthurCopy(
+                texts: [model.formingText],
+                live: true,
+                showStop: model.canCancel
+              )
             }
             Color.clear.frame(height: 1).id("bottom")
           }
@@ -111,6 +137,11 @@ struct ContentView: View {
         }
         .onChange(of: model.formingText) {
           scroll(proxy)
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+          geo.contentSize.height - geo.contentOffset.y - geo.containerSize.height
+        } action: { _, leftover in
+          scrolledAway = leftover > 88
         }
         .scrollContentBackground(.hidden)
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
@@ -144,6 +175,22 @@ struct ContentView: View {
     return spoken.isEmpty || !spoken.contains(live)
   }
 
+  private var showWorkTrail: Bool {
+    switch model.work {
+    case .none, .speaking: return false
+    case .findingWords, .tool: return model.phase == .thinking || model.phase == .speaking
+    }
+  }
+
+  private var stopTarget: UUID? {
+    guard model.canCancel, !showForming else { return nil }
+    return transcriptClusters.last(where: { !$0.fromYou })?.id
+  }
+
+  private var rippleRestrained: Bool {
+    model.discussion.count >= 4 || scrolledAway
+  }
+
   private func fold(_ text: String) -> String {
     let lowered = text.lowercased().map { ch -> Character in
       if ch.isLetter || ch.isNumber { return ch }
@@ -155,19 +202,55 @@ struct ContentView: View {
   }
 
   private var emptyState: some View {
-    ContentUnavailableView {
-      Label("Arthur", systemImage: "text.bubble")
-    } description: {
-      Text(emptyHint)
+    VStack(spacing: 22) {
+      VStack(spacing: 8) {
+        Text("Arthur")
+          .font(.system(.largeTitle, design: .serif))
+        Text(emptyHint)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.center)
+      }
+      if !model.holding {
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 8) { starterChips }
+          VStack(spacing: 8) { starterChips }
+        }
+      }
+      Text("Hold Talk or space to speak")
+        .font(.caption)
+        .foregroundStyle(.tertiary)
     }
+    .padding(.horizontal, 28)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   private var emptyHint: String {
     switch model.phase {
-    case .disconnected: return model.healthDetail
-    case .connecting: return "Reaching intercom…"
-    case .listening: return "Release to send"
-    default: return "Hold Talk or space, or type below"
+    case .disconnected:
+      return model.errorText.isEmpty ? model.healthDetail : "He’ll be here when the intercom is back."
+    case .connecting:
+      return "Reaching intercom…"
+    case .listening:
+      return "Release to send"
+    default:
+      return "Hold Talk or space, or type below"
+    }
+  }
+
+  @ViewBuilder
+  private var starterChips: some View {
+    StarterChip("What’s on today?") {
+      model.applyStarter("What’s on my calendar today?", send: model.canSend)
+      if !model.canSend { typing = true }
+    }
+    StarterChip("Remind me") {
+      model.prefillDraft("Remind me ")
+      typing = true
+    }
+    StarterChip("What’s up?") {
+      model.applyStarter("What’s up?", send: model.canSend)
+      if !model.canSend { typing = true }
     }
   }
 
@@ -180,6 +263,128 @@ struct ContentView: View {
   }
 }
 
+private struct StatusChip: View {
+  @Environment(AppModel.self) private var model
+  @State private var dim = false
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Circle()
+        .fill(dotColor)
+        .frame(width: 6, height: 6)
+        .opacity(shouldPulse && dim ? 0.35 : 1)
+      Text(model.phaseLabel)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 3)
+    .background(.fill.quaternary, in: Capsule())
+    .animation(.easeInOut(duration: 0.2), value: model.phaseLabel)
+    .onAppear { syncPulse() }
+    .onChange(of: shouldPulse) { _, _ in syncPulse() }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(model.phaseLabel)
+  }
+
+  private var shouldPulse: Bool {
+    model.phase == .connecting || model.phase == .listening || model.phase == .thinking
+  }
+
+  private func syncPulse() {
+    if shouldPulse {
+      withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+        dim = true
+      }
+    } else {
+      withAnimation(.easeOut(duration: 0.15)) { dim = false }
+    }
+  }
+
+  private var dotColor: Color {
+    switch model.phase {
+    case .disconnected: return .red.opacity(0.8)
+    case .connecting: return .secondary
+    case .idle: return model.micGranted ? Color.green.opacity(0.85) : ArthurTheme.accent
+    case .listening, .thinking, .speaking: return ArthurTheme.accent
+    }
+  }
+}
+
+private struct WorkTrail: View {
+  let line: String
+  @State private var pulse = false
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Circle()
+        .fill(ArthurTheme.accent)
+        .frame(width: 6, height: 6)
+        .opacity(pulse ? 1 : 0.32)
+      Text(line)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .lineLimit(2)
+    }
+    .padding(.leading, 2)
+    .fadeUnderHeader()
+    .onAppear {
+      withAnimation(.easeInOut(duration: 0.95).repeatForever(autoreverses: true)) {
+        pulse = true
+      }
+    }
+    .accessibilityLabel(line)
+  }
+}
+
+private struct ErrorBanner: View {
+  let text: String
+  var dismiss: () -> Void
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 8) {
+      Image(systemName: "exclamationmark.circle.fill")
+        .foregroundStyle(ArthurTheme.accent)
+        .padding(.top, 1)
+      Text(text)
+        .font(.callout)
+        .foregroundStyle(.primary)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      Button(action: dismiss) {
+        Image(systemName: "xmark")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+          .frame(width: 18, height: 18)
+      }
+      .buttonStyle(.plain)
+      .help("Dismiss")
+      .accessibilityLabel("Dismiss")
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
+  }
+}
+
+private struct StarterChip: View {
+  let title: String
+  var action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Text(title)
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+    .buttonStyle(.plain)
+    .background(.fill.quaternary, in: Capsule())
+    .help(title)
+  }
+}
+
 private struct ComposerBar: View {
   @Environment(AppModel.self) private var model
   @FocusState.Binding var typing: Bool
@@ -187,32 +392,34 @@ private struct ComposerBar: View {
   var body: some View {
     @Bindable var model = model
     let hasDraft = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    let canTalk = model.phase != .disconnected && model.phase != .connecting
 
     HStack(alignment: .center, spacing: 10) {
-      TextField(
-        "Ask Arthur",
-        text: $model.draft,
-        prompt: Text(model.holding ? "Listening…" : "Ask Arthur"),
-        axis: .vertical
-      )
-      .textFieldStyle(.plain)
-      .font(.body)
-      .lineLimit(1...6)
-      .focused($typing)
-      .disabled(model.holding)
-      .onSubmit { model.sendDraft() }
-      .onKeyPress { press in
-        guard press.key == .return else { return .ignored }
-        if press.modifiers.contains(.shift) { return .ignored }
-        guard hasDraft else { return .handled }
-        model.sendDraft()
-        return .handled
+      if model.holding {
+        listeningAffordance
+      } else {
+        TextField(
+          "Ask Arthur",
+          text: $model.draft,
+          prompt: Text("Ask Arthur"),
+          axis: .vertical
+        )
+        .textFieldStyle(.plain)
+        .font(.body)
+        .lineLimit(1...6)
+        .focused($typing)
+        .onSubmit { model.sendDraft() }
+        .onKeyPress { press in
+          guard press.key == .return else { return .ignored }
+          if press.modifiers.contains(.shift) { return .ignored }
+          guard hasDraft else { return .handled }
+          model.sendDraft()
+          return .handled
+        }
+        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
       }
-      .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
 
       if hasDraft, !model.holding {
-        ComposerCircle(systemImage: "arrow.up", enabled: canTalk) {
+        ComposerCircle(systemImage: "arrow.up", enabled: model.canTalk) {
           model.sendDraft()
         }
         .help("Send")
@@ -221,7 +428,7 @@ private struct ComposerBar: View {
 
       ComposerCircle(
         systemImage: model.holding ? "waveform" : "mic.fill",
-        enabled: canTalk,
+        enabled: model.canTalk,
         action: {}
       )
       .help(model.holding ? "Release to send" : "Hold to talk")
@@ -230,7 +437,7 @@ private struct ComposerBar: View {
       .simultaneousGesture(
         DragGesture(minimumDistance: 0)
           .onChanged { _ in
-            if canTalk, !model.holding { model.pttDown() }
+            if model.canTalk, !model.holding { model.pttDown() }
           }
           .onEnded { _ in
             if model.holding { model.pttUp() }
@@ -240,7 +447,48 @@ private struct ComposerBar: View {
     .padding(.leading, 18)
     .padding(.trailing, 8)
     .padding(.vertical, 7)
+    .animation(.easeInOut(duration: 0.16), value: model.holding)
     .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 24, style: .continuous))
+  }
+
+  private var listeningAffordance: some View {
+    HStack(spacing: 10) {
+      ListeningMeter(level: model.inputLevel)
+      VStack(alignment: .leading, spacing: 1) {
+        Text("Listening")
+          .font(.body.weight(.medium))
+          .foregroundStyle(ArthurTheme.accent)
+        Text("Release to send")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 0)
+    }
+    .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("Listening, release to send")
+  }
+}
+
+private struct ListeningMeter: View {
+  var level: Double
+  @State private var pulse = false
+
+  var body: some View {
+    HStack(alignment: .center, spacing: 3) {
+      ForEach(0..<5, id: \.self) { i in
+        let lit = level > Double(i) / 5.2
+        Capsule()
+          .fill(ArthurTheme.accent.opacity(lit ? 0.95 : 0.28))
+          .frame(width: 3, height: 7 + CGFloat(i) * 2.4)
+      }
+    }
+    .opacity(0.72 + (pulse ? 0.2 : 0) + min(level, 1) * 0.08)
+    .onAppear {
+      withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
+        pulse = true
+      }
+    }
   }
 }
 
@@ -270,27 +518,37 @@ private struct TranscriptCluster: Identifiable {
 
 private struct TranscriptClusterView: View {
   let cluster: TranscriptCluster
+  var showStop = false
+  var onEdit: (String) -> Void
 
   var body: some View {
     if cluster.fromYou {
-      UserCopy(texts: cluster.texts)
+      UserCopy(texts: cluster.texts, onEdit: onEdit)
     } else {
-      ArthurCopy(texts: cluster.texts, live: false)
+      ArthurCopy(texts: cluster.texts, live: false, showStop: showStop)
     }
   }
 }
 
 private struct UserCopy: View {
   let texts: [String]
+  var onEdit: (String) -> Void
+  @State private var hovered = false
 
   var body: some View {
     VStack(alignment: .trailing, spacing: 6) {
-      Text("You")
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.tertiary)
-        .textCase(.uppercase)
-        .tracking(0.8)
-        .fadeUnderHeader()
+      HStack(spacing: 8) {
+        if hovered, let last = texts.last {
+          ClusterAction(title: "Edit", systemImage: "pencil") {
+            onEdit(last)
+          }
+        }
+        Spacer(minLength: 0)
+        Text("You")
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+      }
+      .fadeUnderHeader()
       VStack(alignment: .trailing, spacing: 6) {
         ForEach(Array(texts.enumerated()), id: \.offset) { _, text in
           Text(text)
@@ -300,46 +558,136 @@ private struct UserCopy: View {
             .textSelection(.enabled)
             .padding(.horizontal, 13)
             .padding(.vertical, 8)
-            .background(.fill.quaternary, in: .rect(cornerRadius: 16, style: .continuous))
+            .background(ArthurTheme.bubbleFill, in: .rect(cornerRadius: 16, style: .continuous))
             .fadeUnderHeader()
+            .contextMenu {
+              Button("Edit & resend") { onEdit(text) }
+              Button("Copy") { ArthurPasteboard.copy(text) }
+            }
         }
       }
     }
     .frame(maxWidth: .infinity, alignment: .trailing)
     .padding(.leading, 72)
+    .contentShape(Rectangle())
+    .onHover { hovered = $0 }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("You, \(texts.joined(separator: " "))")
+    .accessibilityAction(named: "Edit & resend") {
+      if let last = texts.last { onEdit(last) }
+    }
   }
 }
 
 private struct ArthurCopy: View {
+  @Environment(AppModel.self) private var model
   let texts: [String]
   var live = false
+  var showStop = false
+  @State private var hovered = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text(live ? "Arthur · writing" : "Arthur")
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(ArthurTheme.accent)
-        .textCase(.uppercase)
-        .tracking(0.8)
+        .font(.caption2)
+        .foregroundStyle(ArthurTheme.accent.opacity(0.8))
         .fadeUnderHeader()
       VStack(alignment: .leading, spacing: 10) {
         ForEach(Array(texts.enumerated()), id: \.offset) { _, text in
-          Text(text)
-            .font(.system(.title3, design: .serif))
-            .foregroundStyle(.primary.opacity(live ? 0.55 : 1))
-            .multilineTextAlignment(.leading)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+          ArthurReply(text: text, live: live)
             .fadeUnderHeader()
         }
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.trailing, 36)
+    .overlay(alignment: .topTrailing) {
+      if hovered {
+        HStack(spacing: 6) {
+          ClusterAction(title: "Copy", systemImage: "doc.on.doc") {
+            ArthurPasteboard.copy(texts.joined(separator: "\n\n"))
+          }
+          if showStop {
+            ClusterAction(title: "Stop", systemImage: "stop.fill") {
+              model.cancelTurn()
+            }
+          }
+        }
+      }
+    }
+    .contentShape(Rectangle())
+    .onHover { hovered = $0 }
+    .contextMenu {
+      Button("Copy") { ArthurPasteboard.copy(texts.joined(separator: "\n\n")) }
+      if showStop {
+        Button("Stop") { model.cancelTurn() }
+      }
+    }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("Arthur, \(texts.joined(separator: " "))")
+    .accessibilityAction(named: "Copy") {
+      ArthurPasteboard.copy(texts.joined(separator: "\n\n"))
+    }
+  }
+}
+
+private struct ArthurReply: View {
+  let text: String
+  var live = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      ForEach(Array(ArthurMarkdown.blocks(from: text).enumerated()), id: \.offset) { _, block in
+        switch block {
+        case .prose(let line):
+          ArthurProse(text: line, live: live)
+        case .bullets(let items):
+          VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+              HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("•")
+                  .font(.system(.title3, design: .serif))
+                  .foregroundStyle(.secondary)
+                ArthurProse(text: item, live: live)
+              }
+            }
+          }
+        case .numbers(let items):
+          VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+              HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(index + 1).")
+                  .font(.system(.title3, design: .serif))
+                  .foregroundStyle(.secondary)
+                  .monospacedDigit()
+                ArthurProse(text: item, live: live)
+              }
+            }
+          }
+        case .code(let code):
+          ArthurCodeBlock(code: code)
+        }
+      }
+    }
+  }
+}
+
+private struct ClusterAction: View {
+  let title: String
+  let systemImage: String
+  var action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Label(title, systemImage: systemImage)
+        .font(.caption.weight(.medium))
+        .labelStyle(.titleAndIcon)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+    }
+    .buttonStyle(.plain)
+    .background(.ultraThinMaterial, in: Capsule())
+    .help(title)
   }
 }
 
