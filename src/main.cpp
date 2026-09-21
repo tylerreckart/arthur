@@ -1,8 +1,10 @@
 #include "intercom/arbiter_client.hpp"
 #include "intercom/config.hpp"
+#include "intercom/device_hub.hpp"
 #include "intercom/filler_client.hpp"
 #include "intercom/http_server.hpp"
 #include "intercom/session_store.hpp"
+#include "intercom/speakback.hpp"
 #include "intercom/stt_whisper.hpp"
 #include "intercom/tts_kokoro.hpp"
 #include "intercom/turn_pipeline.hpp"
@@ -89,9 +91,15 @@ int main(int argc, char** argv) {
       config, stt, tts, arbiter, sessions, filler);
   pipeline->warm_prefix();
 
+  auto hub = std::make_shared<intercom::DeviceHub>(tts, config.speakback.max_queued);
+  intercom::Speakback speakback(config.speakback, config.agent, arbiter, sessions, hub);
+  speakback.start();
+
   intercom::ServerDeps deps;
   deps.config = config;
   deps.pipeline = pipeline;
+  deps.hub = hub;
   intercom::run_http_server(std::move(deps));
+  speakback.stop();
   return 0;
 }

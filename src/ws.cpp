@@ -1,4 +1,5 @@
 #include "intercom/ws.hpp"
+#include "intercom/device_hub.hpp"
 #include "intercom/util.hpp"
 
 #include <nlohmann/json.hpp>
@@ -187,14 +188,20 @@ bool read_http_upgrade(int fd, std::string* request) {
 
 class SocketAudioSink : public AudioSink {
  public:
-  explicit SocketAudioSink(int fd) : fd_(fd) {}
+  SocketAudioSink(int fd, DeviceHub* hub, std::string device_id)
+      : fd_(fd), hub_(hub), device_id_(std::move(device_id)) {}
   bool write(const std::uint8_t* data, std::size_t len) override {
+    if (hub_) {
+      return hub_->send_binary(device_id_, data, len);
+    }
     return send_frame(fd_, WsOpcode::Binary,
                       std::string_view(reinterpret_cast<const char*>(data), len));
   }
 
  private:
   int fd_;
+  DeviceHub* hub_;
+  std::string device_id_;
 };
 
 }  // namespace
@@ -387,13 +394,52 @@ void WsServer::handle_client(int fd) {
     return;
   }
 
-  send_json(fd, {{"type", "ready"},
-                 {"sample_rate", deps_.config.sample_rate},
-                 {"device_id", device_id}});
+  struct FdGuard {
+    int fd = -1;
+    ~FdGuard() {
+      if (fd >= 0) ::close(fd);
+    }
+  } fd_guard{fd};
+
+  auto* hub = deps_.hub.get();
+  auto send_text = [&](const nlohmann::json& j) {
+    if (hub) return hub->send_json(device_id, j);
+    return send_json(fd, j);
+  };
+  auto send_op = [&](WsOpcode op, std::string_view payload) {
+    if (hub) {
+      return hub->send_opcode(device_id, static_cast<std::uint8_t>(op), payload);
+    }
+    return send_frame(fd, op, payload);
+  };
+
+  // Ready must land before attach so pending speak-back cannot race the
+  // firmware's waitReady() handshake.
+  if (!send_json(fd, {{"type", "ready"},
+                      {"sample_rate", deps_.config.sample_rate},
+                      {"device_id", device_id}})) {
+    return;
+  }
+  if (hub) hub->attach(device_id, fd);
+
+  struct HubGuard {
+    DeviceHub* hub = nullptr;
+    std::string device_id;
+    int fd = -1;
+    ~HubGuard() {
+      if (hub) hub->detach(device_id, fd);
+    }
+  } guard{hub, device_id, fd};
 
   std::string buf;
   std::vector<std::uint8_t> pcm;
   std::string active_turn;
+  bool ptt_busy = false;
+  auto set_busy = [&](bool busy) {
+    if (!hub) return;
+    ptt_busy = busy;
+    hub->set_busy(device_id, busy);
+  };
   while (!stop_.load()) {
     pollfd pfd{};
     pfd.fd = fd;
@@ -413,15 +459,15 @@ void WsServer::handle_client(int fd) {
       buf.erase(0, used);
 
       if (frame->opcode == WsOpcode::Close) {
-        send_frame(fd, WsOpcode::Close, {});
-        ::close(fd);
+        send_op(WsOpcode::Close, {});
         return;
       }
       if (frame->opcode == WsOpcode::Ping) {
-        send_frame(fd, WsOpcode::Pong, frame->payload);
+        send_op(WsOpcode::Pong, frame->payload);
         continue;
       }
       if (frame->opcode == WsOpcode::Binary) {
+        if (!ptt_busy && pcm.empty() && active_turn.empty()) set_busy(true);
         pcm.insert(pcm.end(), frame->payload.begin(), frame->payload.end());
         continue;
       }
@@ -431,7 +477,7 @@ void WsServer::handle_client(int fd) {
       try {
         j = nlohmann::json::parse(frame->payload.empty() ? "{}" : frame->payload);
       } catch (...) {
-        send_json(fd, {{"type", "error"}, {"error", "invalid json"}});
+        send_text({{"type", "error"}, {"error", "invalid json"}});
         continue;
       }
       const std::string type = j.value("type", "");
@@ -443,45 +489,48 @@ void WsServer::handle_client(int fd) {
         continue;
       }
       if (type == "end" || type == "text") {
-        SocketAudioSink sink(fd);
+        set_busy(true);
+        SocketAudioSink sink(fd, hub, device_id);
         TurnResult result;
         if (type == "text") {
           const std::string text = j.value("text", "");
           if (text.empty()) {
-            send_json(fd, {{"type", "error"}, {"error", "missing text"}});
+            send_text({{"type", "error"}, {"error", "missing text"}});
+            set_busy(false);
             continue;
           }
           const std::string turn_id = make_turn_id();
           active_turn = turn_id;
-          send_json(fd, {{"type", "accept"}, {"turn_id", turn_id}});
+          send_text({{"type", "accept"}, {"turn_id", turn_id}});
           result = deps_.pipeline->run_text_utterance(device_id, text, sink, turn_id, -1);
         } else {
           if (pcm.empty()) {
-            send_json(fd, {{"type", "error"}, {"error", "empty pcm"}});
+            send_text({{"type", "error"}, {"error", "empty pcm"}});
+            set_busy(false);
             continue;
           }
           active_turn = make_turn_id();
-          send_json(fd, {{"type", "accept"}, {"turn_id", active_turn}});
+          send_text({{"type", "accept"}, {"turn_id", active_turn}});
           result = deps_.pipeline->run_utterance(device_id, pcm, deps_.config.sample_rate,
                                                  deps_.config.channels, sink, active_turn);
           if (result.turn_id.empty()) result.turn_id = active_turn;
         }
         pcm.clear();
         active_turn.clear();
-        send_json(fd, {{"type", "turn"},
-                       {"turn_id", result.turn_id},
-                       {"transcript", result.transcript},
-                       {"conversation_id", result.conversation_id},
-                       {"ok", result.ok},
-                       {"fast_path", result.used_fast_path}});
-        send_json(fd, {{"type", "done"},
-                       {"ok", result.ok},
-                       {"error", result.error},
-                       {"turn_id", result.turn_id}});
+        send_text({{"type", "turn"},
+                   {"turn_id", result.turn_id},
+                   {"transcript", result.transcript},
+                   {"conversation_id", result.conversation_id},
+                   {"ok", result.ok},
+                   {"fast_path", result.used_fast_path}});
+        send_text({{"type", "done"},
+                   {"ok", result.ok},
+                   {"error", result.error},
+                   {"turn_id", result.turn_id}});
+        set_busy(false);
       }
     }
   }
-  ::close(fd);
 }
 
 }  // namespace intercom

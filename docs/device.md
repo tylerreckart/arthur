@@ -21,11 +21,12 @@ Content-Type: `audio/L16; rate=24000; channels=1`
 
 ## Push-to-talk flow
 
-Firmware (`firmware/nano-esp32/intercom-endpoint`, tag `intercom-lan-v6`) streams
+Firmware (`firmware/nano-esp32/intercom-endpoint`, tag `intercom-lan-v8`) streams
 while the button is down:
 
 1. On boot (and after drops), open `ws://<host>:8093/v1/stream` with the device
-   bearer and `X-Device-Id`. Keep the socket; ping every 20s while idle.
+   bearer and `X-Device-Id`. Keep the socket; ping every 20s while idle, and
+   drain inbound frames so scheduled speak-back can play without another PTT.
 2. User holds PTT → I2S capture into PSRAM **and** binary WS frames every
    ~1024 samples (~43 ms at 24 kHz).
 3. On release, send `{"type":"end"}`. Intercom replies `{"type":"accept","turn_id"}`
@@ -77,5 +78,11 @@ ffplay -f s16le -ar 24000 -ac 1 reply.pcm
    frames.
 4. `{"type":"text","text":"status"}` skips STT (same as `/v1/utterance/text`).
 5. HTTP PTT on `:8090` remains the fallback and the serial `say` path.
+
+Idle sockets also accept unsolicited speak-back: `{type:speak,kind:schedule}`
+plus binary PCM plus `{type:done}`. That is how a `/schedule` reminder is
+spoken without another PTT. HTTP-only devices cannot receive speak-back;
+Intercom queues a few utterances (see `speakback.max_queued`) until the
+WebSocket reconnects.
 
 See [docs/api.md](api.md) for the frame table.

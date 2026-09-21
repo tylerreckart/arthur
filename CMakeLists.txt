@@ -52,6 +52,8 @@ add_executable(intercom
   src/util.cpp
   src/speakable.cpp
   src/managed_server.cpp
+  src/device_hub.cpp
+  src/speakback.cpp
 )
 
 target_include_directories(intercom PRIVATE
@@ -188,6 +190,7 @@ add_executable(test_ws_stream
   src/clock.cpp
   src/arbiter_client.cpp
   src/filler_client.cpp
+  src/device_hub.cpp
 )
 target_include_directories(test_ws_stream PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -202,4 +205,35 @@ if(APPLE)
   target_compile_definitions(test_ws_stream PRIVATE CPPHTTPLIB_USE_POLL)
 endif()
 add_test(NAME test_ws_stream COMMAND test_ws_stream)
+
+add_executable(test_speakback
+  tests/test_speakback.cpp
+  src/speakback.cpp
+  src/device_hub.cpp
+  src/arbiter_client.cpp
+  src/session_store.cpp
+  src/util.cpp
+  src/speakable.cpp
+  src/clock.cpp
+  src/ws.cpp
+  src/config.cpp
+  src/turn_pipeline.cpp
+  src/fast_path.cpp
+  src/home_intent.cpp
+  src/home_client.cpp
+  src/filler_client.cpp
+)
+target_include_directories(test_speakback PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_speakback PRIVATE
+  nlohmann_json::nlohmann_json
+  httplib::httplib
+  SQLite3::SQLite3
+  Threads::Threads
+)
+if(APPLE)
+  target_compile_definitions(test_speakback PRIVATE CPPHTTPLIB_USE_POLL)
+endif()
+add_test(NAME test_speakback COMMAND test_speakback)
 

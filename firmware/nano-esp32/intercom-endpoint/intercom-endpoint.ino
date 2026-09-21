@@ -26,7 +26,8 @@ struct HttpHeaders {
 
 // Thin PCM endpoint for Intercom (docs/device.md):
 // hold PTT -> stream 24 kHz s16le on ws://host:8093/v1/stream while held ->
-// play binary reply frames. HTTP POST /v1/utterance is the fallback.
+// play binary reply frames. Idle sockets also drain unsolicited speak-back
+// (scheduled reminders). HTTP POST /v1/utterance is the fallback.
 // Serial (idle): tone | health | ping | ws
 
 #define I2S_PORT I2S_NUM_0
@@ -1016,7 +1017,44 @@ static void wsIdlePing() {
   gWsPingMs = millis();
 }
 
-static PlayResult playWsReply() {
+static PlayResult playWsLoop(IntercomWs::Kind pendingKind, size_t pendingPlen);
+
+static void wsDiscardUntilDone() {
+  uint8_t buf[256];
+  char text[768];
+  const uint32_t t0 = millis();
+  while (gWs.connected() && millis() - t0 < 3000) {
+    size_t plen = 0;
+    const IntercomWs::Kind k = gWs.recvHeader(&plen, 250);
+    if (k == IntercomWs::Kind::Timeout) continue;
+    if (k == IntercomWs::Kind::Error || k == IntercomWs::Kind::Close) {
+      gWs.close();
+      return;
+    }
+    if (k == IntercomWs::Kind::Ping) {
+      size_t n = min(plen, sizeof(buf));
+      if (n && !gWs.recvPayload(buf, n, HTTP_TIMEOUT_MS)) return;
+      gWs.discardPayload(HTTP_TIMEOUT_MS);
+      gWs.sendPong(buf, n);
+      continue;
+    }
+    if (k == IntercomWs::Kind::Text) {
+      const size_t n = min(plen, sizeof(text) - 1);
+      if (n && !gWs.recvPayload(reinterpret_cast<uint8_t *>(text), n, HTTP_TIMEOUT_MS)) {
+        return;
+      }
+      text[n] = 0;
+      gWs.discardPayload(HTTP_TIMEOUT_MS);
+      if (jsonField(text, "type") == "done") return;
+      continue;
+    }
+    gWs.discardPayload(HTTP_TIMEOUT_MS);
+  }
+}
+
+static PlayResult playWsReply() { return playWsLoop(IntercomWs::Kind::Timeout, 0); }
+
+static PlayResult playWsLoop(IntercomWs::Kind pendingKind, size_t pendingPlen) {
   Thinking think;
   gPlayBytes = 0;
   gVoiceFade = 0;
@@ -1038,10 +1076,18 @@ static PlayResult playWsReply() {
     thinkingTick();
     if (pttHeld()) {
       finishSpk();
+      wsDiscardUntilDone();
       return PlayResult::BargeIn;
     }
     size_t plen = 0;
-    const IntercomWs::Kind k = gWs.recvHeader(&plen, AUDIO_WAIT_MS);
+    IntercomWs::Kind k;
+    if (pendingKind != IntercomWs::Kind::Timeout) {
+      k = pendingKind;
+      plen = pendingPlen;
+      pendingKind = IntercomWs::Kind::Timeout;
+    } else {
+      k = gWs.recvHeader(&plen, AUDIO_WAIT_MS);
+    }
     if (k == IntercomWs::Kind::Timeout) {
       Serial.println("ws: reply timeout");
       finishSpk();
@@ -1084,6 +1130,7 @@ static PlayResult playWsReply() {
         if (pttHeld()) {
           gWs.discardPayload(HTTP_TIMEOUT_MS);
           finishSpk();
+          wsDiscardUntilDone();
           return PlayResult::BargeIn;
         }
         const size_t n = min(left, sizeof(buf));
@@ -1095,6 +1142,7 @@ static PlayResult playWsReply() {
         if (pr != PlayResult::Done) {
           gWs.discardPayload(HTTP_TIMEOUT_MS);
           finishSpk();
+          if (pr == PlayResult::BargeIn) wsDiscardUntilDone();
           return pr;
         }
         left -= n;
@@ -1132,8 +1180,8 @@ static PlayResult playWsReply() {
       Serial.printf("ws: %s\n", jsonField(text, "error").c_str());
       finishSpk();
       return PlayResult::Error;
-    } else if (type == "ready") {
-      // Reused socket after a reconnect race — ignore.
+    } else if (type == "ready" || type == "speak") {
+      // Reused socket after a reconnect race, or speak-back marker.
     }
   }
 
@@ -1144,6 +1192,53 @@ static PlayResult playWsReply() {
     Serial.println("play: empty audio — Arbiter/TTS produced no PCM");
   }
   return PlayResult::Done;
+}
+
+static void wsIdlePoll() {
+  if (INTERCOM_WS_PORT <= 0) return;
+  if (!gWs.connected() || pttHeld() || gPlaying) return;
+  if (!gWs.readable()) return;
+  size_t plen = 0;
+  const IntercomWs::Kind k = gWs.recvHeader(&plen, 50);
+  if (k == IntercomWs::Kind::Timeout) return;
+  if (k == IntercomWs::Kind::Error || k == IntercomWs::Kind::Close) {
+    gWs.close();
+    return;
+  }
+  if (k == IntercomWs::Kind::Ping) {
+    uint8_t buf[64];
+    size_t n = min(plen, sizeof(buf));
+    if (n) gWs.recvPayload(buf, n, HTTP_TIMEOUT_MS);
+    gWs.discardPayload(HTTP_TIMEOUT_MS);
+    gWs.sendPong(buf, n);
+    return;
+  }
+  if (k == IntercomWs::Kind::Pong) {
+    gWs.discardPayload(HTTP_TIMEOUT_MS);
+    return;
+  }
+  if (k == IntercomWs::Kind::Binary) {
+    Serial.println("ws: idle binary");
+    playWsLoop(IntercomWs::Kind::Binary, plen);
+    return;
+  }
+  if (k != IntercomWs::Kind::Text) {
+    gWs.discardPayload(HTTP_TIMEOUT_MS);
+    return;
+  }
+  char text[768];
+  const size_t n = min(plen, sizeof(text) - 1);
+  if (n && !gWs.recvPayload(reinterpret_cast<uint8_t *>(text), n, HTTP_TIMEOUT_MS)) {
+    gWs.close();
+    return;
+  }
+  text[n] = 0;
+  gWs.discardPayload(HTTP_TIMEOUT_MS);
+  const String type = jsonField(text, "type");
+  if (type == "speak") {
+    Serial.printf("ws: speak %s\n", jsonField(text, "kind").c_str());
+    playWsReply();
+  }
 }
 
 static PlayResult streamUtterance(size_t samples, bool alreadyStreamed) {
@@ -1534,6 +1629,7 @@ void loop() {
   handleSerial();
   updatePttLed();
   wsIdlePing();
+  wsIdlePoll();
 
   if (!gPttArmed) {
     if (!pttHeld()) gPttArmed = true;

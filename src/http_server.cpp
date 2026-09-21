@@ -176,6 +176,7 @@ void run_http_server(ServerDeps deps) {
         {"ws",
          {{"port", deps.config.ws_listen_port},
           {"path", "/v1/stream"}}},
+        {"speakback", {{"enabled", deps.config.speakback.enabled}}},
     };
     res.status = (stt_ok && tts_ok) ? 200 : 503;
     res.set_content(j.dump(2), "application/json");

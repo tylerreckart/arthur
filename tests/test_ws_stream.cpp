@@ -1,4 +1,5 @@
 #include "intercom/arbiter_client.hpp"
+#include "intercom/device_hub.hpp"
 #include "intercom/session_store.hpp"
 #include "intercom/stt.hpp"
 #include "intercom/tts.hpp"
@@ -165,9 +166,11 @@ int main() {
 
   auto pipeline = std::make_shared<intercom::TurnPipeline>(config, stt, tts, arbiter, sessions,
                                                            nullptr);
+  auto hub = std::make_shared<intercom::DeviceHub>(tts, 4);
   intercom::ServerDeps deps;
   deps.config = config;
   deps.pipeline = pipeline;
+  deps.hub = hub;
 
   intercom::WsServer ws(deps);
   CHECK(ws.listen("127.0.0.1", 0));
@@ -234,6 +237,53 @@ int main() {
     CHECK(got_binary);
     CHECK(got_done);
     CHECK(tts->last.find("sir") != std::string::npos);
+
+    CHECK(hub->online("speaker-1"));
+    CHECK(hub->speak("speaker-1", "Time to leave, sir.", "schedule", 42));
+
+    incoming.clear();
+    bool got_speak = false;
+    bool speak_binary = false;
+    bool speak_done = false;
+    std::int64_t speak_run = 0;
+    const auto speak_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+    while (std::chrono::steady_clock::now() < speak_deadline && !speak_done) {
+      char buf[4096];
+      const ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+      if (n > 0) incoming.append(buf, static_cast<std::size_t>(n));
+      while (true) {
+        std::size_t used = 0;
+        auto frame = intercom::decode_ws_frame(incoming, &used);
+        if (!frame) break;
+        incoming.erase(0, used);
+        if (frame->opcode == intercom::WsOpcode::Binary && !frame->payload.empty()) {
+          speak_binary = true;
+        }
+        if (frame->opcode == intercom::WsOpcode::Text) {
+          try {
+            auto j = nlohmann::json::parse(frame->payload);
+            const auto type = j.value("type", "");
+            if (type == "speak") {
+              got_speak = true;
+              CHECK(j.value("kind", "") == "schedule");
+              speak_run = j.value("run_id", 0);
+            }
+            if (type == "done" && j.value("kind", "") == "schedule") {
+              CHECK(j.value("ok", false));
+              speak_done = true;
+            }
+          } catch (...) {
+          }
+        }
+      }
+      if (!speak_done) std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+    CHECK(got_speak);
+    CHECK(speak_binary);
+    CHECK(speak_done);
+    CHECK(speak_run == 42);
+    CHECK(tts->last.find("Time to leave") != std::string::npos);
 
     // Stream PCM in several binary frames while PTT is held, then end.
     const std::string chunk_a(4, 'A');

@@ -219,6 +219,16 @@ Config Config::load(const std::string& path) {
     }
   }
 
+  if (j.contains("speakback") && j["speakback"].is_object()) {
+    const auto& s = j["speakback"];
+    c.speakback.enabled = require_bool(s, "enabled", c.speakback.enabled);
+    c.speakback.reconnect_ms =
+        require_int(s, "reconnect_ms", c.speakback.reconnect_ms);
+    c.speakback.max_queued = require_int(s, "max_queued", c.speakback.max_queued);
+    c.speakback.speak_failures =
+        require_bool(s, "speak_failures", c.speakback.speak_failures);
+  }
+
   if (c.device_token.empty() && c.devices.empty()) {
     throw std::runtime_error("config needs device_token or devices map");
   }

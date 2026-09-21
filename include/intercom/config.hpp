@@ -66,6 +66,16 @@ struct FillerConfig {
   double temperature = 0.6;
 };
 
+struct SpeakbackConfig {
+  bool enabled = true;
+  // After the SSE stream drops, wait this long before reconnect + runs poll.
+  int reconnect_ms = 2000;
+  // Cap of in-memory utterances queued per offline/busy device.
+  int max_queued = 4;
+  // Speak a short courtesy line on run.failed (never the raw error_message).
+  bool speak_failures = false;
+};
+
 struct Config {
   std::string listen_host = "127.0.0.1";
   int listen_port = 8090;
@@ -92,6 +102,7 @@ struct Config {
   WhisperConfig whisper;
   KokoroConfig kokoro;
   FillerConfig filler;
+  SpeakbackConfig speakback;
 
   static Config load(const std::string& path);
 

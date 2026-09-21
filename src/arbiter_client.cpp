@@ -1,5 +1,6 @@
 #include "intercom/arbiter_client.hpp"
 #include "intercom/clock.hpp"
+#include "intercom/util.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -316,6 +317,219 @@ bool ArbiterClient::cancel_request(const std::string& request_id, std::string* e
   }
   if (res->status != 200 && res->status != 204) {
     if (err) *err = "arbiter cancel HTTP " + std::to_string(res->status) + ": " + res->body;
+    return false;
+  }
+  return true;
+}
+
+namespace {
+
+std::int64_t json_i64(const nlohmann::json& j, const char* key) {
+  if (!j.contains(key) || j[key].is_null()) return 0;
+  if (j[key].is_number_integer()) return j[key].get<std::int64_t>();
+  if (j[key].is_number()) return static_cast<std::int64_t>(j[key].get<double>());
+  if (j[key].is_string()) {
+    try {
+      return std::stoll(j[key].get<std::string>());
+    } catch (...) {
+      return 0;
+    }
+  }
+  return 0;
+}
+
+std::string json_str(const nlohmann::json& j, const char* key) {
+  if (!j.contains(key) || j[key].is_null()) return {};
+  if (j[key].is_string()) return j[key].get<std::string>();
+  return {};
+}
+
+NotificationEvent notification_from_json(const nlohmann::json& j) {
+  NotificationEvent ev;
+  ev.kind = json_str(j, "kind");
+  ev.task_id = json_i64(j, "task_id");
+  ev.run_id = json_i64(j, "run_id");
+  if (ev.run_id == 0) ev.run_id = json_i64(j, "id");
+  ev.conversation_id = json_i64(j, "conversation_id");
+  ev.started_at = json_i64(j, "started_at");
+  ev.completed_at = json_i64(j, "completed_at");
+  ev.agent_id = json_str(j, "agent_id");
+  ev.status = json_str(j, "status");
+  ev.result_summary = json_str(j, "result_summary");
+  ev.error_message = json_str(j, "error_message");
+  if (ev.kind.empty()) {
+    if (ev.status == "succeeded" || ev.status == "completed") ev.kind = "run.completed";
+    else if (ev.status == "failed") ev.kind = "run.failed";
+    else if (ev.status == "running") ev.kind = "run.started";
+  }
+  return ev;
+}
+
+}  // namespace
+
+NotificationEvent parse_notification_json(std::string_view data) {
+  try {
+    return notification_from_json(nlohmann::json::parse(data));
+  } catch (...) {
+    return {};
+  }
+}
+
+ScheduleInfo parse_schedule_json(std::string_view body) {
+  ScheduleInfo out;
+  try {
+    auto j = nlohmann::json::parse(body);
+    const nlohmann::json* row = &j;
+    if (j.contains("scheduled_task") && j["scheduled_task"].is_object()) {
+      row = &j["scheduled_task"];
+    } else if (j.contains("schedule") && j["schedule"].is_object()) {
+      row = &j["schedule"];
+    }
+    out.id = json_i64(*row, "id");
+    out.conversation_id = json_i64(*row, "conversation_id");
+    out.agent_id = json_str(*row, "agent_id");
+    out.message = json_str(*row, "message");
+  } catch (...) {
+  }
+  return out;
+}
+
+std::optional<ScheduleInfo> ArbiterClient::get_schedule(std::int64_t task_id,
+                                                        std::string* err) const {
+  auto parsed = parse_base_url(base_url_);
+  if (!parsed) {
+    if (err) *err = "invalid arbiter_base_url";
+    return std::nullopt;
+  }
+  auto cli = make_client(*parsed);
+  httplib::Headers headers = {{"Authorization", "Bearer " + token_}};
+  const std::string path =
+      parsed->path_prefix + "/v1/schedules/" + std::to_string(task_id);
+  auto res = cli->Get(path.c_str(), headers);
+  if (!res) {
+    if (err) *err = "arbiter get_schedule: connection failed";
+    return std::nullopt;
+  }
+  if (res->status != 200) {
+    if (err) {
+      *err = "arbiter get_schedule HTTP " + std::to_string(res->status);
+    }
+    return std::nullopt;
+  }
+  auto info = parse_schedule_json(res->body);
+  if (info.id == 0) info.id = task_id;
+  return info;
+}
+
+std::vector<NotificationEvent> ArbiterClient::list_runs_since(std::int64_t since_epoch,
+                                                              std::string* err) const {
+  auto parsed = parse_base_url(base_url_);
+  if (!parsed) {
+    if (err) *err = "invalid arbiter_base_url";
+    return {};
+  }
+  auto cli = make_client(*parsed);
+  httplib::Headers headers = {{"Authorization", "Bearer " + token_}};
+  std::string path = parsed->path_prefix + "/v1/runs";
+  if (since_epoch > 0) path += "?since=" + std::to_string(since_epoch);
+  auto res = cli->Get(path.c_str(), headers);
+  if (!res) {
+    if (err) *err = "arbiter list_runs: connection failed";
+    return {};
+  }
+  if (res->status != 200) {
+    if (err) *err = "arbiter list_runs HTTP " + std::to_string(res->status);
+    return {};
+  }
+  std::vector<NotificationEvent> out;
+  try {
+    auto j = nlohmann::json::parse(res->body);
+    const nlohmann::json* rows = &j;
+    if (j.contains("runs") && j["runs"].is_array()) rows = &j["runs"];
+    if (!rows->is_array()) return out;
+    for (const auto& row : *rows) {
+      if (!row.is_object()) continue;
+      out.push_back(notification_from_json(row));
+    }
+  } catch (const std::exception& e) {
+    if (err) *err = std::string("arbiter list_runs parse: ") + e.what();
+  }
+  return out;
+}
+
+bool ArbiterClient::stream_notifications(
+    const std::function<void(const NotificationEvent&)>& on_event,
+    std::atomic<bool>* cancel_flag, std::string* err) const {
+  auto parsed = parse_base_url(base_url_);
+  if (!parsed) {
+    if (err) *err = "invalid arbiter_base_url";
+    return false;
+  }
+  auto cli = make_client(*parsed);
+  cli->set_read_timeout(45, 0);
+
+  httplib::Request req;
+  req.method = "GET";
+  req.path = parsed->path_prefix + "/v1/notifications/stream";
+  req.set_header("Authorization", "Bearer " + token_);
+  req.set_header("Accept", "text/event-stream");
+
+  std::string sse_buf;
+  std::string event_name;
+  bool aborted = false;
+
+  auto drain = [&]() {
+    for (;;) {
+      const auto pos = sse_buf.find("\n\n");
+      if (pos == std::string::npos) break;
+      std::string frame = sse_buf.substr(0, pos);
+      sse_buf.erase(0, pos + 2);
+      std::string data;
+      std::istringstream iss(frame);
+      std::string line;
+      while (std::getline(iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("event:", 0) == 0) {
+          event_name = trim(line.substr(6));
+        } else if (line.rfind("data:", 0) == 0) {
+          std::string d = line.substr(5);
+          while (!d.empty() && d.front() == ' ') d.erase(d.begin());
+          if (!data.empty()) data.push_back('\n');
+          data += d;
+        }
+      }
+      if (event_name == "notification" && !data.empty() && on_event) {
+        on_event(parse_notification_json(data));
+      }
+      event_name.clear();
+    }
+  };
+
+  req.content_receiver = [&](const char* data, size_t len, uint64_t, uint64_t) {
+    if (cancel_flag && cancel_flag->load()) {
+      aborted = true;
+      return false;
+    }
+    sse_buf.append(data, len);
+    for (std::size_t i = 0; i + 1 < sse_buf.size(); ++i) {
+      if (sse_buf[i] == '\r' && sse_buf[i + 1] == '\n') {
+        sse_buf.erase(i, 1);
+      }
+    }
+    drain();
+    return true;
+  };
+
+  auto res = cli->send(req);
+  if (aborted) return false;
+  if (!res) {
+    if (err) *err = "arbiter notifications: connection failed";
+    return false;
+  }
+  if (res->status != 200) {
+    if (err) {
+      *err = "arbiter notifications HTTP " + std::to_string(res->status);
+    }
     return false;
   }
   return true;

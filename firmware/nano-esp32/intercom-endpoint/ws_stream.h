@@ -29,6 +29,7 @@ class IntercomWs {
   bool sendPing();
   bool sendPong(const uint8_t *data, size_t len);
   bool sendClose();
+  bool readable();
 
   // Read the next frame header. Call recvPayload / discardPayload next.
   Kind recvHeader(size_t *payload_len, uint32_t timeout_ms);

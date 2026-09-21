@@ -205,6 +205,8 @@ bool IntercomWs::sendPong(const uint8_t *data, size_t len) {
 
 bool IntercomWs::sendClose() { return sendFrame(0x08, nullptr, 0); }
 
+bool IntercomWs::readable() { return c_.connected() && c_.available() > 0; }
+
 void IntercomWs::close() {
   if (c_.connected()) {
     sendClose();

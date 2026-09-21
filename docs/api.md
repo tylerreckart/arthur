@@ -100,7 +100,7 @@ Debug: `{ device_id, conversation_id, last_turn_id, updated_at }`.
 | Each turn | `POST /v1/conversations/:id/messages` + SSE |
 | `message` | STT transcript only (no voice-intercom suffix) |
 | body | `{ "message", "channel": "voice", "agent_def" }` — `agent_def` includes a fresh local date/time rule each turn |
-| Arthur | `mode: "spoken"`, `intent.mode: "off"`. Spoken cadence is owned by Arbiter's constitution — Arthur's `agent_def` does not restack a sentence-count cap. |
+| Arthur | `mode: "spoken"`, `intent.mode: "off"`. Spoken cadence is owned by Arbiter's constitution — Arthur's `agent_def` does not restack a sentence-count cap. Durable user facts are searched and written via `/mem`. |
 | Cancel | `POST /v1/requests/:id/cancel` |
 | Idempotency-Key | Intercom `turn_id` |
 
@@ -141,6 +141,15 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 | binary frames | Reply PCM |
 | `{"type":"turn",…}` | Transcript / turn id after the pipeline returns |
 | `{"type":"done","ok","error"}` | Terminal |
+| `{"type":"speak","kind","run_id"}` | Unsolicited speak-back (scheduled reminder) about to stream PCM |
+
+Idle devices keep the socket open. When Arbiter fires a `/schedule` (or
+Intercom sees `run.completed` on `GET /v1/notifications/stream`), Intercom
+synthesizes `result_summary` and pushes `{type:speak}` + PCM + `{type:done}`
+on that socket so the reminder is spoken without another PTT. Mid-PTT
+utterances are queued (up to `speakback.max_queued`) and flushed when the
+device is idle again. Offline devices are queued in memory the same way;
+there is no durable disk queue.
 
 STT is still one-shot at `end` (Whisper is not streaming). The gain is sending
 mic bytes while the button is down instead of waiting for HTTP to open. The
@@ -160,3 +169,49 @@ Kokoro output passes through a stateful speech DSP chain before reaching the
 device: a 70 Hz high-pass filter, a gentle 2.6 kHz presence lift, envelope
 compression, makeup gain, and a minus-one-decibel limiter. All parameters are
 under `kokoro.dsp`; set `enabled` to `false` for a bit-exact bypass.
+
+## Speak-back (scheduled reminders)
+
+When `speakback.enabled` is true (default), Intercom subscribes to Arbiter's
+`GET /v1/notifications/stream` and speaks completed schedule runs on the
+matching device.
+
+Arbiter contract this path assumes:
+
+- SSE `event: notification` with `kind` `run.started` | `run.completed` |
+  `run.failed`. Intercom speaks `run.completed` (`status: succeeded`) using
+  `result_summary` (truncated at 4 KiB on the Arbiter side). `run.started` is
+  ignored. `run.failed` is silent unless `speakback.speak_failures` is true,
+  in which case a short courtesy line is spoken — never the raw
+  `error_message`.
+- Notification payloads do **not** include `conversation_id`. Intercom looks
+  up `GET /v1/schedules/:task_id` (`scheduled_task.conversation_id`). A pin
+  greater than 0 maps through SessionStore to the device that owns that
+  conversation. `0` (unscoped) maps to the sole Intercom session when only
+  one device is known, and only if `agent_id` is this Intercom agent or
+  `index`.
+- The bus is not durable. After the SSE drop, Intercom reconnects (default
+  2 s) and polls `GET /v1/runs?since=<last_seen_started_at>`. Runs use `id`
+  for the run id. Duplicate `run_id`s are skipped in memory (not across
+  Intercom restarts). Events that fire while Intercom itself is down are not
+  replayed on boot.
+
+Config (`speakback` in `intercom.json`):
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `enabled` | `true` | Subscribe and speak |
+| `reconnect_ms` | `2000` | Pause after SSE drop before reconnect + runs poll |
+| `max_queued` | `4` | In-memory utterances per offline or busy device (drop oldest) |
+| `speak_failures` | `false` | Speak a courtesy line on `run.failed` |
+
+How to test a reminder:
+
+1. Device WebSocket idle on `:8093` (`ws` serial command shows `up`).
+2. Hold PTT: *remind me in a minute to take the pie out*.
+3. Arthur should emit `/schedule in 1 minute: …`. Wait for the fire (Arbiter
+   ticker must be running: `arbiter --api`).
+4. The device should play the result without another PTT. Intercom logs
+   `intercom speakback: speaking run … to <device_id>`.
+
+`GET /health` includes `speakback.enabled`.
