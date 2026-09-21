@@ -74,5 +74,11 @@
     "timeout_ms": 2500,
     "max_tokens": 16,
     "temperature": 0.6
+  },
+  "speakback": {
+    "enabled": true,
+    "reconnect_ms": 2000,
+    "max_queued": 4,
+    "speak_failures": false
   }
 }

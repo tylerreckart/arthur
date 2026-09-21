@@ -1,9 +1,12 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace intercom {
 
@@ -17,6 +20,29 @@ struct ArbiterStreamCallbacks {
   // Terminal done content (full reply) and ok flag.
   std::function<void(bool ok, const std::string& content, const std::string& error)> on_done;
 };
+
+struct NotificationEvent {
+  std::string kind;
+  std::int64_t task_id = 0;
+  std::int64_t run_id = 0;
+  std::int64_t conversation_id = 0;
+  std::int64_t started_at = 0;
+  std::int64_t completed_at = 0;
+  std::string agent_id;
+  std::string status;
+  std::string result_summary;
+  std::string error_message;
+};
+
+struct ScheduleInfo {
+  std::int64_t id = 0;
+  std::int64_t conversation_id = 0;
+  std::string agent_id;
+  std::string message;
+};
+
+NotificationEvent parse_notification_json(std::string_view data);
+ScheduleInfo parse_schedule_json(std::string_view body);
 
 class ArbiterClient {
  public:
@@ -38,6 +64,15 @@ class ArbiterClient {
                             std::string* err) const;
 
   virtual bool cancel_request(const std::string& request_id, std::string* err) const;
+
+  virtual std::optional<ScheduleInfo> get_schedule(std::int64_t task_id,
+                                                   std::string* err) const;
+  virtual std::vector<NotificationEvent> list_runs_since(std::int64_t since_epoch,
+                                                         std::string* err) const;
+  // Long-lived SSE. Returns false on disconnect/error (caller reconnects).
+  virtual bool stream_notifications(
+      const std::function<void(const NotificationEvent&)>& on_event,
+      std::atomic<bool>* cancel_flag, std::string* err) const;
 
   bool health_reachable(std::string* detail) const;
 
