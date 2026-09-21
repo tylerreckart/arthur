@@ -365,7 +365,6 @@ private struct ErrorBanner: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
-    .accessibilityElement(children: .combine)
   }
 }
 
