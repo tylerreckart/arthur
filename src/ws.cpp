@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <sstream>
@@ -21,6 +22,8 @@ namespace {
 
 constexpr const char* kWsMagic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 constexpr const char* kWsPath = "/v1/stream";
+constexpr auto kWsPingEvery = std::chrono::seconds(20);
+constexpr auto kWsPongWait = std::chrono::seconds(10);
 
 std::uint32_t rol(std::uint32_t v, int n) { return (v << n) | (v >> (32 - n)); }
 
@@ -116,7 +119,11 @@ bool send_all(int fd, const void* data, std::size_t len) {
   std::size_t sent = 0;
   while (sent < len) {
     const ssize_t n = ::send(fd, p + sent, len - sent, 0);
-    if (n <= 0) return false;
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      return false;
+    }
+    if (n == 0) return false;
     sent += static_cast<std::size_t>(n);
   }
   return true;
@@ -174,14 +181,21 @@ std::string bearer_from_auth(const std::string& auth) {
   return {};
 }
 
-bool read_http_upgrade(int fd, std::string* request) {
+bool read_http_upgrade(int fd, std::string* request, std::string* rest) {
   request->clear();
+  if (rest) rest->clear();
   char buf[1024];
   while (request->find("\r\n\r\n") == std::string::npos) {
     const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+    if (n < 0 && errno == EINTR) continue;
     if (n <= 0) return false;
     request->append(buf, static_cast<std::size_t>(n));
-    if (request->size() > 8192) return false;
+    if (request->size() > 16384) return false;
+  }
+  const auto pos = request->find("\r\n\r\n");
+  if (rest && pos != std::string::npos) {
+    *rest = request->substr(pos + 4);
+    request->erase(pos + 4);
   }
   return true;
 }
@@ -359,13 +373,15 @@ void WsServer::accept_loop() {
     if (fd < 0) continue;
     int one = 1;
     ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
     std::thread([this, fd] { handle_client(fd); }).detach();
   }
 }
 
 void WsServer::handle_client(int fd) {
   std::string req;
-  if (!read_http_upgrade(fd, &req)) {
+  std::string buf;
+  if (!read_http_upgrade(fd, &req, &buf)) {
     ::close(fd);
     return;
   }
@@ -447,7 +463,6 @@ void WsServer::handle_client(int fd) {
     }
   } guard{hub, device_id, fd};
 
-  std::string buf;
   std::vector<std::uint8_t> pcm;
   std::string active_turn;
   bool ptt_busy = false;
@@ -456,23 +471,51 @@ void WsServer::handle_client(int fd) {
     ptt_busy = busy;
     hub->set_busy(device_id, busy);
   };
+  using clock = std::chrono::steady_clock;
+  auto last_rx = clock::now();
+  auto ping_sent = clock::time_point{};
+  bool awaiting_pong = false;
+  // Bytes read with the HTTP upgrade are already a websocket frame.
+  bool buffered = !buf.empty();
   while (!stop_.load()) {
-    pollfd pfd{};
-    pfd.fd = fd;
-    pfd.events = POLLIN;
-    const int pr = ::poll(&pfd, 1, 200);
-    if (pr < 0) break;
-    if (pr == 0) continue;
-    char tmp[4096];
-    const ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
-    if (n <= 0) break;
-    buf.append(tmp, static_cast<std::size_t>(n));
+    if (!buffered) {
+      pollfd pfd{};
+      pfd.fd = fd;
+      pfd.events = POLLIN;
+      const int pr = ::poll(&pfd, 1, 200);
+      if (pr < 0) {
+        if (errno == EINTR) continue;
+        break;
+      }
+      if (pr == 0) {
+        const auto now = clock::now();
+        if (awaiting_pong && now - ping_sent > kWsPongWait) break;
+        if (!awaiting_pong && !ptt_busy && now - last_rx > kWsPingEvery) {
+          if (!send_op(WsOpcode::Ping, "hi")) break;
+          awaiting_pong = true;
+          ping_sent = now;
+        }
+        continue;
+      }
+      char tmp[4096];
+      const ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+      if (n < 0) {
+        if (errno == EINTR) continue;
+        break;
+      }
+      if (n == 0) break;
+      buf.append(tmp, static_cast<std::size_t>(n));
+    }
+    buffered = false;
 
     while (true) {
       std::size_t used = 0;
       auto frame = decode_ws_frame(buf, &used);
       if (!frame) break;
       buf.erase(0, used);
+
+      last_rx = clock::now();
+      awaiting_pong = false;
 
       if (frame->opcode == WsOpcode::Close) {
         send_op(WsOpcode::Close, {});
@@ -482,6 +525,7 @@ void WsServer::handle_client(int fd) {
         send_op(WsOpcode::Pong, frame->payload);
         continue;
       }
+      if (frame->opcode == WsOpcode::Pong) continue;
       if (frame->opcode == WsOpcode::Binary) {
         if (!ptt_busy && pcm.empty() && active_turn.empty()) set_busy(true);
         pcm.insert(pcm.end(), frame->payload.begin(), frame->payload.end());

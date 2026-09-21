@@ -34,6 +34,7 @@ final class AppModel {
   var mcpServers: [McpServer] = []
   var mcpRegistryPath = McpRegistryStore.defaultPath
   var mcpSaveError = ""
+  var mcpProbes: [String: McpProbe] = [:]
   var arbiterReachable = false
   var soundOn = true {
     didSet {
@@ -48,6 +49,8 @@ final class AppModel {
   private var keyMonitor: Any?
   private var pttStarted: Date?
   private var reconnectWork: DispatchWorkItem?
+  private var reconnectAttempt = 0
+  private var wantsSocket = false
   private var pcmBytes = 0
   private var expectingReply = false
   private var typedThisTurn = false
@@ -100,9 +103,11 @@ final class AppModel {
   }
 
   func stop() {
+    wantsSocket = false
     healthTimer?.invalidate()
     healthTimer = nil
     reconnectWork?.cancel()
+    reconnectWork = nil
     if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
     keyMonitor = nil
     audio.stopCapture()
@@ -114,7 +119,10 @@ final class AppModel {
 
   func connect() {
     reconnectWork?.cancel()
+    reconnectWork = nil
+    wantsSocket = true
     guard !config.deviceToken.isEmpty else {
+      wantsSocket = false
       become(.disconnected)
       healthDetail = "missing device_token in intercom.json"
       if errorText.isEmpty { errorText = healthDetail }
@@ -183,8 +191,20 @@ final class AppModel {
   }
 
   func removeMcp(_ name: String) {
-    mcpServers.removeAll { $0.name == name }
+    let key = McpServer.canonicalName(name)
+    mcpServers.removeAll { $0.name == key }
+    var probes = mcpProbes
+    probes.removeValue(forKey: key)
+    mcpProbes = probes
     persistMcpRegistry()
+  }
+
+  func rememberMcpProbe(_ name: String, _ probe: McpProbe) {
+    let key = McpServer.canonicalName(name)
+    guard !key.isEmpty else { return }
+    var probes = mcpProbes
+    probes[key] = probe
+    mcpProbes = probes
   }
 
   func setMcpEnabled(_ name: String, _ enabled: Bool) {
@@ -270,17 +290,6 @@ final class AppModel {
     phase == .speaking || phase == .thinking
   }
 
-  var phaseLabel: String {
-    switch phase {
-    case .disconnected: return "Disconnected"
-    case .connecting: return "Reaching intercom…"
-    case .idle: return micGranted ? "Connected" : "Mic off"
-    case .listening: return "Listening"
-    case .thinking: return "Writing"
-    case .speaking: return "Speaking"
-    }
-  }
-
   func dismissError() {
     errorText = ""
   }
@@ -323,6 +332,9 @@ final class AppModel {
   private func handle(_ event: IntercomEvent) {
     switch event {
     case .ready:
+      reconnectWork?.cancel()
+      reconnectWork = nil
+      reconnectAttempt = 0
       become(.idle)
       healthOK = true
       healthDetail = "connected"
@@ -386,7 +398,8 @@ final class AppModel {
       become(.disconnected)
       healthOK = false
       healthDetail = msg
-      if errorText.isEmpty {
+      guard wantsSocket else { return }
+      if reconnectAttempt >= 1, errorText.isEmpty {
         errorText = msg.isEmpty ? "Disconnected from intercom." : msg
       }
       scheduleReconnect()
@@ -406,11 +419,15 @@ final class AppModel {
 
   private func scheduleReconnect() {
     reconnectWork?.cancel()
+    let attempt = reconnectAttempt
+    reconnectAttempt = min(attempt + 1, 5)
+    let delay = min(8.0, 0.4 * pow(2.0, Double(attempt)))
     let work = DispatchWorkItem { [weak self] in
-      self?.connect()
+      guard let self, self.wantsSocket else { return }
+      self.connect()
     }
     reconnectWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
   }
 
   private func pollHealth() {
@@ -474,7 +491,7 @@ final class AppModel {
         let x = Double(samples[i]) / 32768.0
         sum += x * x
       }
-      min(1, sqrt(sum / Double(count)) * 3.4)
+      return min(1, sqrt(sum / Double(count)) * 3.4)
     }
   }
 }

@@ -16,13 +16,19 @@ enum IntercomEvent {
 }
 
 final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
+  private let lock = NSLock()
   private var session: URLSession?
   private var task: URLSessionWebSocketTask?
-  private var pingTimer: Timer?
+  private var pingTimer: DispatchSourceTimer?
+  private var generation = 0
   private let callbackQueue = DispatchQueue(label: "run.intercom.arthur.ws")
   var onEvent: ((IntercomEvent) -> Void)?
 
-  var isConnected: Bool { task != nil }
+  var isConnected: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return task != nil
+  }
 
   func connect(host: String, port: Int, token: String, deviceId: String) {
     disconnect()
@@ -42,72 +48,140 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
     var request = URLRequest(url: url)
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     request.setValue(deviceId, forHTTPHeaderField: "X-Device-Id")
-    request.timeoutInterval = 15
+    request.timeoutInterval = 30
 
     let config = URLSessionConfiguration.default
-    config.waitsForConnectivity = true
-    session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-    task = session?.webSocketTask(with: request)
-    task?.resume()
-    listen()
-    startPing()
+    config.waitsForConnectivity = false
+    config.timeoutIntervalForRequest = 300
+    config.timeoutIntervalForResource = 24 * 60 * 60
+    let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    let task = session.webSocketTask(with: request)
+
+    lock.lock()
+    let gen = generation
+    self.session = session
+    self.task = task
+    lock.unlock()
+
+    task.resume()
+    listen(gen)
+    startPing(gen)
   }
 
   func disconnect() {
-    pingTimer?.invalidate()
-    pingTimer = nil
-    task?.cancel(with: .goingAway, reason: nil)
+    lock.lock()
+    generation += 1
+    let oldTask = task
+    let oldSession = session
     task = nil
-    session?.invalidateAndCancel()
     session = nil
+    let timer = pingTimer
+    pingTimer = nil
+    lock.unlock()
+    timer?.cancel()
+    oldTask?.cancel(with: .goingAway, reason: nil)
+    oldSession?.invalidateAndCancel()
   }
 
   func sendPCM(_ data: Data) {
     guard !data.isEmpty else { return }
-    task?.send(.data(data)) { [weak self] error in
-      if let error {
-        self?.emit(.error("send pcm: \(error.localizedDescription)"))
-      }
-    }
+    send(.data(data), failure: "send pcm")
   }
 
   func sendJSON(_ object: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: object),
           let text = String(data: data, encoding: .utf8)
     else { return }
-    task?.send(.string(text)) { [weak self] error in
-      if let error {
-        self?.emit(.error("send: \(error.localizedDescription)"))
-      }
-    }
+    send(.string(text), failure: "send")
   }
 
   func sendEnd() { sendJSON(["type": "end"]) }
   func sendCancel() { sendJSON(["type": "cancel"]) }
   func sendText(_ text: String) { sendJSON(["type": "text", "text": text]) }
 
-  private func startPing() {
-    pingTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-      self?.task?.sendPing { error in
-        if let error {
-          self?.emit(.disconnected("ping: \(error.localizedDescription)"))
-        }
-      }
+  private func send(_ message: URLSessionWebSocketTask.Message, failure: String) {
+    lock.lock()
+    let gen = generation
+    let task = self.task
+    lock.unlock()
+    task?.send(message) { [weak self] error in
+      guard let self, let error, !self.isCancellation(error) else { return }
+      self.fail(gen, "\(failure): \(error.localizedDescription)")
     }
-    RunLoop.main.add(pingTimer!, forMode: .common)
   }
 
-  private func listen() {
+  private func startPing(_ gen: Int) {
+    let timer = DispatchSource.makeTimerSource(queue: callbackQueue)
+    timer.schedule(deadline: .now() + 20, repeating: 20, leeway: .seconds(1))
+    timer.setEventHandler { [weak self] in
+      guard let self else { return }
+      self.lock.lock()
+      let task = self.generation == gen ? self.task : nil
+      self.lock.unlock()
+      task?.sendPing { [weak self] error in
+        guard let self, let error, !self.isCancellation(error) else { return }
+        self.fail(gen, "ping: \(error.localizedDescription)")
+      }
+    }
+    lock.lock()
+    guard generation == gen else {
+      lock.unlock()
+      timer.cancel()
+      return
+    }
+    pingTimer = timer
+    lock.unlock()
+    timer.resume()
+  }
+
+  private func listen(_ gen: Int) {
+    lock.lock()
+    let task = generation == gen ? self.task : nil
+    lock.unlock()
     task?.receive { [weak self] result in
       guard let self else { return }
       switch result {
       case .failure(let error):
-        self.emit(.disconnected(error.localizedDescription))
+        if self.isCancellation(error) { return }
+        self.fail(gen, error.localizedDescription)
       case .success(let message):
+        self.lock.lock()
+        let current = self.generation == gen
+        self.lock.unlock()
+        guard current else { return }
         self.handle(message)
-        self.listen()
+        self.listen(gen)
       }
     }
+  }
+
+  private func fail(_ gen: Int, _ message: String) {
+    lock.lock()
+    guard generation == gen else {
+      lock.unlock()
+      return
+    }
+    generation += 1
+    let oldTask = task
+    let oldSession = session
+    task = nil
+    session = nil
+    let timer = pingTimer
+    pingTimer = nil
+    lock.unlock()
+    timer?.cancel()
+    oldTask?.cancel(with: .goingAway, reason: nil)
+    if let oldSession {
+      DispatchQueue.global(qos: .utility).async {
+        oldSession.invalidateAndCancel()
+      }
+    }
+    emit(.disconnected(message))
+  }
+
+  private func isCancellation(_ error: Error) -> Bool {
+    let ns = error as NSError
+    return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
   }
 
   private func handle(_ message: URLSessionWebSocketTask.Message) {
@@ -187,6 +261,11 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
 
   func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                   didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-    emit(.disconnected("socket closed"))
+    lock.lock()
+    let current = webSocketTask === task
+    let gen = generation
+    lock.unlock()
+    guard current else { return }
+    fail(gen, "socket closed")
   }
 }

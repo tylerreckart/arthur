@@ -21,6 +21,9 @@ swiftc -parse-as-library -O \
   -framework Metal \
   -framework MetalKit \
   -framework QuartzCore \
+  -framework Network \
+  -framework CryptoKit \
+  -framework Security \
   -lsqlite3 \
   -o "$MACOS/Arthur" \
   "$SRC"/*.swift

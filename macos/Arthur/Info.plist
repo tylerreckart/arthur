@@ -28,6 +28,11 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Arthur needs the microphone so you can speak to him from this Mac, the same way the hallway speaker does.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

@@ -4,6 +4,7 @@
 
 #include <sys/socket.h>
 
+#include <cerrno>
 #include <cstring>
 #include <iostream>
 
@@ -15,7 +16,11 @@ bool send_all(int fd, const void* data, std::size_t len) {
   std::size_t sent = 0;
   while (sent < len) {
     const ssize_t n = ::send(fd, p + sent, len - sent, 0);
-    if (n <= 0) return false;
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      return false;
+    }
+    if (n == 0) return false;
     sent += static_cast<std::size_t>(n);
   }
   return true;
@@ -34,12 +39,14 @@ std::shared_ptr<DeviceHub::Conn> DeviceHub::get(const std::string& device_id) co
 }
 
 void DeviceHub::attach(const std::string& device_id, int fd) {
+  int replaced = -1;
   std::shared_ptr<Conn> c;
   {
     std::lock_guard<std::mutex> lk(mu_);
     auto it = conns_.find(device_id);
     if (it != conns_.end() && it->second) {
       c = it->second;
+      if (c->fd >= 0 && c->fd != fd) replaced = c->fd;
       c->fd = fd;
     } else {
       c = std::make_shared<Conn>();
@@ -47,6 +54,7 @@ void DeviceHub::attach(const std::string& device_id, int fd) {
       conns_[device_id] = c;
     }
   }
+  if (replaced >= 0) ::shutdown(replaced, SHUT_RDWR);
   std::cerr << "intercom speakback: device " << device_id << " online" << std::endl;
   flush_pending(device_id, c);
 }

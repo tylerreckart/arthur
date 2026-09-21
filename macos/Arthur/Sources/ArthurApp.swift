@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -14,7 +15,9 @@ struct ArthurApp: App {
         }
         .background { WindowTransparency() }
         .onAppear { model.start() }
-        .onDisappear { model.stop() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+          model.stop()
+        }
     }
     .defaultSize(width: 520, height: 680)
     .windowResizability(.contentMinSize)

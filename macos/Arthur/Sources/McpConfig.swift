@@ -1,8 +1,14 @@
 import Foundation
 
 /// One MCP server in Arbiter's `~/.arbiter/mcp_servers.json` registry.
-/// Arbiter speaks stdio only; hosted HTTP/SSE URLs are stored as
-/// `npx -y mcp-remote <url>` — the same shape `arbiter --setup-tools` writes.
+/// Arthur connects to a remote URL itself. The registry still records that URL as
+/// `npx -y mcp-remote <url> [--header "Name: value"]` because Arbiter launches stdio.
+struct McpRemoteCommand: Equatable {
+  var url: String
+  var headers: [String: String]
+  var extra: [String]
+}
+
 struct McpServer: Identifiable, Equatable {
   var name: String
   var enabled: Bool
@@ -18,13 +24,28 @@ struct McpServer: Identifiable, Equatable {
     command == "npx" && args.contains("mcp-remote")
   }
 
-  var hostedURL: String {
-    guard let idx = args.lastIndex(of: "mcp-remote"), idx + 1 < args.count else { return "" }
-    return args[idx + 1]
+  var remoteCommand: McpRemoteCommand? {
+    guard isHosted else { return nil }
+    return Self.parseRemote(args)
   }
 
+  var hostedURL: String { remoteCommand?.url ?? "" }
+
+  var httpHeaders: [String: String] { remoteCommand?.headers ?? [:] }
+
+  var remoteExtra: [String] { remoteCommand?.extra ?? [] }
+
   var transportLabel: String {
-    isHosted ? "Hosted · mcp-remote" : "stdio"
+    isHosted ? "Remote" : "Local"
+  }
+
+  var endpointLine: String {
+    if isHosted {
+      let link = hostedURL
+      return link.isEmpty ? "Remote server" : link
+    }
+    let line = ([command] + args).filter { !$0.isEmpty }.joined(separator: " ")
+    return line.isEmpty ? "Local command" : line
   }
 
   var argsLine: String {
@@ -43,16 +64,50 @@ struct McpServer: Identifiable, Equatable {
     )
   }
 
-  static func hosted(name: String, url: String) -> McpServer {
-    McpServer(
+  static func hosted(
+    name: String,
+    url: String,
+    headers: [String: String] = [:],
+    extra: [String] = [],
+    env: [String: String] = [:]
+  ) -> McpServer {
+    var args = ["-y", "mcp-remote", url.trimmingCharacters(in: .whitespacesAndNewlines)]
+    for key in headers.keys.sorted() {
+      args.append("--header")
+      args.append("\(key): \(headers[key] ?? "")")
+    }
+    args.append(contentsOf: extra)
+    return McpServer(
       name: Self.canonicalName(name),
       enabled: true,
       command: "npx",
-      args: ["-y", "mcp-remote", url.trimmingCharacters(in: .whitespacesAndNewlines)],
-      env: [:],
+      args: args,
+      env: env,
       initTimeoutMs: 90_000,
       callTimeoutMs: nil
     )
+  }
+
+  static func parseRemote(_ args: [String]) -> McpRemoteCommand? {
+    guard let idx = args.firstIndex(of: "mcp-remote"), idx + 1 < args.count else { return nil }
+    var headers: [String: String] = [:]
+    var extra: [String] = []
+    var index = idx + 2
+    while index < args.count {
+      if args[index] == "--header", index + 1 < args.count {
+        let pair = args[index + 1]
+        if let colon = pair.firstIndex(of: ":") {
+          let key = pair[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
+          let value = pair[pair.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+          if !key.isEmpty { headers[String(key)] = String(value) }
+        }
+        index += 2
+      } else {
+        extra.append(args[index])
+        index += 1
+      }
+    }
+    return McpRemoteCommand(url: args[idx + 1], headers: headers, extra: extra)
   }
 
   static func playwright() -> McpServer {

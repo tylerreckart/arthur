@@ -13,6 +13,7 @@ struct WindowTransparency: NSViewRepresentable {
 
 final class WindowTransparencyView: NSView {
   override var isOpaque: Bool { false }
+  private weak var appliedWindow: NSWindow?
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
@@ -20,7 +21,8 @@ final class WindowTransparencyView: NSView {
   }
 
   func apply() {
-    guard let window else { return }
+    guard let window, window !== appliedWindow else { return }
+    appliedWindow = window
     window.isOpaque = false
     window.backgroundColor = .clear
     window.titlebarAppearsTransparent = true

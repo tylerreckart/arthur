@@ -19,9 +19,6 @@ struct ContentView: View {
           .navigationTitle("Arthur")
           .toolbarTitleDisplayMode(.inline)
           .toolbar {
-            ToolbarItem(placement: .navigation) {
-              StatusChip()
-            }
             ToolbarItemGroup(placement: .primaryAction) {
               Button {
                 model.soundOn.toggle()
@@ -263,55 +260,6 @@ struct ContentView: View {
   }
 }
 
-private struct StatusChip: View {
-  @Environment(AppModel.self) private var model
-  @State private var dim = false
-
-  var body: some View {
-    HStack(spacing: 6) {
-      Circle()
-        .fill(dotColor)
-        .frame(width: 6, height: 6)
-        .opacity(shouldPulse && dim ? 0.35 : 1)
-      Text(model.phaseLabel)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-    }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 3)
-    .background(.fill.quaternary, in: Capsule())
-    .animation(.easeInOut(duration: 0.2), value: model.phaseLabel)
-    .onAppear { syncPulse() }
-    .onChange(of: shouldPulse) { _, _ in syncPulse() }
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel(model.phaseLabel)
-  }
-
-  private var shouldPulse: Bool {
-    model.phase == .connecting || model.phase == .listening || model.phase == .thinking
-  }
-
-  private func syncPulse() {
-    if shouldPulse {
-      withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-        dim = true
-      }
-    } else {
-      withAnimation(.easeOut(duration: 0.15)) { dim = false }
-    }
-  }
-
-  private var dotColor: Color {
-    switch model.phase {
-    case .disconnected: return .red.opacity(0.8)
-    case .connecting: return .secondary
-    case .idle: return model.micGranted ? Color.green.opacity(0.85) : ArthurTheme.accent
-    case .listening, .thinking, .speaking: return ArthurTheme.accent
-    }
-  }
-}
-
 private struct WorkTrail: View {
   let line: String
   @State private var pulse = false
@@ -371,6 +319,11 @@ private struct ErrorBanner: View {
 private struct StarterChip: View {
   let title: String
   var action: () -> Void
+
+  init(_ title: String, action: @escaping () -> Void) {
+    self.title = title
+    self.action = action
+  }
 
   var body: some View {
     Button(action: action) {
@@ -533,22 +486,13 @@ private struct TranscriptClusterView: View {
 private struct UserCopy: View {
   let texts: [String]
   var onEdit: (String) -> Void
-  @State private var hovered = false
 
   var body: some View {
     VStack(alignment: .trailing, spacing: 6) {
-      HStack(spacing: 8) {
-        if hovered, let last = texts.last {
-          ClusterAction(title: "Edit", systemImage: "pencil") {
-            onEdit(last)
-          }
-        }
-        Spacer(minLength: 0)
-        Text("You")
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-      }
-      .fadeUnderHeader()
+      Text("You")
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+        .fadeUnderHeader()
       VStack(alignment: .trailing, spacing: 6) {
         ForEach(Array(texts.enumerated()), id: \.offset) { _, text in
           Text(text)
@@ -569,8 +513,6 @@ private struct UserCopy: View {
     }
     .frame(maxWidth: .infinity, alignment: .trailing)
     .padding(.leading, 72)
-    .contentShape(Rectangle())
-    .onHover { hovered = $0 }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("You, \(texts.joined(separator: " "))")
     .accessibilityAction(named: "Edit & resend") {
@@ -584,7 +526,6 @@ private struct ArthurCopy: View {
   let texts: [String]
   var live = false
   var showStop = false
-  @State private var hovered = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -600,23 +541,6 @@ private struct ArthurCopy: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(.trailing, 36)
-    .overlay(alignment: .topTrailing) {
-      if hovered {
-        HStack(spacing: 6) {
-          ClusterAction(title: "Copy", systemImage: "doc.on.doc") {
-            ArthurPasteboard.copy(texts.joined(separator: "\n\n"))
-          }
-          if showStop {
-            ClusterAction(title: "Stop", systemImage: "stop.fill") {
-              model.cancelTurn()
-            }
-          }
-        }
-      }
-    }
-    .contentShape(Rectangle())
-    .onHover { hovered = $0 }
     .contextMenu {
       Button("Copy") { ArthurPasteboard.copy(texts.joined(separator: "\n\n")) }
       if showStop {
@@ -672,32 +596,14 @@ private struct ArthurReply: View {
   }
 }
 
-private struct ClusterAction: View {
-  let title: String
-  let systemImage: String
-  var action: () -> Void
-
-  var body: some View {
-    Button(action: action) {
-      Label(title, systemImage: systemImage)
-        .font(.caption.weight(.medium))
-        .labelStyle(.titleAndIcon)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-    }
-    .buttonStyle(.plain)
-    .background(.ultraThinMaterial, in: Capsule())
-    .help(title)
-  }
-}
-
 struct SettingsView: View {
   @Environment(AppModel.self) private var model
   @Environment(\.dismiss) private var dismiss
+  @State private var settingsPath = NavigationPath()
 
   var body: some View {
     @Bindable var model = model
-    NavigationStack {
+    NavigationStack(path: $settingsPath) {
       Form {
         Section("Connection") {
           LabeledContent("Host") {
@@ -749,22 +655,32 @@ struct SettingsView: View {
       }
       .formStyle(.grouped)
       .navigationTitle("Settings")
+      .navigationDestination(for: McpEditorRoute.self) { route in
+        McpServerEditor(route: route, server: mcpServer(for: route))
+      }
       .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Reload") { model.reloadFromDisk() }
-        }
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Done") {
-            model.applySettings()
-            dismiss()
+        if settingsPath.isEmpty {
+          ToolbarItem(placement: .cancellationAction) {
+            Button("Reload") { model.reloadFromDisk() }
           }
-          .buttonStyle(.glassProminent)
+          ToolbarItem(placement: .confirmationAction) {
+            Button("Done") {
+              model.applySettings()
+              dismiss()
+            }
+            .buttonStyle(.glassProminent)
+          }
         }
       }
       .onAppear { model.loadMcpRegistry() }
     }
-    .frame(minWidth: 460, minHeight: 520)
+    .frame(minWidth: 520, minHeight: 560)
     .preferredColorScheme(.dark)
     .tint(ArthurTheme.accent)
+  }
+
+  private func mcpServer(for route: McpEditorRoute) -> McpServer? {
+    guard case .edit(let name) = route else { return nil }
+    return model.mcpServers.first { $0.name == name }
   }
 }
