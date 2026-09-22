@@ -723,7 +723,7 @@ private struct ComposerStop: View {
 private struct ComposerCircle: View {
   let systemImage: String
   var enabled = true
-  /// Listening / speaking — white fill instead of the idle orange.
+  /// Listening / speaking — white fill instead of the idle accent.
   var active = false
   var action: () -> Void
 

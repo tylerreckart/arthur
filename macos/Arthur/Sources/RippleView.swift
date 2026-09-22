@@ -280,14 +280,12 @@ private enum RippleShaderSource {
     float3 teal    = float3(0.12, 0.82, 0.76);
     float3 violet  = float3(0.52, 0.30, 0.98);
     float3 magenta = float3(0.88, 0.28, 0.64);
-    float3 ember   = float3(1.00, 0.42, 0.16);
     float3 indigo  = float3(0.07, 0.08, 0.18);
 
     float3 aur = green * (cGreen * bright)
                + violet * (cViolet * bright * 0.90)
                + teal * (cTeal * bright * 0.78)
-               + magenta * (cMagenta * bright * 0.70)
-               + ember * (cGreen * cMagenta * bright * 0.08);
+               + magenta * (cMagenta * bright * 0.70);
     float cover = cGreen * 0.85 + cViolet * 0.70 + cTeal * 0.55 + cMagenta * 0.45;
 
     float sky = smoothstep(0.0, 0.045, ytop) * (1.0 - 0.72 * smoothstep(0.22, 0.92, ytop));
