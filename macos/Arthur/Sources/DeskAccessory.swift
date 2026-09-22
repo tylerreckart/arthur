@@ -522,7 +522,7 @@ private final class HoldTalkMenuView: NSView {
     if !enabled {
       titleColor = NSColor.tertiaryLabelColor
     } else if listening {
-      titleColor = NSColor(red: 1, green: 0.34, blue: 0.04, alpha: 1)
+      titleColor = ArthurTheme.accentNSColor
     } else {
       titleColor = NSColor.labelColor
     }
