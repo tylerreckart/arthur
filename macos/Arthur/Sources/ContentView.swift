@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -87,12 +88,33 @@ struct ContentView: View {
     .tint(ArthurTheme.accent)
     .background(.clear)
     .onChange(of: typing) { _, on in
+      model.composerFocused = on
       if on, !didShowReturnHint {
         showReturnHint = true
         didShowReturnHint = true
       }
       if !on { showReturnHint = false }
     }
+    .onAppear { focusComposerIfAllowed() }
+    .onChange(of: model.composerFocusToken) { _, _ in
+      focusComposerIfAllowed()
+    }
+    .onChange(of: model.holding) { _, holding in
+      if !holding { focusComposerIfAllowed() }
+    }
+    .onChange(of: model.settingsOpen) { _, open in
+      if !open { focusComposerIfAllowed() }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+      guard let window = note.object as? NSWindow, window.isKeyWindow else { return }
+      focusComposerIfAllowed()
+    }
+  }
+
+  private func focusComposerIfAllowed() {
+    guard !model.holding, !model.settingsOpen else { return }
+    model.composerFocused = true
+    typing = true
   }
 
   @ViewBuilder
@@ -214,7 +236,7 @@ struct ContentView: View {
           VStack(spacing: 8) { starterChips }
         }
       }
-      Text("Hold Talk or space to speak")
+      Text("Hold Talk or ⌥Space to speak · ⌘L to type")
         .font(.caption)
         .foregroundStyle(.tertiary)
     }
@@ -231,7 +253,7 @@ struct ContentView: View {
     case .listening:
       return "Release to send"
     default:
-      return "Hold Talk or space, or type below"
+      return "Hold Talk or ⌥Space, or type below"
     }
   }
 
@@ -344,9 +366,8 @@ private struct ComposerBar: View {
 
   var body: some View {
     @Bindable var model = model
-    let hasDraft = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
-    HStack(alignment: .center, spacing: 10) {
+    HStack(alignment: .bottom, spacing: 8) {
       if model.holding {
         listeningAffordance
       } else {
@@ -358,20 +379,19 @@ private struct ComposerBar: View {
         )
         .textFieldStyle(.plain)
         .font(.body)
-        .lineLimit(1...6)
+        .lineLimit(2...8)
         .focused($typing)
-        .onSubmit { model.sendDraft() }
-        .onKeyPress { press in
-          guard press.key == .return else { return .ignored }
-          if press.modifiers.contains(.shift) { return .ignored }
-          guard hasDraft else { return .handled }
-          model.sendDraft()
-          return .handled
-        }
-        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .accessibilityLabel("Ask Arthur")
       }
 
-      if hasDraft, !model.holding {
+      if model.canCancel {
+        ComposerStop {
+          model.cancelTurn()
+        }
+      }
+
+      if model.hasDraft, !model.holding {
         ComposerCircle(systemImage: "arrow.up", enabled: model.canTalk) {
           model.sendDraft()
         }
@@ -384,24 +404,26 @@ private struct ComposerBar: View {
         enabled: model.canTalk,
         action: {}
       )
-      .help(model.holding ? "Release to send" : "Hold to talk")
+      .help(model.holding ? "Release to send" : "Hold to talk · ⌥Space also talks")
       .accessibilityLabel(model.holding ? "Release" : "Talk")
-      .accessibilityHint("Hold to talk")
+      .accessibilityHint("Hold to talk. Option-Space also starts push-to-talk.")
       .simultaneousGesture(
         DragGesture(minimumDistance: 0)
           .onChanged { _ in
-            if model.canTalk, !model.holding { model.pttDown() }
+            if model.canTalk, !model.holding { model.pttDown(explicit: true) }
           }
           .onEnded { _ in
             if model.holding { model.pttUp() }
           }
       )
     }
-    .padding(.leading, 18)
+    .padding(.leading, 16)
     .padding(.trailing, 8)
-    .padding(.vertical, 7)
+    .padding(.top, 10)
+    .padding(.bottom, 8)
     .animation(.easeInOut(duration: 0.16), value: model.holding)
-    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 24, style: .continuous))
+    .animation(.easeInOut(duration: 0.16), value: model.canCancel)
+    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22, style: .continuous))
   }
 
   private var listeningAffordance: some View {
@@ -417,7 +439,7 @@ private struct ComposerBar: View {
       }
       Spacer(minLength: 0)
     }
-    .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("Listening, release to send")
   }
@@ -442,6 +464,28 @@ private struct ListeningMeter: View {
         pulse = true
       }
     }
+  }
+}
+
+private struct ComposerStop: View {
+  var action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 5) {
+        Image(systemName: "stop.fill")
+          .font(.system(size: 9, weight: .bold))
+        Text("Stop")
+          .font(.callout.weight(.semibold))
+      }
+      .foregroundStyle(.white)
+      .padding(.horizontal, 11)
+      .frame(height: 32)
+      .background(ArthurTheme.accent, in: Capsule())
+    }
+    .buttonStyle(.plain)
+    .help("Stop Arthur")
+    .accessibilityLabel("Stop")
   }
 }
 

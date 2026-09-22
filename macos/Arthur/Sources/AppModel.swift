@@ -23,8 +23,14 @@ final class AppModel {
   var work: WorkState = .none
   var youSaid = ""
   var formingText = ""
-  var draft = ""
+  var draft = "" {
+    didSet {
+      if draft != oldValue { persistDraft() }
+    }
+  }
   var errorText = ""
+  var composerFocusToken = 0
+  var composerFocused = false
   var conversationId: Int64 = 0
   var turnId = ""
   var micGranted = false
@@ -56,6 +62,7 @@ final class AppModel {
   private var typedThisTurn = false
   private var started = false
   private var transcriptDeviceId = ""
+  private var pttFromKeyboard = false
 
   init() {
     config = ConfigStore.load()
@@ -67,6 +74,7 @@ final class AppModel {
     audio.soundEnabled = soundOn
     transcriptDeviceId = config.deviceId
     discussion = ConfigStore.loadTranscript(deviceId: transcriptDeviceId)
+    draft = ConfigStore.loadDraft()
     loadMcpRegistry()
     client.onEvent = { [weak self] event in
       Task { @MainActor in self?.handle(event) }
@@ -114,6 +122,7 @@ final class AppModel {
     audio.stopPlayback()
     client.disconnect()
     persistTranscript()
+    persistDraft()
     started = false
   }
 
@@ -213,8 +222,13 @@ final class AppModel {
     persistMcpRegistry()
   }
 
-  func pttDown() {
+  /// Starts push-to-talk. Implicit Space only reaches here when the composer is
+  /// unfocused and the draft is empty. Pass `explicit: true` for the mic hold
+  /// or ⌥Space — those may run even when there is typed text, and they never
+  /// clear `draft`.
+  func pttDown(explicit: Bool = false) {
     guard canSend else { return }
+    if !explicit && hasDraft { return }
     if phase == .speaking || phase == .thinking {
       client.sendCancel()
       audio.interruptPlayback()
@@ -243,6 +257,7 @@ final class AppModel {
   func pttUp() {
     guard holding else { return }
     holding = false
+    pttFromKeyboard = false
     inputLevel = 0
     audio.stopCapture()
     let elapsed = Date().timeIntervalSince(pttStarted ?? Date())
@@ -290,6 +305,16 @@ final class AppModel {
     phase == .speaking || phase == .thinking
   }
 
+  var hasDraft: Bool {
+    !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  func focusComposer() {
+    guard !holding, !settingsOpen else { return }
+    composerFocused = true
+    composerFocusToken += 1
+  }
+
   func dismissError() {
     errorText = ""
   }
@@ -327,6 +352,10 @@ final class AppModel {
 
   private func persistTranscript(deviceId: String? = nil) {
     ConfigStore.saveTranscript(discussion, deviceId: deviceId ?? transcriptDeviceId)
+  }
+
+  private func persistDraft() {
+    ConfigStore.saveDraft(draft)
   }
 
   private func handle(_ event: IntercomEvent) {
@@ -391,6 +420,7 @@ final class AppModel {
     case .disconnected(let msg):
       audio.stopCapture()
       holding = false
+      pttFromKeyboard = false
       inputLevel = 0
       expectingReply = false
       typedThisTurn = false
@@ -459,26 +489,107 @@ final class AppModel {
     }.resume()
   }
 
+  /// Keyboard contract (desk window, settings sheet closed):
+  /// - ⌘L / ⌘K focus Ask Arthur (menu + this monitor).
+  /// - Return sends, Shift-Return inserts a newline (single path; not onSubmit).
+  /// - Escape calls `cancelTurn()` when `canCancel`.
+  /// - Space is PTT only when the composer is unfocused and the draft is empty.
+  /// - ⌥Space is explicit PTT even with a draft or while focused.
+  /// Space is never stolen while typing.
   private func installKeys() {
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
       guard let self else { return event }
-      guard event.keyCode == 49 else { return event }
-      if self.textFieldFocused { return event }
+      if self.settingsOpen { return event }
+
       if event.type == .keyDown {
-        if event.isARepeat { return nil }
-        Task { @MainActor in self.pttDown() }
-        return nil
+        if self.handleCommandShortcut(event) { return nil }
+        if event.keyCode == 53, self.canCancel {
+          Task { @MainActor in self.cancelTurn() }
+          return nil
+        }
+        switch self.handleComposerReturn(event) {
+        case .ignore:
+          break
+        case .pass:
+          return event
+        case .consume:
+          return nil
+        }
       }
-      if event.type == .keyUp {
-        Task { @MainActor in self.pttUp() }
-        return nil
-      }
-      return event
+
+      return self.handlePushToTalk(event)
     }
   }
 
-  private var textFieldFocused: Bool {
-    NSApp.keyWindow?.firstResponder is NSTextView
+  @discardableResult
+  private func handleCommandShortcut(_ event: NSEvent) -> Bool {
+    guard event.modifierFlags.contains(.command) else { return false }
+    let extra = event.modifierFlags.intersection([.shift, .option, .control])
+    guard extra.isEmpty else { return false }
+    let chars = event.charactersIgnoringModifiers?.lowercased()
+    if chars == "l" || chars == "k" {
+      focusComposer()
+      return true
+    }
+    return false
+  }
+
+  private enum KeyResult {
+    case ignore
+    case pass
+    case consume
+  }
+
+  /// Return/Enter send when the composer is first responder. Shift-Return
+  /// falls through so the field can insert a newline. This is the only send
+  /// path — the SwiftUI field must not also use onSubmit/onKeyPress.
+  private func handleComposerReturn(_ event: NSEvent) -> KeyResult {
+    guard event.keyCode == 36 || event.keyCode == 76 else { return .ignore }
+    guard composerFocused else { return .ignore }
+    if event.modifierFlags.contains(.shift) { return .pass }
+    if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.option) {
+      return .pass
+    }
+    if hasDraft {
+      Task { @MainActor in self.sendDraft() }
+    }
+    return .consume
+  }
+
+  private func handlePushToTalk(_ event: NSEvent) -> NSEvent? {
+    guard event.keyCode == 49 else { return event }
+    if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
+      return event
+    }
+
+    let option = event.modifierFlags.contains(.option)
+    if option {
+      return consumePTT(event, explicit: true)
+    }
+
+    if composerFocused { return event }
+    if hasDraft { return event }
+    return consumePTT(event, explicit: false)
+  }
+
+  private func consumePTT(_ event: NSEvent, explicit: Bool) -> NSEvent? {
+    if event.type == .keyDown {
+      if event.isARepeat { return nil }
+      if holding { return nil }
+      Task { @MainActor in
+        self.pttFromKeyboard = true
+        self.pttDown(explicit: explicit)
+      }
+      return nil
+    }
+    if event.type == .keyUp {
+      Task { @MainActor in
+        guard self.pttFromKeyboard else { return }
+        self.pttUp()
+      }
+      return nil
+    }
+    return event
   }
 
   private static func captureLevel(_ data: Data) -> Double {
