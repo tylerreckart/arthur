@@ -23,6 +23,10 @@ final class AppModel {
   var work: WorkState = .none
   var youSaid = ""
   var formingText = ""
+  /// Live ghost for voice turns. `"…"` while listening / Whisper runs;
+  /// real words if a `heard` partial ever arrives. Empty when idle.
+  var hearingText = ""
+  var hearingLineId = UUID()
   var draft = "" {
     didSet {
       if draft != oldValue { persistDraft() }
@@ -265,6 +269,7 @@ final class AppModel {
       expectingReply = false
       typedThisTurn = false
       formingText = ""
+      beginHearing()
       try audio.startCapture()
       holding = true
       inputLevel = 0.12
@@ -273,6 +278,7 @@ final class AppModel {
       setWork(.none)
       errorText = ""
     } catch {
+      clearHearing()
       errorText = error.localizedDescription
     }
   }
@@ -287,6 +293,7 @@ final class AppModel {
     pttStarted = nil
     if elapsed < 0.35 || pcmBytes < 8000 {
       client.sendCancel()
+      clearHearing()
       become(client.isConnected ? .idle : .disconnected)
       errorText = "Too short — hold a little longer."
       return
@@ -309,6 +316,7 @@ final class AppModel {
     appendDiscussion(fromYou: true, text: text)
     draft = ""
     formingText = ""
+    clearHearing()
     typedThisTurn = true
     expectingReply = true
     setWork(.findingWords)
@@ -356,6 +364,7 @@ final class AppModel {
     expectingReply = false
     typedThisTurn = false
     formingText = ""
+    clearHearing()
     setWork(.none)
     become(client.isConnected ? .idle : .disconnected)
   }
@@ -369,11 +378,31 @@ final class AppModel {
     if send { sendDraft() }
   }
 
-  private func appendDiscussion(fromYou: Bool, text: String) {
+  private func beginHearing() {
+    hearingLineId = UUID()
+    hearingText = "…"
+  }
+
+  private func clearHearing() {
+    hearingText = ""
+  }
+
+  /// Voice (and late `turn`) path. Typed sends already appended in `sendDraft`.
+  private func commitVoiceTranscript(_ text: String) {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    youSaid = trimmed
+    if !typedThisTurn {
+      appendDiscussion(fromYou: true, text: trimmed, id: hearingLineId)
+    }
+    clearHearing()
+  }
+
+  private func appendDiscussion(fromYou: Bool, text: String, id: UUID? = nil) {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
     if let last = discussion.last, last.fromYou == fromYou, last.text == trimmed { return }
-    discussion.append(DiscussionLine(fromYou: fromYou, text: trimmed))
+    discussion.append(DiscussionLine(fromYou: fromYou, text: trimmed, id: id ?? UUID()))
     if discussion.count > 40 {
       discussion.removeFirst(discussion.count - 40)
     }
@@ -406,12 +435,15 @@ final class AppModel {
         if work != .speaking { setWork(.speaking) }
         audio.playPCM(data)
       }
+    case .heard(let text):
+      if !text.isEmpty {
+        commitVoiceTranscript(text)
+      }
     case .turn(let transcript, let conv, let ok, _):
       if !transcript.isEmpty {
-        youSaid = transcript
-        if !typedThisTurn {
-          appendDiscussion(fromYou: true, text: transcript)
-        }
+        commitVoiceTranscript(transcript)
+      } else {
+        clearHearing()
       }
       typedThisTurn = false
       if conv > 0 { conversationId = conv }
@@ -420,6 +452,7 @@ final class AppModel {
       expectingReply = false
       typedThisTurn = false
       formingText = ""
+      clearHearing()
       setWork(.none)
       if !ok, !err.isEmpty { errorText = err }
       become(client.isConnected ? .idle : .disconnected)
@@ -450,6 +483,7 @@ final class AppModel {
       }
     case .error(let msg):
       errorText = msg
+      clearHearing()
     case .disconnected(let msg):
       audio.stopCapture()
       holding = false
@@ -458,6 +492,7 @@ final class AppModel {
       expectingReply = false
       typedThisTurn = false
       formingText = ""
+      clearHearing()
       if speakBack?.live == true { finishSpeakBack() }
       become(.disconnected)
       healthOK = false
@@ -522,6 +557,7 @@ final class AppModel {
     phase = p
     if p == .idle || p == .disconnected {
       formingText = ""
+      hearingText = ""
     }
   }
 

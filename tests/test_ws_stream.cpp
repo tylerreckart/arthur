@@ -206,6 +206,7 @@ int main() {
         std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
     bool got_done = false;
     bool got_binary = false;
+    bool got_heard = false;
     while (std::chrono::steady_clock::now() < deadline && !got_done) {
       char buf[4096];
       const ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
@@ -224,6 +225,10 @@ int main() {
             if (j.value("type", "") == "accept") {
               CHECK(!j.value("turn_id", "").empty());
             }
+            if (j.value("type", "") == "heard") {
+              got_heard = true;
+              CHECK(j.value("text", "") == "status");
+            }
             if (j.value("type", "") == "done") {
               CHECK(j.value("ok", false));
               got_done = true;
@@ -236,6 +241,7 @@ int main() {
     }
     CHECK(got_binary);
     CHECK(got_done);
+    CHECK(got_heard);
     CHECK(tts->last.find("sir") != std::string::npos);
 
     CHECK(hub->online("speaker-1"));
@@ -311,9 +317,12 @@ int main() {
 
     incoming.clear();
     got_done = false;
+    got_heard = false;
     bool got_accept = false;
+    bool heard_before_turn = false;
     std::string accept_id;
     std::string turn_id;
+    std::string heard_text;
     const auto end_deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
     while (std::chrono::steady_clock::now() < end_deadline && !got_done) {
@@ -333,6 +342,11 @@ int main() {
               got_accept = true;
               accept_id = j.value("turn_id", "");
             }
+            if (type == "heard") {
+              got_heard = true;
+              heard_text = j.value("text", "");
+              heard_before_turn = turn_id.empty();
+            }
             if (type == "turn") turn_id = j.value("turn_id", "");
             if (type == "done") got_done = true;
           } catch (...) {
@@ -343,6 +357,9 @@ int main() {
     }
     CHECK(got_done);
     CHECK(got_accept);
+    CHECK(got_heard);
+    CHECK(heard_text == "status");
+    CHECK(heard_before_turn);
     CHECK(!accept_id.empty());
     CHECK(accept_id == turn_id);
     CHECK(stt->last_pcm.size() == chunk_a.size() + chunk_b.size() + chunk_c.size());

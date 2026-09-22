@@ -5,8 +5,8 @@ struct DiscussionLine: Identifiable, Equatable, Codable {
   let fromYou: Bool
   let text: String
 
-  init(fromYou: Bool, text: String) {
-    self.id = UUID()
+  init(fromYou: Bool, text: String, id: UUID = UUID()) {
+    self.id = id
     self.fromYou = fromYou
     self.text = text
   }
