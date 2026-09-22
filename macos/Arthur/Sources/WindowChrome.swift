@@ -105,19 +105,18 @@ enum ArthurChrome {
 
 /// Fade content as it slides under the title bar, continuously in Y.
 ///
-/// The previous implementation sampled the *entire* view frame against
-/// `fadeBand`, so a multi-line bubble dimmed as one block. This mask is
-/// keyed to chrome-space Y: lines (or the upper part of one bubble) that
-/// sit in the band fade; text below the band stays solid. A mask is used
-/// instead of chopping text so selection and markdown stay intact.
+/// `View.visualEffect` hands the closure an `EmptyVisualEffect`, which has
+/// no `.mask` (macOS 26). Applying the gradient as a `View` mask keeps the
+/// chrome-Y fade: the upper part of a bubble in `fadeBand` softens, text
+/// below the band stays solid. Selection and markdown stay intact.
 struct FadeUnderHeader: ViewModifier {
   func body(content: Content) -> some View {
-    content.visualEffect { inner, proxy in
-      let frame = proxy.frame(in: ArthurChrome.space)
-      let height = max(proxy.size.height, 1)
-      let startY = (0 - frame.minY) / height
-      let endY = (ArthurChrome.fadeBand - frame.minY) / height
-      return inner.mask {
+    content.mask {
+      GeometryReader { proxy in
+        let frame = proxy.frame(in: ArthurChrome.space)
+        let height = max(proxy.size.height, 1)
+        let startY = (0 - frame.minY) / height
+        let endY = (ArthurChrome.fadeBand - frame.minY) / height
         LinearGradient(
           stops: [
             .init(color: .black.opacity(0.06), location: 0),
