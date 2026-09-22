@@ -1,17 +1,17 @@
 # Arthur
 
-Arthur is Tyler Reckart's personal silicon assistant — local-first, on a wall button and a Mac on the desk. The person on the other end of his home intercom.
+Arthur is my personal silicon assistant — local-first and available on the desktop via a MacOS app and through an experimental hardware device that share the same conversational memory.
 
-You talk; he answers aloud. This repository is the voice layer: capture, speech, devices, and the spoken reply. The spoken-agent definition is [`config/arthur.agent.json`](config/arthur.agent.json).
+This repository is the voice layer: capture, speech, devices, and the spoken reply. The spoken-agent definition is [`config/arthur.agent.json`](config/arthur.agent.json).
 
 STT and TTS run on the machine that hosts Intercom. [whisper.cpp](https://github.com/ggerganov/whisper.cpp) transcribes, [Kokoro](https://github.com/hexgrad/kokoro) speaks, and [Arbiter](https://github.com/tylerreckart/arbiter) (a separate process) stays text + SSE in the middle.
 
 ## How it fits together
 
 ```
-Wall button (ESP32) ──┐
+Physical device ──────┐
                       │  PCM up while you hold talk
-Mac desk app ─────────┼── ws://…:8093/v1/stream ── Intercom (this repo)
+Mac desk app ─────────┼─ ws://…:8093/v1/stream ── Intercom daemon (this repo)
                       │  PCM down as Arthur answers      │
                       │                                  ├── whisper.cpp  STT
                       │                                  ├── Kokoro       TTS
@@ -29,11 +29,11 @@ Intercom maps each `X-Device-Id` to one Arbiter conversation in SQLite (`session
 
 ## Components
 
-**Intercom daemon** (`src/`, C++20) — the process in the middle. HTTP on `:8090` (`POST /v1/utterance`, health, cancel) and a WebSocket hub on `:8093` (`/v1/stream`). It owns STT, TTS, the turn pipeline, device sessions, optional Home Assistant fast-path, and speak-back from Arbiter’s notification stream.
+**Intercom daemon** — HTTP on `:8090` (`POST /v1/utterance`, health, cancel) and a WebSocket hub on `:8093` (`/v1/stream`). It owns STT, TTS, the turn pipeline, device sessions, optional Home Assistant fast-path, and speak-back from Arbiter’s notification stream.
 
-**Mac desk app** (`macos/Arthur`) — a native SwiftUI window that uses the same WebSocket, `device_token`, and device id as the wall button. Close the window and the menu bar extra stays armed: hold **Arthur** (or **Hold to Talk**) to speak. Type in the composer when you would rather not talk.
+**Mac desk app** (`macos/Arthur`) — a native SwiftUI window that uses the same WebSocket, `device_token`, and device id for shared conversation memory.
 
-**Wall button** (`firmware/`, `hardware/`) — a thin audio endpoint, not the brain. Firmware for an ESP32-S3 (Arduino Nano ESP32 or a board with the same pin map) plus I2S mic (INMP441) and amp (MAX98357A) lives in `firmware/nano-esp32/intercom-endpoint`. KiCad for the custom board is under `hardware/` (rev B is the current ESP32-S3-WROOM-1 design).
+**Hardware device** (`firmware/`, `hardware/`) — a thin audio endpoint, not the brain. Firmware for an ESP32-S3 (Arduino Nano ESP32 or a board with the same pin map) plus I2S mic (INMP441) and amp (MAX98357A) lives in `firmware/nano-esp32/intercom-endpoint`.
 
 ## Build
 
