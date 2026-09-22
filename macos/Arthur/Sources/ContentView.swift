@@ -5,8 +5,16 @@ struct ContentView: View {
   @Environment(AppModel.self) private var model
   @FocusState private var typing: Bool
   @State private var scrolledAway = false
+  @State private var followLiveEdge = true
+  @State private var suppressScrollTracking = false
+  @State private var seededClusterIDs = false
+  @State private var knownClusterIDs: Set<UUID> = []
   @State private var showReturnHint = false
   @State private var didShowReturnHint = false
+
+  private static let bottomAnchor = "bottom"
+  /// Distance from the live edge before we stop pinning (points).
+  private static let liveEdgeSlop: CGFloat = 80
 
   var body: some View {
     @Bindable var model = model
@@ -24,9 +32,6 @@ struct ContentView: View {
           .navigationTitle("Arthur")
           .toolbarTitleDisplayMode(.inline)
           .toolbar {
-            ToolbarItem(placement: .navigation) {
-              ContinuityChip()
-            }
             ToolbarItemGroup(placement: .primaryAction) {
               Button {
                 model.soundOn.toggle()
@@ -140,52 +145,71 @@ struct ContentView: View {
     } else {
       ScrollViewReader { proxy in
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 20) {
+          // VStack (not LazyVStack): the notebook caps at 40 lines, and
+          // lazy identity / estimated heights fight pinning and fade.
+          VStack(alignment: .leading, spacing: 20) {
             ForEach(transcriptClusters) { cluster in
               TranscriptClusterView(
                 cluster: cluster,
                 showStop: stopTarget == cluster.id,
+                playEntrance: seededClusterIDs && !knownClusterIDs.contains(cluster.id),
                 onEdit: { text in
                   model.prefillDraft(text)
                   typing = true
                 }
               )
+              .fadeUnderHeader()
+              .onAppear { knownClusterIDs.insert(cluster.id) }
             }
             if showWorkTrail {
               WorkTrail(line: model.work.line)
+                .fadeUnderHeader()
             }
-            if showForming {
-              ArthurCopy(
-                texts: [model.formingText],
-                live: true,
-                showStop: model.canCancel
-              )
-            }
-            Color.clear.frame(height: 1).id("bottom")
+            Color.clear.frame(height: 1).id(Self.bottomAnchor)
           }
           .padding(.horizontal, 22)
           .padding(.top, 58)
           .padding(.bottom, 10)
         }
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(followLiveEdge ? .bottom : nil, for: .sizeChanges)
+        .onAppear { seedClusterIDsIfNeeded() }
         .onChange(of: model.discussion.count) {
-          scroll(proxy)
+          pinToLiveEdgeIfFollowing(proxy)
         }
         .onChange(of: model.formingText) {
-          scroll(proxy)
+          pinToLiveEdgeIfFollowing(proxy)
         }
         .onChange(of: model.hearingText) {
-          scroll(proxy)
+          pinToLiveEdgeIfFollowing(proxy)
         }
-        .onScrollGeometryChange(for: CGFloat.self) { geo in
-          geo.contentSize.height - geo.contentOffset.y - geo.containerSize.height
-        } action: { _, leftover in
-          scrolledAway = leftover > 88
+        .onScrollGeometryChange(for: TranscriptScrollEdge.self) { geo in
+          TranscriptScrollEdge(
+            height: geo.contentSize.height,
+            leftover: geo.contentSize.height - geo.contentOffset.y - geo.containerSize.height
+          )
+        } action: { old, new in
+          noteScrollGeometry(old: old, new: new)
+        }
+        .onScrollPhaseChange { _, phase in
+          if phase == .interacting {
+            suppressScrollTracking = false
+          }
         }
         .scrollContentBackground(.hidden)
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
         .scrollIndicators(.automatic)
         .background { ScrollEdgeEnabler() }
         .background(.clear)
+        .overlay(alignment: .bottom) {
+          Group {
+            if scrolledAway {
+              jumpToLatestButton(proxy)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+          }
+          .animation(.easeInOut(duration: 0.18), value: scrolledAway)
+        }
       }
     }
   }
@@ -215,6 +239,21 @@ struct ContentView: View {
         ))
       }
     }
+    if showForming {
+      let live = model.formingText
+      if var last = clusters.last, !last.fromYou {
+        last.texts.append(live)
+        last.liveLast = true
+        clusters[clusters.count - 1] = last
+      } else {
+        clusters.append(TranscriptCluster(
+          id: model.formingLineId,
+          fromYou: false,
+          texts: [live],
+          liveLast: true
+        ))
+      }
+    }
     return clusters
   }
 
@@ -236,7 +275,7 @@ struct ContentView: View {
   }
 
   private var stopTarget: UUID? {
-    guard model.canCancel, !showForming else { return nil }
+    guard model.canCancel else { return nil }
     return transcriptClusters.last(where: { !$0.fromYou })?.id
   }
 
@@ -317,79 +356,76 @@ struct ContentView: View {
     }
   }
 
-  private func scroll(_ proxy: ScrollViewProxy) {
-    var transaction = Transaction()
-    transaction.animation = .easeOut(duration: 0.18)
-    withTransaction(transaction) {
-      proxy.scrollTo("bottom", anchor: .bottom)
+  private func seedClusterIDsIfNeeded() {
+    guard !seededClusterIDs else { return }
+    knownClusterIDs.formUnion(transcriptClusters.map(\.id))
+    seededClusterIDs = true
+  }
+
+  private func noteScrollGeometry(old: TranscriptScrollEdge, new: TranscriptScrollEdge) {
+    if suppressScrollTracking { return }
+    // Growing content while pinned briefly increases leftover before the
+    // follow scroll lands. Do not treat that as the user leaving the edge.
+    if followLiveEdge, new.height > old.height + 0.5 { return }
+    noteScrollLeftover(new.leftover)
+  }
+
+  private func noteScrollLeftover(_ leftover: CGFloat) {
+    let away = leftover > Self.liveEdgeSlop
+    if away != scrolledAway {
+      scrolledAway = away
     }
+    if followLiveEdge == away {
+      followLiveEdge = !away
+    }
+  }
+
+  /// Pin without animation so streaming tokens do not ease-scroll every char.
+  private func pinToLiveEdgeIfFollowing(_ proxy: ScrollViewProxy) {
+    guard followLiveEdge else { return }
+    var transaction = Transaction()
+    transaction.animation = nil
+    withTransaction(transaction) {
+      proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+    }
+  }
+
+  private func jumpToLatest(_ proxy: ScrollViewProxy) {
+    suppressScrollTracking = true
+    scrolledAway = false
+    followLiveEdge = true
+    withAnimation(.easeOut(duration: 0.26)) {
+      proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+      suppressScrollTracking = false
+    }
+  }
+
+  private func jumpToLatestButton(_ proxy: ScrollViewProxy) -> some View {
+    Button {
+      jumpToLatest(proxy)
+    } label: {
+      HStack(spacing: 5) {
+        Image(systemName: "chevron.down")
+          .font(.caption.weight(.semibold))
+        Text("Jump to latest")
+          .font(.caption.weight(.semibold))
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 6)
+    }
+    .buttonStyle(.plain)
+    .glassEffect(.regular.interactive(), in: .capsule)
+    .padding(.bottom, 6)
+    .help("Scroll to the latest line")
+    .accessibilityLabel("Jump to latest")
   }
 }
 
-private struct ContinuityChip: View {
-  @Environment(AppModel.self) private var model
-  @State private var dim = false
-
-  var body: some View {
-    HStack(spacing: 6) {
-      Circle()
-        .fill(dotColor)
-        .frame(width: 6, height: 6)
-        .opacity(shouldPulse && dim ? 0.35 : 1)
-      VStack(alignment: .leading, spacing: 0) {
-        Text(model.chromeLabel)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-        if let last = lastSurfaceLine {
-          Text(last)
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-            .lineLimit(1)
-        }
-      }
-    }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 3)
-    .background(.fill.quaternary, in: Capsule())
-    .animation(.easeInOut(duration: 0.2), value: model.chromeLabel)
-    .animation(.easeInOut(duration: 0.2), value: model.lastSurface)
-    .help(model.chromeDetail)
-    .onAppear { syncPulse() }
-    .onChange(of: shouldPulse) { _, _ in syncPulse() }
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel(model.chromeDetail)
-  }
-
-  private var lastSurfaceLine: String? {
-    guard model.phase == .idle, model.sharesHallwayMemory, let surface = model.lastSurface else {
-      return nil
-    }
-    return surface == .desk ? "Last from Mac" : "Last from hallway"
-  }
-
-  private var shouldPulse: Bool {
-    model.phase == .connecting || model.phase == .listening || model.phase == .thinking
-  }
-
-  private func syncPulse() {
-    if shouldPulse {
-      withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-        dim = true
-      }
-    } else {
-      withAnimation(.easeOut(duration: 0.15)) { dim = false }
-    }
-  }
-
-  private var dotColor: Color {
-    switch model.phase {
-    case .disconnected: return .red.opacity(0.8)
-    case .connecting: return .secondary
-    case .idle: return model.micGranted ? Color.green.opacity(0.85) : ArthurTheme.accent
-    case .listening, .thinking, .speaking: return ArthurTheme.accent
-    }
-  }
+private struct TranscriptScrollEdge: Equatable {
+  var height: CGFloat
+  var leftover: CGFloat
 }
 
 private struct WorkTrail: View {
@@ -408,7 +444,6 @@ private struct WorkTrail: View {
         .lineLimit(2)
     }
     .padding(.leading, 2)
-    .fadeUnderHeader()
     .onAppear {
       withAnimation(.easeInOut(duration: 0.95).repeatForever(autoreverses: true)) {
         pulse = true
@@ -721,13 +756,38 @@ private struct TranscriptCluster: Identifiable {
 private struct TranscriptClusterView: View {
   let cluster: TranscriptCluster
   var showStop = false
+  var playEntrance = false
   var onEdit: (String) -> Void
+  @State private var settled = false
+  @State private var decided = false
 
   var body: some View {
+    clusterBody
+      .opacity(settled ? 1 : 0)
+      .offset(y: settled ? 0 : 7)
+      .onAppear { settleIfNeeded() }
+  }
+
+  @ViewBuilder
+  private var clusterBody: some View {
     if cluster.fromYou {
       UserCopy(texts: cluster.texts, liveLast: cluster.liveLast, onEdit: onEdit)
     } else {
-      ArthurCopy(texts: cluster.texts, live: false, showStop: showStop)
+      ArthurCopy(texts: cluster.texts, live: cluster.liveLast, showStop: showStop)
+    }
+  }
+
+  /// Hearing / forming rows skip the entrance so tokens and the ghost →
+  /// final You line do not remount-animate. History seeds as already settled.
+  private func settleIfNeeded() {
+    guard !decided else { return }
+    decided = true
+    if !playEntrance || cluster.liveLast {
+      settled = true
+      return
+    }
+    withAnimation(.easeOut(duration: 0.32)) {
+      settled = true
     }
   }
 }
@@ -742,7 +802,6 @@ private struct UserCopy: View {
       Text(liveLast ? "You · …" : "You")
         .font(.caption2)
         .foregroundStyle(.tertiary)
-        .fadeUnderHeader()
       VStack(alignment: .trailing, spacing: 6) {
         ForEach(Array(texts.enumerated()), id: \.offset) { index, text in
           let live = liveLast && index == texts.count - 1
@@ -757,7 +816,9 @@ private struct UserCopy: View {
               ArthurTheme.bubbleFill.opacity(live ? 0.7 : 1),
               in: .rect(cornerRadius: 16, style: .continuous)
             )
-            .fadeUnderHeader()
+            .transaction { txn in
+              if live { txn.animation = nil }
+            }
             .contextMenu {
               if !live {
                 Button("Edit & resend") { onEdit(text) }
@@ -769,6 +830,7 @@ private struct UserCopy: View {
     }
     .frame(maxWidth: .infinity, alignment: .trailing)
     .padding(.leading, 72)
+    .animation(.easeOut(duration: 0.2), value: liveLast)
     .accessibilityElement(children: .combine)
     .accessibilityLabel(liveLast ? "You, listening" : "You, \(texts.joined(separator: " "))")
     .accessibilityAction(named: "Edit & resend") {
@@ -789,15 +851,18 @@ private struct ArthurCopy: View {
       Text(live ? "Arthur · writing" : "Arthur")
         .font(.caption2)
         .foregroundStyle(ArthurTheme.accent.opacity(0.8))
-        .fadeUnderHeader()
       VStack(alignment: .leading, spacing: 10) {
-        ForEach(Array(texts.enumerated()), id: \.offset) { _, text in
-          ArthurReply(text: text, live: live)
-            .fadeUnderHeader()
+        ForEach(Array(texts.enumerated()), id: \.offset) { index, text in
+          let streaming = live && index == texts.count - 1
+          ArthurReply(text: text, live: streaming)
+            .transaction { txn in
+              if streaming { txn.animation = nil }
+            }
         }
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+    .animation(.easeOut(duration: 0.2), value: live)
     .contextMenu {
       Button("Copy") { ArthurPasteboard.copy(texts.joined(separator: "\n\n")) }
       if showStop {
@@ -898,7 +963,7 @@ struct SettingsView: View {
         } header: {
           Text("Shared memory")
         } footer: {
-          Text("Intercom maps each device onto one conversation. Pick the hallway device so this Mac shares memory with the wall button. The title-bar chip reads Shared with hallway when that session is connected.")
+          Text("Intercom maps each device onto one conversation. Pick the hallway device so this Mac shares memory with the wall button.")
         }
 
         Section {

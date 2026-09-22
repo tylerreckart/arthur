@@ -29,6 +29,9 @@ final class AppModel {
   var work: WorkState = .none
   var youSaid = ""
   var formingText = ""
+  /// Stable id for the in-flight Arthur bubble so `.forming` → `.said`
+  /// does not remount the cluster (avoids a jump / flash).
+  var formingLineId = UUID()
   /// Live ghost for voice turns. `"…"` while listening / Whisper runs;
   /// real words if a `heard` partial ever arrives. Empty when idle.
   var hearingText = ""
@@ -433,8 +436,8 @@ final class AppModel {
     quietTextMode.toggle()
   }
 
-  /// Title-bar chip copy. Idle + shared device id reads as the hallway
-  /// conversation; other phases stay glanceable (Listening / Writing / …).
+  /// Glanceable session copy (not rendered in the title bar).
+  /// Idle + shared device id reads as the hallway conversation.
   var chromeLabel: String {
     switch phase {
     case .disconnected: return "Disconnected"
@@ -568,12 +571,16 @@ final class AppModel {
       setWork(.speaking)
       presentSpeakBack(kind: kind, runId: runId, text: text)
     case .said(let text):
-      appendDiscussion(fromYou: false, text: text)
+      let id = formingText.isEmpty ? UUID() : formingLineId
+      appendDiscussion(fromYou: false, text: text, id: id)
       formingText = ""
       become(.speaking)
       setWork(.speaking)
       if speakBack?.live == true { noteSpeakBackSaid(text) }
     case .forming(let text):
+      if formingText.isEmpty {
+        formingLineId = UUID()
+      }
       formingText = text
       if phase != .speaking, phase != .listening {
         become(.thinking)
