@@ -205,6 +205,11 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   TurnResult result;
   result.turn_id = turn_id.empty() ? make_turn_id() : std::move(turn_id);
   result.transcript = transcript;
+  if (!transcript.empty()) {
+    // Desk clients need the user line before Arbiter / TTS so voice turns
+    // cluster like typed ones. Whisper is still one-shot at `end`.
+    sink.event("heard", transcript);
+  }
   auto handle = std::make_shared<TurnHandle>();
   handle->turn_id = result.turn_id;
   register_turn(handle);

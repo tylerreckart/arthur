@@ -130,7 +130,8 @@ struct ContentView: View {
 
   @ViewBuilder
   private var transcript: some View {
-    if model.discussion.isEmpty, model.formingText.isEmpty, model.phase != .thinking {
+    if model.discussion.isEmpty, model.formingText.isEmpty, model.hearingText.isEmpty,
+       model.phase != .thinking {
       emptyState
     } else {
       ScrollViewReader { proxy in
@@ -168,6 +169,9 @@ struct ContentView: View {
         .onChange(of: model.formingText) {
           scroll(proxy)
         }
+        .onChange(of: model.hearingText) {
+          scroll(proxy)
+        }
         .onScrollGeometryChange(for: CGFloat.self) { geo in
           geo.contentSize.height - geo.contentOffset.y - geo.containerSize.height
         } action: { _, leftover in
@@ -190,6 +194,21 @@ struct ContentView: View {
         clusters[clusters.count - 1] = last
       } else {
         clusters.append(TranscriptCluster(id: line.id, fromYou: line.fromYou, texts: [line.text]))
+      }
+    }
+    let ghost = model.hearingText.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !ghost.isEmpty {
+      if var last = clusters.last, last.fromYou {
+        last.texts.append(ghost)
+        last.liveLast = true
+        clusters[clusters.count - 1] = last
+      } else {
+        clusters.append(TranscriptCluster(
+          id: model.hearingLineId,
+          fromYou: true,
+          texts: [ghost],
+          liveLast: true
+        ))
       }
     }
     return clusters
@@ -564,6 +583,7 @@ private struct TranscriptCluster: Identifiable {
   let id: UUID
   let fromYou: Bool
   var texts: [String]
+  var liveLast = false
 }
 
 private struct TranscriptClusterView: View {
@@ -573,7 +593,7 @@ private struct TranscriptClusterView: View {
 
   var body: some View {
     if cluster.fromYou {
-      UserCopy(texts: cluster.texts, onEdit: onEdit)
+      UserCopy(texts: cluster.texts, liveLast: cluster.liveLast, onEdit: onEdit)
     } else {
       ArthurCopy(texts: cluster.texts, live: false, showStop: showStop)
     }
@@ -582,28 +602,35 @@ private struct TranscriptClusterView: View {
 
 private struct UserCopy: View {
   let texts: [String]
+  var liveLast = false
   var onEdit: (String) -> Void
 
   var body: some View {
     VStack(alignment: .trailing, spacing: 6) {
-      Text("You")
+      Text(liveLast ? "You · …" : "You")
         .font(.caption2)
         .foregroundStyle(.tertiary)
         .fadeUnderHeader()
       VStack(alignment: .trailing, spacing: 6) {
-        ForEach(Array(texts.enumerated()), id: \.offset) { _, text in
+        ForEach(Array(texts.enumerated()), id: \.offset) { index, text in
+          let live = liveLast && index == texts.count - 1
           Text(text)
             .font(.body)
-            .foregroundStyle(.primary)
+            .foregroundStyle(live ? .secondary : .primary)
             .multilineTextAlignment(.trailing)
             .textSelection(.enabled)
             .padding(.horizontal, 13)
             .padding(.vertical, 8)
-            .background(ArthurTheme.bubbleFill, in: .rect(cornerRadius: 16, style: .continuous))
+            .background(
+              ArthurTheme.bubbleFill.opacity(live ? 0.7 : 1),
+              in: .rect(cornerRadius: 16, style: .continuous)
+            )
             .fadeUnderHeader()
             .contextMenu {
-              Button("Edit & resend") { onEdit(text) }
-              Button("Copy") { ArthurPasteboard.copy(text) }
+              if !live {
+                Button("Edit & resend") { onEdit(text) }
+                Button("Copy") { ArthurPasteboard.copy(text) }
+              }
             }
         }
       }
@@ -611,9 +638,10 @@ private struct UserCopy: View {
     .frame(maxWidth: .infinity, alignment: .trailing)
     .padding(.leading, 72)
     .accessibilityElement(children: .combine)
-    .accessibilityLabel("You, \(texts.joined(separator: " "))")
+    .accessibilityLabel(liveLast ? "You, listening" : "You, \(texts.joined(separator: " "))")
     .accessibilityAction(named: "Edit & resend") {
-      if let last = texts.last { onEdit(last) }
+      guard !liveLast, let last = texts.last else { return }
+      onEdit(last)
     }
   }
 }

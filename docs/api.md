@@ -139,6 +139,7 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 | `{"type":"ready","sample_rate"}` | After upgrade |
 | `{"type":"accept","turn_id"}` | Turn id assigned before STT / Arbiter, so barge-in can cancel |
 | binary frames | Reply PCM |
+| `{"type":"heard","text"}` | User transcript as soon as Whisper finishes (immediately on text turns). Desk clients show a You line here — do not wait for `turn` |
 | `{"type":"turn",…}` | Transcript / turn id after the pipeline returns |
 | `{"type":"done","ok","error"}` | Terminal |
 | `{"type":"speak","kind","run_id","text"}` | Unsolicited speak-back (scheduled reminder) about to stream PCM. `text` is the spoken line when known. |
@@ -157,9 +158,12 @@ utterances are queued (up to `speakback.max_queued`) and flushed when the
 device is idle again. Offline devices are queued in memory the same way;
 there is no durable disk queue.
 
-STT is still one-shot at `end` (Whisper is not streaming). The gain is sending
-mic bytes while the button is down instead of waiting for HTTP to open. The
-Nano ESP32 firmware does this by default (`INTERCOM_WS_PORT`, `0` disables).
+STT is still one-shot at `end` (Whisper is not streaming — there are no
+word-level partials while the mic is down). After Whisper, Intercom emits
+`heard` so a desk transcript can show the user line before Arthur answers.
+The gain of the socket is sending mic bytes while the button is down instead
+of waiting for HTTP to open. The Nano ESP32 firmware does this by default
+(`INTERCOM_WS_PORT`, `0` disables).
 
 At 24 kHz, Intercom uses Kokoro's chunked raw-PCM endpoint and forwards each
 native phoneme batch as soon as it is generated. Older external Kokoro servers,

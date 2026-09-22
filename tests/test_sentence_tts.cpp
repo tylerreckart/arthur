@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -100,6 +101,10 @@ class StreamingArbiter : public intercom::ArbiterClient {
 class CollectingSink : public intercom::AudioSink {
  public:
   bool write(const std::uint8_t*, std::size_t) override { return true; }
+  void event(const char* type, const std::string& value) override {
+    events.emplace_back(type ? type : "", value);
+  }
+  std::vector<std::pair<std::string, std::string>> events;
 };
 
 }  // namespace
@@ -127,6 +132,11 @@ int main() {
   CHECK(result.error.empty());
   CHECK(arbiter->last_message == "tell me something long");
   CHECK(arbiter->spoke_first_before_done);
+  CHECK(!sink.events.empty());
+  if (!sink.events.empty()) {
+    CHECK(sink.events.front().first == "heard");
+    CHECK(sink.events.front().second == "tell me something long");
+  }
 
   const auto texts = tts->snapshot();
   CHECK(texts.size() == 2);

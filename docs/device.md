@@ -30,8 +30,8 @@ while the button is down:
 2. User holds PTT → I2S capture into PSRAM **and** binary WS frames every
    ~1024 samples (~43 ms at 24 kHz).
 3. On release, send `{"type":"end"}`. Intercom replies `{"type":"accept","turn_id"}`
-   immediately, then Whisper on the buffered clip, then reply PCM as binary
-   frames, then `turn` / `done`.
+   immediately, then Whisper on the buffered clip, then `{"type":"heard","text"}`
+   with the transcript, then reply PCM as binary frames, then `turn` / `done`.
 4. Play binary frames to the I2S amp as they arrive.
 5. On barge-in: stop I2S, `{"type":"cancel"}` on the socket, and
    `POST /v1/turns/{turn_id}/cancel`.
@@ -74,8 +74,8 @@ ffplay -f s16le -ar 24000 -ac 1 reply.pcm
 1. Upgrade with the same device bearer and `X-Device-Id` as HTTP.
 2. While PTT is held, send binary frames of mono s16le PCM (24 kHz).
 3. On release, send `{"type":"end"}`. Intercom ACKs with `accept` + `turn_id`,
-   runs Whisper on the buffered audio, and streams reply PCM back as binary
-   frames.
+   runs Whisper on the buffered audio, emits `heard` with the transcript, and
+   streams reply PCM back as binary frames.
 4. `{"type":"text","text":"status"}` skips STT (same as `/v1/utterance/text`).
 5. HTTP PTT on `:8090` remains the fallback and the serial `say` path.
 
