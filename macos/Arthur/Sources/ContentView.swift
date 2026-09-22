@@ -61,13 +61,10 @@ struct ContentView: View {
                   model.dismissError()
                 }
               }
-              if showReturnHint, !model.holding {
-                Text("Return to send · Shift-Return for a new line")
-                  .font(.caption2)
-                  .foregroundStyle(.tertiary)
-                  .padding(.horizontal, 6)
-              }
-              ComposerBar(typing: $typing)
+              ComposerBar(
+                typing: $typing,
+                showReturnHint: showReturnHint && !model.holding
+              )
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
@@ -514,27 +511,35 @@ private struct StarterChip: View {
 private struct ComposerBar: View {
   @Environment(AppModel.self) private var model
   @FocusState.Binding var typing: Bool
+  var showReturnHint = false
 
   var body: some View {
     @Bindable var model = model
 
-    HStack(alignment: .bottom, spacing: 8) {
+    HStack(alignment: .center, spacing: 8) {
       if model.holding {
         listeningAffordance
       } else {
         QuietModeToggle()
-        TextField(
-          "Ask Arthur",
-          text: $model.draft,
-          prompt: Text(model.quietTextMode ? "Ask Arthur — Space types" : "Ask Arthur"),
-          axis: .vertical
-        )
-        .textFieldStyle(.plain)
-        .font(.body)
-        .lineLimit(2...8)
-        .focused($typing)
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .accessibilityLabel("Ask Arthur")
+        VStack(alignment: .leading, spacing: 3) {
+          if showReturnHint {
+            Text("Return to send · Shift-Return for a new line")
+              .font(.caption2)
+              .foregroundStyle(.tertiary)
+          }
+          TextField(
+            "Ask Arthur",
+            text: $model.draft,
+            prompt: Text(model.quietTextMode ? "Ask Arthur — Space types" : "Ask Arthur"),
+            axis: .vertical
+          )
+          .textFieldStyle(.plain)
+          .font(.body)
+          .lineLimit(1...8)
+          .focused($typing)
+          .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+          .accessibilityLabel("Ask Arthur")
+        }
       }
 
       if model.canCancel {
@@ -554,6 +559,7 @@ private struct ComposerBar: View {
       ComposerCircle(
         systemImage: model.holding ? "waveform" : "mic.fill",
         enabled: model.canTalk,
+        active: model.holding || model.phase == .speaking,
         action: {}
       )
       .help(model.holding ? "Release to send" : "Hold to talk · \(model.pttHotkey.display) also talks")
@@ -569,10 +575,8 @@ private struct ComposerBar: View {
           }
       )
     }
-    .padding(.leading, 16)
-    .padding(.trailing, 8)
-    .padding(.top, 10)
-    .padding(.bottom, 8)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 10)
     .animation(.easeInOut(duration: 0.16), value: model.holding)
     .animation(.easeInOut(duration: 0.16), value: model.canCancel)
     .animation(.easeInOut(duration: 0.16), value: model.quietTextMode)
@@ -592,7 +596,7 @@ private struct ComposerBar: View {
       }
       Spacer(minLength: 0)
     }
-    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+    .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("Listening, release to send")
   }
@@ -637,7 +641,7 @@ private struct QuietModeToggle: View {
       }
       .foregroundStyle(model.quietTextMode ? ArthurTheme.accent : .secondary)
       .padding(.horizontal, model.quietTextMode ? 8 : 6)
-      .frame(height: 28)
+      .frame(height: 32)
       .background(
         model.quietTextMode ? ArthurTheme.accent.opacity(0.16) : Color.clear,
         in: Capsule()
@@ -666,10 +670,10 @@ private struct ComposerStop: View {
         Text("Stop")
           .font(.callout.weight(.semibold))
       }
-      .foregroundStyle(.white)
+      .foregroundStyle(.black)
       .padding(.horizontal, 11)
       .frame(height: 32)
-      .background(ArthurTheme.accent, in: Capsule())
+      .background(Color.white, in: Capsule())
     }
     .buttonStyle(.plain)
     .help("Stop Arthur")
@@ -680,18 +684,26 @@ private struct ComposerStop: View {
 private struct ComposerCircle: View {
   let systemImage: String
   var enabled = true
+  /// Listening / speaking — white fill instead of the idle orange.
+  var active = false
   var action: () -> Void
 
   var body: some View {
     Button(action: action) {
       Image(systemName: systemImage)
         .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(.white)
+        .foregroundStyle(active ? Color.black : .white)
         .frame(width: 32, height: 32)
-        .background(enabled ? ArthurTheme.accent : Color.secondary.opacity(0.35), in: Circle())
+        .background(circleFill, in: Circle())
     }
     .buttonStyle(.plain)
     .disabled(!enabled)
+  }
+
+  private var circleFill: Color {
+    if !enabled { return Color.secondary.opacity(0.35) }
+    if active { return .white }
+    return ArthurTheme.accent
   }
 }
 
