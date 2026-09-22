@@ -175,11 +175,14 @@ are slightly warmer and more measured; tool-wait asides are quieter and briefer;
 warnings are firmer and leave a little more space. The adjustments are subtle
 speed, gain, and pause changes on top of the selected Kokoro voice.
 
-`kokoro.voice` may be one Kokoro name (`bm_lewis`) or a blend of style
-embeddings. `left+right:weight` is still the two-way form (weight is the
+The default `kokoro.voice` is `af_nova:0.6+af_nicole:0.3+af_heart:0.1`
+(language `en-us` from `af_nova`). A single name such as `bm_lewis` is still
+valid. `left+right:weight` is still the two-way form (weight is the
 fraction of the right voice). N-way mixes use `name:weight+name:weight`;
 omitted weights are equal, and raw ratios such as `3:1:1` are normalized to
 sum to 1. Language is taken from the heaviest component’s name prefix.
+A gitignored local `intercom.json` is not overwritten — update `kokoro.voice`
+there if you want the new default.
 
 Kokoro output passes through a stateful speech DSP chain before reaching the
 device: a 70 Hz high-pass filter, a gentle 2.6 kHz presence lift, envelope

@@ -23,6 +23,24 @@ def style_loader(**named):
     return get_style
 
 
+class DefaultVoiceTests(unittest.TestCase):
+    def test_server_default_is_nway_blend(self):
+        self.assertEqual(
+            ks.DEFAULT_VOICE, "af_nova:0.6+af_nicole:0.3+af_heart:0.1"
+        )
+        self.assertEqual(ks.VOICE, ks.DEFAULT_VOICE)
+        self.assertEqual(ks.VOICE_STYLE, ks.DEFAULT_VOICE)
+        comps = ks.prepared_voice_components(ks.DEFAULT_VOICE)
+        self.assertEqual(
+            [c.name for c in comps], ["af_nova", "af_nicole", "af_heart"]
+        )
+        self.assertAlmostEqual(comps[0].weight, 0.6)
+        self.assertAlmostEqual(comps[1].weight, 0.3)
+        self.assertAlmostEqual(comps[2].weight, 0.1)
+        self.assertEqual(ks.voice_lang(ks.DEFAULT_VOICE), "en-us")
+        self.assertEqual(ks.dominant_voice_name(comps), "af_nova")
+
+
 class ParseNormalizeTests(unittest.TestCase):
     def test_plain_voice(self):
         comps = ks.prepared_voice_components("bm_lewis")

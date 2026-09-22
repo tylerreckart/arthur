@@ -41,11 +41,13 @@ cp config/intercom.example.json intercom.json
 ./build/intercom --config intercom.json
 ```
 
+The shipped default `kokoro.voice` is the N-way mix `af_nova:0.6+af_nicole:0.3+af_heart:0.1` (language `en-us` from the heaviest component). A local `intercom.json` is gitignored — existing installs keep their current voice until you change that file.
+
 `kokoro.voice` is a single Kokoro name or a `+`-separated style blend. Weights are optional and auto-normalized (percentages or raw ratios). Language follows the heaviest component’s prefix (`bm_` / `bf_` → `en-gb`; `af_` / `am_` and other unlisted prefixes → `en-us`).
 
-- `bm_lewis`
+- `af_nova:0.6+af_nicole:0.3+af_heart:0.1` — shipped default
+- `bm_lewis` — plain single voice
 - `bm_lewis+af_nova:0.35` — legacy two-way: 35% Nova, 65% Lewis
-- `af_nova:0.6+af_nicole:0.3+af_heart:0.1`
 - `af_nova+af_nicole+af_heart` — equal mix
 - `af_nova:3+af_nicole:1+af_heart:1` — same as 60/20/20
 

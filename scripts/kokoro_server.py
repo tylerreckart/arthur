@@ -25,10 +25,11 @@ import numpy as np
 
 ENGINE = None
 LOCK = threading.Lock()
-VOICE = "bm_lewis"
-VOICE_STYLE = "bm_lewis"
+DEFAULT_VOICE = "af_nova:0.6+af_nicole:0.3+af_heart:0.1"
+VOICE = DEFAULT_VOICE
+VOICE_STYLE = DEFAULT_VOICE
 SPEED = 0.96
-LANG = "en-gb"
+LANG = "en-us"
 
 _LANG_BY_PREFIX = {
     "bf_": "en-gb",
@@ -366,7 +367,7 @@ def main() -> int:
     parser.add_argument("--voices", required=True)
     parser.add_argument(
         "--voice",
-        default="bm_lewis",
+        default=DEFAULT_VOICE,
         help="Kokoro voice name or + blend (name:w+name:w; weights auto-normalized)",
     )
     parser.add_argument("--speed", type=float, default=0.96)
