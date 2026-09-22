@@ -10,38 +10,185 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import re
 import sys
 import threading
 import wave
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
-from kokoro_onnx import Kokoro
+
+# kokoro_onnx is imported in main() so unit tests can import this module
+# without the ONNX package or a voices.bin.
 
 ENGINE = None
 LOCK = threading.Lock()
-VOICE = "bm_lewis"
-VOICE_STYLE = "bm_lewis"
+DEFAULT_VOICE = "af_nova:0.6+af_nicole:0.3+af_heart:0.1"
+VOICE = DEFAULT_VOICE
+VOICE_STYLE = DEFAULT_VOICE
 SPEED = 0.96
-LANG = "en-gb"
+LANG = "en-us"
+
+_LANG_BY_PREFIX = {
+    "bf_": "en-gb",
+    "bm_": "en-gb",
+    "ff_": "fr-fr",
+    "if_": "it",
+    "im_": "it",
+    "jf_": "ja",
+    "jm_": "ja",
+    "zf_": "cmn",
+    "zm_": "cmn",
+}
+_WEIGHT_EPS = 1e-12
 
 
-def voice_lang(voice: str, override: str | None) -> str:
+@dataclass(frozen=True)
+class VoiceComponent:
+    name: str
+    weight: float
+    explicit: bool = False
+
+
+def lang_from_voice_name(name: str) -> str:
+    prefix = name[:3] if len(name) >= 3 else ""
+    return _LANG_BY_PREFIX.get(prefix, "en-us")
+
+
+def parse_voice_spec(spec: str) -> list[VoiceComponent]:
+    if spec is None or not str(spec).strip():
+        raise ValueError("voice blend is empty")
+    components: list[VoiceComponent] = []
+    for raw_part in str(spec).split("+"):
+        part = raw_part.strip()
+        if not part:
+            raise ValueError("voice blend has an empty component")
+        if ":" in part:
+            name, raw_weight = part.rsplit(":", 1)
+            name = name.strip()
+            raw_weight = raw_weight.strip()
+            if not name:
+                raise ValueError("voice blend component is missing a name")
+            try:
+                weight = float(raw_weight)
+            except ValueError as exc:
+                raise ValueError(
+                    f"voice blend weight is not a number: {raw_weight!r}"
+                ) from exc
+            if not math.isfinite(weight):
+                raise ValueError("voice blend weights must be finite")
+            if weight < 0.0:
+                raise ValueError("voice blend weights must not be negative")
+            components.append(VoiceComponent(name, weight, True))
+        else:
+            components.append(VoiceComponent(part, 1.0, False))
+    if not components:
+        raise ValueError("voice blend is empty")
+    return components
+
+
+def apply_legacy_two_way(
+    components: list[VoiceComponent],
+) -> list[VoiceComponent]:
+    """Keep `left+right:weight` as (1−w)·left + w·right when only right is weighted."""
+    if (
+        len(components) == 2
+        and not components[0].explicit
+        and components[1].explicit
+    ):
+        weight = components[1].weight
+        if not 0.0 <= weight <= 1.0:
+            raise ValueError("voice blend weight must be between zero and one")
+        return [
+            VoiceComponent(components[0].name, 1.0 - weight, True),
+            VoiceComponent(components[1].name, weight, True),
+        ]
+    return components
+
+
+def normalize_voice_weights(
+    components: list[VoiceComponent],
+) -> list[VoiceComponent]:
+    if not components:
+        raise ValueError("voice blend is empty")
+    total = float(sum(component.weight for component in components))
+    if not math.isfinite(total) or total <= _WEIGHT_EPS:
+        raise ValueError(
+            "voice blend weights must sum to a positive finite value"
+        )
+    return [
+        VoiceComponent(component.name, component.weight / total, True)
+        for component in components
+    ]
+
+
+def prepared_voice_components(spec: str) -> list[VoiceComponent]:
+    return normalize_voice_weights(apply_legacy_two_way(parse_voice_spec(spec)))
+
+
+def dominant_voice_name(components: list[VoiceComponent]) -> str:
+    if not components:
+        raise ValueError("voice blend is empty")
+    return max(components, key=lambda component: component.weight).name
+
+
+def voice_lang(voice: str, override: str | None = None) -> str:
     if override:
         return override
-    prefix = voice[:3] if len(voice) >= 3 else ""
-    return {
-        "bf_": "en-gb",
-        "bm_": "en-gb",
-        "ff_": "fr-fr",
-        "if_": "it",
-        "im_": "it",
-        "jf_": "ja",
-        "jm_": "ja",
-        "zf_": "cmn",
-        "zm_": "cmn",
-    }.get(prefix, "en-us")
+    return lang_from_voice_name(
+        dominant_voice_name(prepared_voice_components(voice))
+    )
+
+
+def blend_voice_styles(
+    named_styles: list[tuple[str, float, np.ndarray]],
+) -> np.ndarray:
+    if not named_styles:
+        raise ValueError("voice blend is empty")
+    first_name, _first_weight, first_style = named_styles[0]
+    expected = np.asarray(first_style)
+    expected_shape = expected.shape
+    expected_dtype = expected.dtype
+    acc = np.zeros(expected_shape, dtype=expected_dtype)
+    for name, weight, style in named_styles:
+        arr = np.asarray(style)
+        if arr.shape != expected_shape or arr.dtype != expected_dtype:
+            raise ValueError(
+                f"voice style {name!r} has shape {arr.shape} dtype {arr.dtype}, "
+                f"expected shape {expected_shape} dtype {expected_dtype} "
+                f"to match {first_name!r}"
+            )
+        acc = acc + (weight * arr)
+    if acc.dtype != expected_dtype:
+        acc = acc.astype(expected_dtype, copy=False)
+    return acc
+
+
+def _style_loader(get_style):
+    if get_style is not None:
+        return get_style
+    if ENGINE is None:
+        raise RuntimeError("engine not loaded")
+    return ENGINE.get_voice_style
+
+
+def resolve_voice_components(components: list[VoiceComponent], get_style=None):
+    if len(components) == 1:
+        return components[0].name
+    loader = _style_loader(get_style)
+    return blend_voice_styles(
+        [
+            (component.name, component.weight, loader(component.name))
+            for component in components
+        ]
+    )
+
+
+def resolve_voice(spec: str, get_style=None):
+    """Resolve a plain voice name or a `+`-separated style blend."""
+    return resolve_voice_components(prepared_voice_components(spec), get_style)
 
 
 def prepare_text(text: str) -> str:
@@ -49,23 +196,6 @@ def prepare_text(text: str) -> str:
     if text and text[-1] not in ".!?,;:":
         text += "."
     return text
-
-
-def resolve_voice(spec: str):
-    """Resolve a voice name or `left+right:weight` embedding blend."""
-    if "+" not in spec:
-        return spec
-    left, right = spec.split("+", 1)
-    weight = 0.5
-    if ":" in right:
-        right, raw_weight = right.rsplit(":", 1)
-        weight = float(raw_weight)
-    if not 0.0 <= weight <= 1.0:
-        raise ValueError("voice blend weight must be between zero and one")
-    return (
-        (1.0 - weight) * ENGINE.get_voice_style(left)
-        + weight * ENGINE.get_voice_style(right)
-    )
 
 
 def trim_silence(audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -235,20 +365,41 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Warm Kokoro ONNX HTTP server")
     parser.add_argument("--model", required=True)
     parser.add_argument("--voices", required=True)
-    parser.add_argument("--voice", default="bm_lewis")
+    parser.add_argument(
+        "--voice",
+        default=DEFAULT_VOICE,
+        help="Kokoro voice name or + blend (name:w+name:w; weights auto-normalized)",
+    )
     parser.add_argument("--speed", type=float, default=0.96)
     parser.add_argument("--lang", default="")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8091)
     args = parser.parse_args()
 
+    from kokoro_onnx import Kokoro
+
     VOICE = args.voice
     SPEED = args.speed
-    LANG = voice_lang(args.voice, args.lang or None)
+    try:
+        components = prepared_voice_components(VOICE)
+    except ValueError as exc:
+        print(
+            f"intercom kokoro-server: invalid --voice {VOICE!r}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    LANG = args.lang or lang_from_voice_name(dominant_voice_name(components))
 
     print(f"intercom kokoro-server: loading {args.model}", flush=True)
     ENGINE = Kokoro(args.model, args.voices)
-    VOICE_STYLE = resolve_voice(VOICE)
+    try:
+        VOICE_STYLE = resolve_voice_components(components)
+    except ValueError as exc:
+        print(
+            f"intercom kokoro-server: invalid voice blend {VOICE!r}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
     print(
         f"intercom kokoro-server: listening on http://{args.host}:{args.port} "
         f"voice={VOICE} lang={LANG}",
