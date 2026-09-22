@@ -1,5 +1,6 @@
 #include "intercom/util.hpp"
 
+#include <cctype>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -97,6 +98,111 @@ void test_early_words() {
   CHECK_EQ(short_buf, "Hello there");
 }
 
+std::string fold_words(const std::string& s) {
+  std::string out;
+  bool space = true;
+  for (unsigned char c : s) {
+    if (std::isalnum(c)) {
+      if (space && !out.empty()) out.push_back(' ');
+      out.push_back(static_cast<char>(std::tolower(c)));
+      space = false;
+    } else {
+      space = true;
+    }
+  }
+  return out;
+}
+
+bool words_in_order(const std::string& original, const std::string& rebuilt) {
+  const auto split = [](const std::string& s) {
+    std::vector<std::string> w;
+    std::string cur;
+    for (char c : fold_words(s)) {
+      if (c == ' ') {
+        if (!cur.empty()) w.push_back(cur);
+        cur.clear();
+      } else {
+        cur.push_back(c);
+      }
+    }
+    if (!cur.empty()) w.push_back(cur);
+    return w;
+  };
+  const auto want = split(original);
+  const auto got = split(rebuilt);
+  std::size_t k = 0;
+  for (const auto& word : want) {
+    while (k < got.size() && got[k] != word) ++k;
+    if (k == got.size()) return false;
+    ++k;
+  }
+  return true;
+}
+
+void test_early_flush_preserves_all_words() {
+  const std::string original =
+      "Let me dig up what's recent, sir, and given the Lucy on your shelf, "
+      "I'll lean toward human origins. Let me try a couple of angles, sir.";
+  std::string buf;
+  std::string rebuilt;
+  auto take = [&](const std::vector<std::string>& chunks) {
+    for (const auto& c : chunks) {
+      if (!rebuilt.empty()) rebuilt.push_back(' ');
+      rebuilt += c;
+    }
+  };
+  for (char c : original) {
+    buf.push_back(c);
+    take(intercom::flush_sentences(buf, false, 7));
+  }
+  take(intercom::flush_sentences(buf, true, 7));
+  CHECK(buf.empty());
+  CHECK(words_in_order(original, rebuilt));
+  CHECK(fold_words(rebuilt).find("lucy") != std::string::npos);
+  CHECK(fold_words(rebuilt).find("origins") != std::string::npos);
+  CHECK(fold_words(rebuilt).find("angles") != std::string::npos);
+}
+
+void test_strip_after_early_cut_keeps_substantive_words() {
+  std::string buf = "one two three four five six seven: leftover words stay here";
+  auto first = intercom::flush_sentences(buf, false, 7);
+  CHECK_SIZE(first, 1);
+  CHECK_EQ(first[0], "one two three four five six seven");
+  CHECK(buf.find("leftover") != std::string::npos);
+  CHECK(buf.find("stay") != std::string::npos);
+  CHECK(words_in_order("leftover words stay here", buf));
+
+  std::string comma =
+      "Let me dig up what's recent, sir, and given the Lucy on your shelf";
+  auto cut = intercom::flush_sentences(comma, false, 7);
+  CHECK_SIZE(cut, 1);
+  CHECK(words_in_order("and given the Lucy on your shelf", comma));
+  CHECK(comma.find("and") == 0);
+}
+
+void test_multiple_said_chunks_rebuild_reply() {
+  std::string buf =
+      "Let me dig up what's recent, sir, and given the Lucy on your shelf, "
+      "I'll lean toward human origins. Let me try a couple of angles, sir.";
+  std::vector<std::string> saids;
+  auto first = intercom::flush_sentences(buf, false, 7);
+  saids.insert(saids.end(), first.begin(), first.end());
+  auto more = intercom::flush_sentences(buf, false, 7);
+  saids.insert(saids.end(), more.begin(), more.end());
+  auto rest = intercom::flush_sentences(buf, true, 7);
+  saids.insert(saids.end(), rest.begin(), rest.end());
+  CHECK(saids.size() >= 2);
+  std::string rebuilt;
+  for (const auto& s : saids) {
+    if (!rebuilt.empty()) rebuilt.push_back(' ');
+    rebuilt += s;
+  }
+  CHECK(words_in_order(
+      "Let me dig up what's recent sir and given the Lucy on your shelf "
+      "I'll lean toward human origins Let me try a couple of angles sir",
+      rebuilt));
+}
+
 void test_early_words_does_not_leave_leading_comma() {
   std::string buf =
       "Let me dig up what's recent, sir, and given the Lucy on your shelf";
@@ -132,6 +238,9 @@ int main() {
   test_multiple_sentences();
   test_early_words();
   test_early_words_does_not_leave_leading_comma();
+  test_early_flush_preserves_all_words();
+  test_strip_after_early_cut_keeps_substantive_words();
+  test_multiple_said_chunks_rebuild_reply();
   if (g_fails != 0) {
     std::cerr << g_fails << " failure(s)\n";
     return 1;

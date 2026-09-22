@@ -89,6 +89,11 @@ target_include_directories(test_flush_sentences PRIVATE
 )
 add_test(NAME test_flush_sentences COMMAND test_flush_sentences)
 
+add_executable(test_speech_join
+  tests/test_speech_join.cpp
+)
+add_test(NAME test_speech_join COMMAND test_speech_join)
+
 add_executable(test_wav_util
   tests/test_wav_util.cpp
   src/util.cpp

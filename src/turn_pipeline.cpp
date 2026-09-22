@@ -359,18 +359,12 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     const int now_ms = elapsed_now();
     if (now_ms - arb_state.last_forming_ms >= 80) {
       arb_state.last_forming_ms = now_ms;
-      // After the first `said`, speak_buf is the unspoken remainder — send
-      // the prefix so the Mac can stitch it onto the last bubble. Before
-      // that, the latest tokens are a better "writing" preview.
+      // Always the unspoken prefix — never a sliding tail. A tail made the
+      // Mac join first-`said` + last-N chars and drop the middle as the
+      // window moved (and `started_answer` stays false during the first TTS).
       std::string preview = arb_state.speak_buf;
-      constexpr std::size_t kFormingCap = 400;
-      if (preview.size() > kFormingCap) {
-        if (arb_state.started_answer.load()) {
-          preview = preview.substr(0, kFormingCap);
-        } else {
-          preview = preview.substr(preview.size() - kFormingCap);
-        }
-      }
+      constexpr std::size_t kFormingCap = 2000;
+      if (preview.size() > kFormingCap) preview = preview.substr(0, kFormingCap);
       sink.event("forming", preview);
     }
   };
