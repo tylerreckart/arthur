@@ -210,7 +210,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
       InstallEventHandler(
         GetApplicationEventTarget(),
         arthurHotKeyHandler,
-        buffer.count,
+        2,
         buffer.baseAddress,
         Unmanaged.passUnretained(self).toOpaque(),
         &handler
@@ -534,12 +534,12 @@ private final class HoldTalkMenuView: NSView {
       .font: NSFont.menuFont(ofSize: 12),
       .foregroundColor: NSColor.secondaryLabelColor,
     ]
-    let titleSize = title.size(withAttributes: titleAttrs)
+    let titleSize = (title as NSString).size(withAttributes: titleAttrs)
     let hint = listening ? "Release to send" : shortcut
-    let hintSize = hint.size(withAttributes: hintAttrs)
+    let hintSize = (hint as NSString).size(withAttributes: hintAttrs)
     let y = bounds.midY - titleSize.height / 2
-    title.draw(at: NSPoint(x: bounds.minX + 8, y: y), withAttributes: titleAttrs)
-    hint.draw(
+    (title as NSString).draw(at: NSPoint(x: bounds.minX + 8, y: y), withAttributes: titleAttrs)
+    (hint as NSString).draw(
       at: NSPoint(x: bounds.maxX - hintSize.width - 8, y: bounds.midY - hintSize.height / 2),
       withAttributes: hintAttrs
     )
