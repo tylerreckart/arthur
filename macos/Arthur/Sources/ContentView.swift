@@ -24,8 +24,8 @@ struct ContentView: View {
         energy: model.speakLevel,
         restrained: rippleRestrained
       )
-        .frame(maxWidth: .infinity)
-        .frame(height: rippleRestrained ? 128 : 152)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea()
         .allowsHitTesting(false)
       NavigationStack {
         transcript
