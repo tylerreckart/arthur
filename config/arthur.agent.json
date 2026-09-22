@@ -3,7 +3,7 @@
   "name": "Arthur",
   "role": "voice-assistant",
   "mode": "spoken",
-  "model": "deepseek/deepseek-v4.1-flash",
+  "model": "z-ai/glm-5.3",
   "max_tokens": 768,
   "temperature": 0.55,
   "brevity": "lite",
