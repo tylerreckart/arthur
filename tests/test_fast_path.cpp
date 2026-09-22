@@ -1,10 +1,12 @@
 #include "intercom/fast_path.hpp"
 #include "intercom/clock.hpp"
 #include "intercom/home_client.hpp"
+#include "intercom/surface.hpp"
 
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -124,17 +126,31 @@ int main() {
    public:
     FakeHome() : HomeClient(intercom::HomeConfig{}) {}
     bool configured() const override { return true; }
-    std::string run(const intercom::HomeIntent& intent, std::string*) const override {
+    intercom::HomeAction run(const intercom::HomeIntent& intent, std::string*) const override {
+      intercom::HomeAction out;
       if (intent.kind == intercom::HomeIntentKind::Timer) {
-        return intercom::spoken_duration(intent.timer_seconds) + ", sir.";
+        out.reply = intercom::spoken_duration(intent.timer_seconds) + ", sir.";
+        return out;
       }
       if (intent.kind == intercom::HomeIntentKind::Weather) {
-        return "It's twelve degrees and cloudy, sir.";
+        auto extracted = intercom::weather_from_ha_state(std::string_view{R"({
+          "state": "cloudy",
+          "attributes": {
+            "temperature": 12,
+            "temperature_unit": "°C",
+            "friendly_name": "Home"
+          }
+        })"});
+        out.reply = extracted.ok ? extracted.spoken : "It's twelve degrees and cloudy, sir.";
+        if (extracted.ok) out.surface = intercom::surface_to_json(extracted.surface);
+        return out;
       }
       if (intent.kind == intercom::HomeIntentKind::LightOn) {
-        return "I've switched on the kitchen lights, sir.";
+        out.reply = "I've switched on the kitchen lights, sir.";
+        return out;
       }
-      return "ok";
+      out.reply = "ok";
+      return out;
     }
   };
 
@@ -148,8 +164,15 @@ int main() {
   auto wx = ha.try_handle("what's the weather");
   CHECK(wx.has_value());
   if (wx) {
-    CHECK(contains(wx->reply, "cloudy"));
+    CHECK(contains(wx->reply, "cloudy") || contains(wx->reply, "Cloudy"));
     CHECK(wx->kind == "weather");
+    CHECK(wx->surface.is_object());
+    if (wx->surface.is_object()) {
+      CHECK(wx->surface.value("kind", "") == "weather");
+      CHECK(wx->surface.value("version", 0) == intercom::kSurfaceVersion);
+      CHECK(wx->surface.contains("payload"));
+      CHECK(wx->surface["payload"].value("temperature", 0) == 12);
+    }
   }
   CHECK(!ha.try_handle("what's the weather in Tokyo").has_value());
   auto lights = ha.try_handle("turn on the kitchen lights");

@@ -1,6 +1,7 @@
 #include "intercom/turn_pipeline.hpp"
 #include "intercom/home_client.hpp"
 #include "intercom/speakable.hpp"
+#include "intercom/surface.hpp"
 #include "intercom/util.hpp"
 #include "intercom/warm.hpp"
 
@@ -287,6 +288,9 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     if (!speak(fp->reply)) {
       result.error = err.empty() ? "tts failed" : err;
       return finish(result);
+    }
+    if (fp->surface.is_object()) {
+      sink.event("surface", surface_event_body(result.turn_id, fp->surface).dump());
     }
     result.ok = true;
     if (result.conversation_id > 0) {

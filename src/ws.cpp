@@ -218,6 +218,18 @@ class SocketAudioSink : public AudioSink {
       j["tool"] = value;
     } else if (t == "status") {
       j["phase"] = value;
+    } else if (t == "surface") {
+      try {
+        auto extra = nlohmann::json::parse(value.empty() ? "{}" : value);
+        if (extra.is_object()) {
+          for (auto it = extra.begin(); it != extra.end(); ++it) {
+            if (it.key() == "type") continue;
+            j[it.key()] = it.value();
+          }
+        }
+      } catch (...) {
+        if (!value.empty()) j["text"] = value;
+      }
     } else if (!value.empty()) {
       j["text"] = value;
     }

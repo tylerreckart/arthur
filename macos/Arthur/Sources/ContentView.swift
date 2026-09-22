@@ -153,6 +153,7 @@ struct ContentView: View {
                 cluster: cluster,
                 showStop: stopTarget == cluster.id,
                 playEntrance: seededClusterIDs && !knownClusterIDs.contains(cluster.id),
+                preferCompact: hallwayCompact && cluster.id == lastArthurClusterId,
                 onEdit: { text in
                   model.prefillDraft(text)
                   typing = true
@@ -181,6 +182,9 @@ struct ContentView: View {
           pinToLiveEdgeIfFollowing(proxy)
         }
         .onChange(of: model.hearingText) {
+          pinToLiveEdgeIfFollowing(proxy)
+        }
+        .onChange(of: model.discussion.map(\.surfaces.count)) {
           pinToLiveEdgeIfFollowing(proxy)
         }
         .onScrollGeometryChange(for: TranscriptScrollEdge.self) { geo in
@@ -224,12 +228,19 @@ struct ContentView: View {
           && last.turnId != line.turnId
         if !splitArthurTurn {
           last.texts.append(line.text)
+          last.surfaces.append(contentsOf: line.surfaces)
           clusters[clusters.count - 1] = last
           continue
         }
       }
       clusters.append(
-        TranscriptCluster(id: line.id, fromYou: line.fromYou, texts: [line.text], turnId: line.turnId)
+        TranscriptCluster(
+          id: line.id,
+          fromYou: line.fromYou,
+          texts: [line.text],
+          turnId: line.turnId,
+          surfaces: line.surfaces
+        )
       )
     }
     for i in clusters.indices where !clusters[i].fromYou {
@@ -308,7 +319,16 @@ struct ContentView: View {
 
   private var stopTarget: UUID? {
     guard model.canCancel else { return nil }
-    return transcriptClusters.last(where: { !$0.fromYou })?.id
+    return lastArthurClusterId
+  }
+
+  private var lastArthurClusterId: UUID? {
+    transcriptClusters.last(where: { !$0.fromYou })?.id
+  }
+
+  /// Hallway turns (or a narrow desk) should not force a full weather card.
+  private var hallwayCompact: Bool {
+    model.lastSurface == .hallway
   }
 
   private var rippleRestrained: Bool {
@@ -777,6 +797,7 @@ private struct TranscriptCluster: Identifiable {
   let fromYou: Bool
   var texts: [String]
   var turnId = ""
+  var surfaces: [ChatSurface] = []
   var liveLast = false
 }
 
@@ -784,6 +805,7 @@ private struct TranscriptClusterView: View {
   let cluster: TranscriptCluster
   var showStop = false
   var playEntrance = false
+  var preferCompact = false
   var onEdit: (String) -> Void
   @State private var settled = false
   @State private var decided = false
@@ -800,7 +822,13 @@ private struct TranscriptClusterView: View {
     if cluster.fromYou {
       UserCopy(texts: cluster.texts, liveLast: cluster.liveLast, onEdit: onEdit)
     } else {
-      ArthurCopy(texts: cluster.texts, live: cluster.liveLast, showStop: showStop)
+      ArthurCopy(
+        texts: cluster.texts,
+        surfaces: cluster.surfaces,
+        live: cluster.liveLast,
+        showStop: showStop,
+        preferCompact: preferCompact
+      )
     }
   }
 
@@ -870,8 +898,10 @@ private struct UserCopy: View {
 private struct ArthurCopy: View {
   @Environment(AppModel.self) private var model
   let texts: [String]
+  var surfaces: [ChatSurface] = []
   var live = false
   var showStop = false
+  var preferCompact = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -887,6 +917,14 @@ private struct ArthurCopy: View {
             }
         }
       }
+      if !surfaces.isEmpty {
+        VStack(alignment: .leading, spacing: 8) {
+          ForEach(surfaces) { surface in
+            SurfaceCard(surface: surface, preferCompact: preferCompact)
+          }
+        }
+        .padding(.top, 4)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .animation(.easeOut(duration: 0.2), value: live)
@@ -897,10 +935,19 @@ private struct ArthurCopy: View {
       }
     }
     .accessibilityElement(children: .combine)
-    .accessibilityLabel("Arthur, \(texts.joined(separator: " "))")
+    .accessibilityLabel(accessibilityLabel)
     .accessibilityAction(named: "Copy") {
       ArthurPasteboard.copy(texts.joined(separator: " "))
     }
+  }
+
+  private var accessibilityLabel: String {
+    var parts = ["Arthur", texts.joined(separator: " ")]
+    for surface in surfaces {
+      if !surface.title.isEmpty { parts.append(surface.title) }
+      if !surface.summary.isEmpty { parts.append(surface.summary) }
+    }
+    return parts.filter { !$0.isEmpty }.joined(separator: ", ")
   }
 }
 

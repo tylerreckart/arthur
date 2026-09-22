@@ -3,6 +3,8 @@
 #include "intercom/home.hpp"
 #include "intercom/home_client.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -13,6 +15,8 @@ namespace intercom {
 struct FastPathResult {
   std::string reply;
   std::string kind = "social";
+  // Versioned desk card (null when the turn is speech-only).
+  nlohmann::json surface = nullptr;
 };
 
 // Social greetings, thanks, and presence checks — not a reason to "look something up".

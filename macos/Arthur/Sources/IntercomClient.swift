@@ -10,6 +10,7 @@ enum IntercomEvent {
   case heard(String)
   case said(String)
   case forming(String)
+  case surface(turnId: String, surface: ChatSurface)
   case working(String)
   case status(String)
   case error(String)
@@ -235,6 +236,10 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
       emit(.said(json["text"] as? String ?? ""))
     case "forming":
       emit(.forming(json["text"] as? String ?? ""))
+    case "surface":
+      if let decoded = ChatSurface.decodeEvent(json) {
+        emit(.surface(turnId: decoded.turnId, surface: decoded.surface))
+      }
     case "working":
       emit(.working(json["tool"] as? String ?? json["text"] as? String ?? ""))
     case "status":

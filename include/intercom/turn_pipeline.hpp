@@ -27,8 +27,9 @@ class AudioSink {
   // Return false to abort synthesis / pipeline.
   virtual bool write(const std::uint8_t* data, std::size_t len) = 0;
   // Optional side-channel (WS JSON). HTTP and tests ignore it.
-  // type is "heard", "said", "working", "status", or "forming";
-  // value is text or a tool name.
+  // type is "heard", "said", "working", "status", "forming", or "surface";
+  // value is text, a tool name, or (for surface) a JSON object string
+  // `{turn_id, surface}`.
   virtual void event(const char* type, const std::string& value) {
     (void)type;
     (void)value;

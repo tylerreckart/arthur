@@ -162,12 +162,16 @@ std::optional<FastPathResult> FastPath::try_handle(const std::string& transcript
     const bool ha_ready = home_client_ && home_client_->configured();
     if (!ha_ready) return std::nullopt;
     std::string err;
-    std::string reply = home_client_->run(*intent, &err);
-    if (reply.empty()) {
+    HomeAction action = home_client_->run(*intent, &err);
+    if (action.reply.empty()) {
       std::cerr << "intercom home: " << (err.empty() ? "failed" : err) << std::endl;
       return FastPathResult{"I couldn't do that, sir.", home_intent_kind_name(intent->kind)};
     }
-    return FastPathResult{std::move(reply), home_intent_kind_name(intent->kind)};
+    FastPathResult result{std::move(action.reply), home_intent_kind_name(intent->kind)};
+    if (action.surface.is_object()) {
+      result.surface = std::move(action.surface);
+    }
+    return result;
   }
 
   return std::nullopt;

@@ -147,6 +147,55 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 | `{"type":"working","tool"}` | Master tool started; value is the tool name |
 | `{"type":"said","text"}` | Sentence about to be spoken (same text Kokoro hears) |
 | `{"type":"forming","text"}` | Tail of the answer as tokens arrive (~12 Hz, desk presence) |
+| `{"type":"surface","turn_id","surface"}` | Versioned desk card for this turn. Voice-only devices ignore it. |
+
+### `surface` (desk cards)
+
+Spoken lines stay short. Dense data rides beside `{type:said}` as a
+versioned `surface` so the Arthur desk can render a typed card. Voice
+endpoints (hallway firmware) skip unknown event types and keep playing
+PCM. Existing installs that never emit `surface` are unchanged.
+
+```json
+{
+  "type": "surface",
+  "turn_id": "…",
+  "surface": {
+    "kind": "weather",
+    "version": 1,
+    "title": "Home",
+    "summary": "Partly cloudy, 18°C",
+    "payload": {
+      "condition": "partlycloudy",
+      "condition_label": "Partly cloudy",
+      "temperature": 18,
+      "temperature_unit": "°C",
+      "feels_like": 16,
+      "humidity": 61,
+      "hours": [{"label": "3 PM", "condition": "cloudy", "temperature": 17}],
+      "days": [{"label": "Wed", "condition": "rainy", "temperature": 19, "temperature_low": 12}]
+    },
+    "sources": [{"title": "Weather forecast from met.no"}]
+  }
+}
+```
+
+`kind` is closed for this slice:
+
+| Kind | Desk UI |
+|------|---------|
+| `weather` | Full card (condition, temperature, feel, forecast strip, source) |
+| `generic` | Title + summary, optional key-values / markdown-ish body |
+| `article` / `news` / `source_list` / `markets` | Decoded, rendered as generic until a later slice |
+
+Unknown `kind` values decode as `generic`. They never drop the turn.
+
+Weather v1 is built by the home fast-path from the same Home Assistant
+entity state already used for the spoken line (`home.weather_entity`).
+The LLM is not asked to emit card JSON. `turn_id` matches `{type:accept}`
+/ `{type:said}` so the desk binds the card to that Arthur bubble.
+
+Hallway / compact windows collapse the card to a summary line.
 
 Idle devices keep the socket open. When Arbiter fires a `/schedule` (or
 Intercom sees `run.completed` on `GET /v1/notifications/stream`), Intercom

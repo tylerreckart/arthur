@@ -110,6 +110,8 @@ final class AppModel {
   private var speakBackDismiss: DispatchWorkItem?
   private var activeObserver: NSObjectProtocol?
   private var lastPolledTurnId = ""
+  /// Surfaces that arrived before the matching Arthur `said` line.
+  private var pendingSurfaces: [(turnId: String, surface: ChatSurface)] = []
 
   init() {
     config = ConfigStore.load()
@@ -424,6 +426,7 @@ final class AppModel {
     expectingReply = false
     typedThisTurn = false
     formingText = ""
+    pendingSurfaces.removeAll()
     resetArthurReplyKey()
     clearHearing()
     setWork(.none)
@@ -546,7 +549,8 @@ final class AppModel {
           fromYou: false,
           text: joined,
           id: last.id,
-          turnId: last.turnId.isEmpty ? turnKey : last.turnId
+          turnId: last.turnId.isEmpty ? turnKey : last.turnId,
+          surfaces: last.surfaces
         )
         persistTranscript()
         return
@@ -565,6 +569,56 @@ final class AppModel {
       discussion.removeFirst(discussion.count - 40)
     }
     persistTranscript()
+  }
+
+  private func replyKeys(for rawTurnId: String) -> [String] {
+    var keys: [String] = []
+    func add(_ key: String) {
+      guard !key.isEmpty, !keys.contains(key) else { return }
+      keys.append(key)
+    }
+    add(rawTurnId)
+    if !rawTurnId.isEmpty { add("turn:\(rawTurnId)") }
+    add(turnId)
+    if !turnId.isEmpty { add("turn:\(turnId)") }
+    add(arthurReplyKey)
+    return keys
+  }
+
+  private func attachSurface(_ surface: ChatSurface, turnId rawTurnId: String) {
+    let keys = replyKeys(for: rawTurnId)
+    if let idx = discussion.indices.last(where: { line in
+      !line.fromYou && keys.contains(line.turnId)
+    }) {
+      applySurface(surface, at: idx, turnKey: keys.first { $0.hasPrefix("turn:") } ?? keys.first)
+      return
+    }
+    if arthurTurnIsLive, let idx = discussion.indices.last, !discussion[idx].fromYou {
+      applySurface(surface, at: idx, turnKey: keys.first { $0.hasPrefix("turn:") } ?? keys.first)
+      return
+    }
+    pendingSurfaces.append((rawTurnId, surface))
+  }
+
+  private func applySurface(_ surface: ChatSurface, at idx: Int, turnKey: String?) {
+    var line = discussion[idx]
+    if !line.surfaces.contains(where: { $0.isDuplicate(of: surface) }) {
+      line.surfaces.append(surface)
+    }
+    if line.turnId.isEmpty, let turnKey, !turnKey.isEmpty {
+      line.turnId = turnKey
+    }
+    discussion[idx] = line
+    persistTranscript()
+  }
+
+  private func flushPendingSurfaces() {
+    guard !pendingSurfaces.isEmpty else { return }
+    let queued = pendingSurfaces
+    pendingSurfaces.removeAll()
+    for item in queued {
+      attachSurface(item.surface, turnId: item.turnId)
+    }
   }
 
   private func persistTranscript(deviceId: String? = nil) {
@@ -615,6 +669,8 @@ final class AppModel {
       expectingReply = false
       typedThisTurn = false
       formingText = ""
+      flushPendingSurfaces()
+      pendingSurfaces.removeAll()
       resetArthurReplyKey()
       clearHearing()
       setWork(.none)
@@ -630,10 +686,13 @@ final class AppModel {
     case .said(let text):
       let id = formingText.isEmpty ? UUID() : formingLineId
       appendDiscussion(fromYou: false, text: text, id: id)
+      flushPendingSurfaces()
       formingText = ""
       become(.speaking)
       setWork(.speaking)
       if speakBack?.live == true { noteSpeakBackSaid(text) }
+    case .surface(let turnId, let surface):
+      attachSurface(surface, turnId: turnId)
     case .forming(let text):
       if formingText.isEmpty {
         formingLineId = UUID()
@@ -662,6 +721,7 @@ final class AppModel {
       expectingReply = false
       typedThisTurn = false
       formingText = ""
+      pendingSurfaces.removeAll()
       resetArthurReplyKey()
       clearHearing()
       if speakBack?.live == true { finishSpeakBack() }

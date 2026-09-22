@@ -85,4 +85,6 @@ spoken without another PTT. HTTP-only devices cannot receive speak-back;
 Intercom queues a few utterances (see `speakback.max_queued`) until the
 WebSocket reconnects.
 
-See [docs/api.md](api.md) for the frame table.
+See [docs/api.md](api.md) for the frame table. `{type:surface}` desk cards
+are ignored here — the endpoint only needs PCM, `accept`, `turn`, `done`,
+and `speak`.

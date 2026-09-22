@@ -45,6 +45,7 @@ add_executable(intercom
   src/fast_path.cpp
   src/home_intent.cpp
   src/home_client.cpp
+  src/surface.cpp
   src/clock.cpp
   src/turn_pipeline.cpp
   src/http_server.cpp
@@ -128,6 +129,7 @@ add_executable(test_fast_path
   src/fast_path.cpp
   src/home_intent.cpp
   src/home_client.cpp
+  src/surface.cpp
   src/clock.cpp
   src/util.cpp
 )
@@ -154,6 +156,20 @@ target_include_directories(test_home_intent PRIVATE
 )
 add_test(NAME test_home_intent COMMAND test_home_intent)
 
+add_executable(test_surface
+  tests/test_surface.cpp
+  src/surface.cpp
+  src/home_intent.cpp
+  src/util.cpp
+)
+target_include_directories(test_surface PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_surface PRIVATE
+  nlohmann_json::nlohmann_json
+)
+add_test(NAME test_surface COMMAND test_surface)
+
 add_executable(test_sentence_tts
   tests/test_sentence_tts.cpp
   src/turn_pipeline.cpp
@@ -163,6 +179,7 @@ add_executable(test_sentence_tts
   src/fast_path.cpp
   src/home_intent.cpp
   src/home_client.cpp
+  src/surface.cpp
   src/clock.cpp
   src/arbiter_client.cpp
   src/filler_client.cpp
@@ -192,6 +209,7 @@ add_executable(test_ws_stream
   src/fast_path.cpp
   src/home_intent.cpp
   src/home_client.cpp
+  src/surface.cpp
   src/clock.cpp
   src/arbiter_client.cpp
   src/filler_client.cpp
@@ -226,6 +244,7 @@ add_executable(test_speakback
   src/fast_path.cpp
   src/home_intent.cpp
   src/home_client.cpp
+  src/surface.cpp
   src/filler_client.cpp
 )
 target_include_directories(test_speakback PRIVATE
