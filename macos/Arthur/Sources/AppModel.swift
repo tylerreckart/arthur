@@ -540,7 +540,7 @@ final class AppModel {
       let sameTurn = !last.turnId.isEmpty && last.turnId == turnKey
       let liveOrphan = last.turnId.isEmpty && arthurTurnIsLive
       if sameTurn || liveOrphan || ArthurProseJoin.shouldStitch(last.text, trimmed) {
-        if ArthurProseJoin.foldedContains(last.text, trimmed) { return }
+        if ArthurProseJoin.alreadySpoken(last.text, trimmed) { return }
         let joined = ArthurProseJoin.join(last.text, trimmed)
         discussion[idx] = DiscussionLine(
           fromYou: false,
@@ -701,7 +701,7 @@ final class AppModel {
     guard !trimmed.isEmpty, var notice = speakBack, notice.live else { return }
     if notice.spokenText.isEmpty {
       notice.spokenText = trimmed
-    } else if notice.spokenText != trimmed, !ArthurProseJoin.foldedContains(notice.spokenText, trimmed) {
+    } else if notice.spokenText != trimmed, !ArthurProseJoin.alreadySpoken(notice.spokenText, trimmed) {
       notice.spokenText = ArthurProseJoin.join(notice.spokenText, trimmed)
     } else {
       return
