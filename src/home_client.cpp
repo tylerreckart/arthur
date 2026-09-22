@@ -1,4 +1,5 @@
 #include "intercom/home_client.hpp"
+#include "intercom/surface.hpp"
 #include "intercom/util.hpp"
 
 #include <httplib.h>
@@ -132,104 +133,109 @@ std::string HomeClient::get_state_json(const std::string& entity_id, std::string
   return res->body;
 }
 
-std::string HomeClient::run(const HomeIntent& intent, std::string* err) const {
+HomeAction HomeClient::run(const HomeIntent& intent, std::string* err) const {
+  HomeAction out;
   if (!configured()) {
     if (err) *err = "home assistant is not configured";
-    return {};
+    return out;
   }
 
   switch (intent.kind) {
     case HomeIntentKind::Timer: {
       if (intent.timer_seconds <= 0) {
-        return "How long, sir?";
+        out.reply = "How long, sir?";
+        return out;
       }
       if (cfg_.timer_entity.empty()) {
         if (err) *err = "home.timer_entity is empty";
-        return {};
+        return out;
       }
       const int s = intent.timer_seconds;
       char dur[16];
       std::snprintf(dur, sizeof(dur), "%02d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60);
       const std::string extra = std::string("{\"duration\":\"") + dur + "\"}";
       if (!call_service("timer", "start", cfg_.timer_entity, extra, err)) {
-        return {};
+        return out;
       }
-      return spoken_duration(intent.timer_seconds) + ", sir.";
+      out.reply = spoken_duration(intent.timer_seconds) + ", sir.";
+      return out;
     }
     case HomeIntentKind::LightOn:
     case HomeIntentKind::LightOff:
     case HomeIntentKind::LightToggle: {
       std::string entity = resolve_light(intent.room, err);
-      if (entity.empty()) return {};
+      if (entity.empty()) return out;
       const char* service = "toggle";
       if (intent.kind == HomeIntentKind::LightOn) service = "turn_on";
       if (intent.kind == HomeIntentKind::LightOff) service = "turn_off";
-      if (!call_service("light", service, entity, {}, err)) return {};
+      if (!call_service("light", service, entity, {}, err)) return out;
       const std::string who = title_room(intent.room);
-      if (intent.kind == HomeIntentKind::LightOff) return "I've switched off " + who + ", sir.";
-      if (intent.kind == HomeIntentKind::LightOn) return "I've switched on " + who + ", sir.";
-      return "I've toggled " + who + ", sir.";
+      if (intent.kind == HomeIntentKind::LightOff) {
+        out.reply = "I've switched off " + who + ", sir.";
+      } else if (intent.kind == HomeIntentKind::LightOn) {
+        out.reply = "I've switched on " + who + ", sir.";
+      } else {
+        out.reply = "I've toggled " + who + ", sir.";
+      }
+      return out;
     }
     case HomeIntentKind::VolumeUp:
     case HomeIntentKind::VolumeDown: {
       if (cfg_.media_player.empty()) {
         if (err) *err = "home.media_player is empty";
-        return {};
+        return out;
       }
       const char* service =
           intent.kind == HomeIntentKind::VolumeUp ? "volume_up" : "volume_down";
-      if (!call_service("media_player", service, cfg_.media_player, {}, err)) return {};
-      return intent.kind == HomeIntentKind::VolumeUp ? "Louder, sir." : "Quieter, sir.";
+      if (!call_service("media_player", service, cfg_.media_player, {}, err)) return out;
+      out.reply = intent.kind == HomeIntentKind::VolumeUp ? "Louder, sir." : "Quieter, sir.";
+      return out;
     }
     case HomeIntentKind::Weather: {
       if (cfg_.weather_entity.empty()) {
         if (err) *err = "home.weather_entity is empty";
-        return {};
+        return out;
       }
       const std::string raw = get_state_json(cfg_.weather_entity, err);
-      if (raw.empty()) return {};
+      if (raw.empty()) return out;
       try {
-        auto j = nlohmann::json::parse(raw);
-        const std::string cond = j.value("state", "unknown");
-        std::string spoken = "It's ";
-        if (j.contains("attributes") && j["attributes"].is_object()) {
-          const auto& a = j["attributes"];
-          if (a.contains("temperature") && a["temperature"].is_number()) {
-            const int temp = static_cast<int>(a["temperature"].get<double>() +
-                                              (a["temperature"].get<double>() < 0 ? -0.5 : 0.5));
-            spoken += spoken_number(temp) + " degrees and ";
-          }
+        auto extracted = weather_from_ha_state(nlohmann::json::parse(raw));
+        if (!extracted.ok) {
+          if (err) *err = "weather parse: no condition or temperature";
+          return out;
         }
-        spoken += cond;
-        spoken += ", sir.";
-        return spoken;
+        out.reply = std::move(extracted.spoken);
+        out.surface = surface_to_json(extracted.surface);
+        return out;
       } catch (const std::exception& e) {
         if (err) *err = std::string("weather parse: ") + e.what();
-        return {};
+        return out;
       }
     }
     case HomeIntentKind::NextAlarm: {
       if (cfg_.alarm_entity.empty()) {
         if (err) *err = "home.alarm_entity is empty";
-        return {};
+        return out;
       }
       const std::string raw = get_state_json(cfg_.alarm_entity, err);
-      if (raw.empty()) return {};
+      if (raw.empty()) return out;
       try {
         auto j = nlohmann::json::parse(raw);
         const std::string state = j.value("state", "");
         if (state.empty() || state == "unknown" || state == "unavailable") {
-          return "I don't see a next alarm, sir.";
+          out.reply = "I don't see a next alarm, sir.";
+          return out;
         }
-        return "The next alarm is " + state + ", sir.";
+        out.reply = "The next alarm is " + state + ", sir.";
+        return out;
       } catch (const std::exception& e) {
         if (err) *err = std::string("alarm parse: ") + e.what();
-        return {};
+        return out;
       }
     }
   }
   if (err) *err = "unhandled home intent";
-  return {};
+  return out;
 }
 
 }  // namespace intercom

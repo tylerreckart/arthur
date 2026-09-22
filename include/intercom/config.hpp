@@ -1,5 +1,6 @@
 #pragma once
 
+#include "intercom/briefing.hpp"
 #include "intercom/home.hpp"
 
 #include <string>
@@ -100,6 +101,8 @@ struct Config {
   bool fast_path = true;
   bool warm_prefix = true;
   HomeConfig home;
+  NewsConfig news;
+  MarketsConfig markets;
   WhisperConfig whisper;
   KokoroConfig kokoro;
   FillerConfig filler;

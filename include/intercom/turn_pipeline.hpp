@@ -4,6 +4,8 @@
 #include "intercom/config.hpp"
 #include "intercom/fast_path.hpp"
 #include "intercom/filler_client.hpp"
+#include "intercom/markets_client.hpp"
+#include "intercom/news_client.hpp"
 #include "intercom/session_store.hpp"
 #include "intercom/stt.hpp"
 #include "intercom/tts.hpp"
@@ -27,8 +29,9 @@ class AudioSink {
   // Return false to abort synthesis / pipeline.
   virtual bool write(const std::uint8_t* data, std::size_t len) = 0;
   // Optional side-channel (WS JSON). HTTP and tests ignore it.
-  // type is "heard", "said", "working", "status", or "forming";
-  // value is text or a tool name.
+  // type is "heard", "said", "working", "status", "forming", or "surface";
+  // value is text, a tool name, or (for surface) a JSON object string
+  // `{turn_id, surface}`.
   virtual void event(const char* type, const std::string& value) {
     (void)type;
     (void)value;
@@ -103,6 +106,8 @@ class TurnPipeline {
   std::shared_ptr<ArbiterClient> arbiter_;
   std::shared_ptr<SessionStore> sessions_;
   std::shared_ptr<FillerClient> filler_;
+  std::shared_ptr<NewsClient> news_client_;
+  std::shared_ptr<MarketsClient> markets_client_;
   FastPath fast_path_;
 
   mutable std::mutex turns_mu_;

@@ -1,6 +1,8 @@
 #include "intercom/turn_pipeline.hpp"
+#include "intercom/briefing.hpp"
 #include "intercom/home_client.hpp"
 #include "intercom/speakable.hpp"
+#include "intercom/surface.hpp"
 #include "intercom/util.hpp"
 #include "intercom/warm.hpp"
 
@@ -75,8 +77,13 @@ TurnPipeline::TurnPipeline(Config config,
       arbiter_(std::move(arbiter)),
       sessions_(std::move(sessions)),
       filler_(std::move(filler)),
+      news_client_(std::make_shared<NewsClient>(config_.news)),
+      markets_client_(std::make_shared<MarketsClient>(config_.markets)),
       fast_path_(config_.fast_path, config_.home,
-                 std::make_shared<HomeClient>(config_.home)) {}
+                 std::make_shared<HomeClient>(config_.home),
+                 std::make_shared<WeatherClient>(),
+                 news_client_,
+                 markets_client_) {}
 
 void TurnPipeline::register_turn(std::shared_ptr<TurnHandle> h) {
   std::lock_guard<std::mutex> lk(turns_mu_);
@@ -288,6 +295,9 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       result.error = err.empty() ? "tts failed" : err;
       return finish(result);
     }
+    if (fp->surface.is_object()) {
+      sink.event("surface", surface_event_body(result.turn_id, fp->surface).dump());
+    }
     result.ok = true;
     if (result.conversation_id > 0) {
       DeviceSession s;
@@ -299,6 +309,30 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     }
     return finish(result);
   }
+
+  // Medium-confidence (or high-confidence fetch miss) news/markets: let
+  // Arbiter speak, but still attach a card when Intercom can fetch data.
+  std::future<nlohmann::json> briefing_surface_future;
+  if (auto briefing = parse_briefing_intent(result.transcript)) {
+    briefing_surface_future = std::async(std::launch::async, [this, briefing]() {
+      std::string fetch_err;
+      if (briefing->kind == BriefingKind::News && news_client_) {
+        auto extracted = news_client_->fetch(briefing->topic, &fetch_err);
+        if (extracted.ok) return surface_to_json(extracted.surface);
+      } else if (briefing->kind == BriefingKind::Markets && markets_client_) {
+        auto extracted = markets_client_->fetch(briefing->symbols, &fetch_err);
+        if (extracted.ok) return surface_to_json(extracted.surface);
+      }
+      return nlohmann::json(nullptr);
+    });
+  }
+  auto emit_briefing_surface = [&]() {
+    if (!briefing_surface_future.valid() || handle->cancel.load()) return;
+    auto surf = briefing_surface_future.get();
+    if (surf.is_object()) {
+      sink.event("surface", surface_event_body(result.turn_id, surf).dump());
+    }
+  };
 
   const bool filler_enabled =
       filler_ && config_.filler.enabled &&
@@ -541,15 +575,19 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
 
   if (!drain_and_speak(true)) {
     result.error = err.empty() ? "tts failed" : err;
+    emit_briefing_surface();
     return finish(result);
   }
   if (!arb_state.started_answer.load() && !arb_state.full_content.empty()) {
     if (!speak(arb_state.full_content)) {
       result.error = err.empty() ? "tts failed" : err;
+      emit_briefing_surface();
       return finish(result);
     }
     arb_state.started_answer.store(true);
   }
+
+  emit_briefing_surface();
 
   DeviceSession s;
   s.device_id = device_id;

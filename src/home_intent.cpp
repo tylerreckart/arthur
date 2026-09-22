@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <sstream>
 #include <vector>
 
@@ -130,10 +131,74 @@ bool looks_like_timer(std::string_view t) {
 }
 
 bool looks_like_weather(std::string_view t) {
+  // "news about the weather" / "weather headlines" belong to briefing, not HA.
+  if (has_any(t, {"news", "headlines", "headline"})) return false;
   if (has_any(t, {"weather", "forecast", "temperature"})) return true;
   if (t == "is it raining" || t == "is it going to rain") return true;
   if (has_word(t, "raining") && (has_word(t, "is") || has_word(t, "it"))) return true;
+  if ((has_word(t, "rain") || has_word(t, "raining") || has_word(t, "snow") ||
+       has_word(t, "snowing")) &&
+      (t.find(" in ") != std::string_view::npos || t.find(" for ") != std::string_view::npos)) {
+    return true;
+  }
   return false;
+}
+
+bool is_not_a_place(std::string_view place) {
+  static const char* reject[] = {
+      "the morning", "the afternoon", "the evening", "the night",
+      "the week",    "the weekend",   "the day",     "today",
+      "tonight",     "tomorrow",      "yesterday",   "celsius",
+      "fahrenheit",  "degrees",       "here",        "there",
+      "general",     "metric",        "imperial",    "a bit",
+      "a while",     "the house",     "the room"};
+  for (const char* r : reject) {
+    if (place == r) return true;
+  }
+  return false;
+}
+
+bool ends_with_word(std::string_view s, std::string_view tail) {
+  if (s.size() < tail.size()) return false;
+  if (s.size() == tail.size()) return s == tail;
+  if (s.substr(s.size() - tail.size()) != tail) return false;
+  return s[s.size() - tail.size() - 1] == ' ';
+}
+
+void strip_trailing_time_words(std::string* place) {
+  if (!place) return;
+  static const char* tails[] = {
+      "right now", "currently", "today", "tonight", "tomorrow", "yesterday",
+      "this morning", "this afternoon", "this evening", "this week",
+      "this weekend", "now",
+  };
+  bool again = true;
+  while (again) {
+    again = false;
+    *place = trim(*place);
+    for (const char* tail : tails) {
+      if (ends_with_word(*place, tail)) {
+        place->resize(place->size() - std::strlen(tail));
+        *place = trim(*place);
+        again = true;
+        break;
+      }
+    }
+  }
+}
+
+std::string take_after_prep(std::string_view t, std::string_view prep) {
+  const std::string needle = " " + std::string(prep) + " ";
+  auto pos = t.find(needle);
+  std::size_t start = std::string_view::npos;
+  if (pos != std::string_view::npos) {
+    start = pos + needle.size();
+  } else if (t.size() > prep.size() + 1 && t.substr(0, prep.size()) == prep &&
+             t[prep.size()] == ' ') {
+    start = prep.size() + 1;
+  }
+  if (start == std::string_view::npos || start >= t.size()) return {};
+  return trim(std::string(t.substr(start)));
 }
 
 bool looks_like_alarm(std::string_view t) {
@@ -185,6 +250,18 @@ bool wants_toggle(std::string_view t) {
 
 }  // namespace
 
+std::string extract_weather_place(std::string_view transcript) {
+  const std::string t = fold_phatic(transcript);
+  if (t.empty() || !looks_like_weather(t)) return {};
+
+  std::string place = take_after_prep(t, "in");
+  if (place.empty()) place = take_after_prep(t, "for");
+  if (place.empty()) place = take_after_prep(t, "at");
+  strip_trailing_time_words(&place);
+  if (place.empty() || is_not_a_place(place)) return {};
+  return place;
+}
+
 const char* home_intent_kind_name(HomeIntentKind kind) {
   switch (kind) {
     case HomeIntentKind::Timer:
@@ -225,9 +302,9 @@ std::optional<HomeIntent> parse_home_intent(std::string_view transcript) {
   }
 
   if (looks_like_weather(t)) {
-    if (t.find(" in ") != std::string::npos) return std::nullopt;
     HomeIntent in;
     in.kind = HomeIntentKind::Weather;
+    in.place = extract_weather_place(transcript);
     return in;
   }
 

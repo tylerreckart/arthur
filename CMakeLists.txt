@@ -45,6 +45,12 @@ add_executable(intercom
   src/fast_path.cpp
   src/home_intent.cpp
   src/home_client.cpp
+  src/surface.cpp
+  src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
   src/clock.cpp
   src/turn_pipeline.cpp
   src/http_server.cpp
@@ -63,12 +69,15 @@ target_include_directories(intercom PRIVATE
 target_link_libraries(intercom PRIVATE
   nlohmann_json::nlohmann_json
   httplib::httplib
+  OpenSSL::SSL
+  OpenSSL::Crypto
   SQLite::SQLite3
   Threads::Threads
 )
 
 target_compile_definitions(intercom PRIVATE
   "INTERCOM_SCRIPTS_DIR=\"${CMAKE_SOURCE_DIR}/scripts\""
+  CPPHTTPLIB_OPENSSL_SUPPORT
 )
 if(APPLE)
   target_compile_definitions(intercom PRIVATE CPPHTTPLIB_USE_POLL)
@@ -128,6 +137,12 @@ add_executable(test_fast_path
   src/fast_path.cpp
   src/home_intent.cpp
   src/home_client.cpp
+  src/surface.cpp
+  src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
   src/clock.cpp
   src/util.cpp
 )
@@ -137,8 +152,11 @@ target_include_directories(test_fast_path PRIVATE
 target_link_libraries(test_fast_path PRIVATE
   nlohmann_json::nlohmann_json
   httplib::httplib
+  OpenSSL::SSL
+  OpenSSL::Crypto
   Threads::Threads
 )
+target_compile_definitions(test_fast_path PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
 if(APPLE)
   target_compile_definitions(test_fast_path PRIVATE CPPHTTPLIB_USE_POLL)
 endif()
@@ -154,6 +172,41 @@ target_include_directories(test_home_intent PRIVATE
 )
 add_test(NAME test_home_intent COMMAND test_home_intent)
 
+add_executable(test_briefing_intent
+  tests/test_briefing_intent.cpp
+  src/briefing_intent.cpp
+  src/home_intent.cpp
+  src/util.cpp
+)
+target_include_directories(test_briefing_intent PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME test_briefing_intent COMMAND test_briefing_intent)
+
+add_executable(test_surface
+  tests/test_surface.cpp
+  src/surface.cpp
+  src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
+  src/home_intent.cpp
+  src/util.cpp
+)
+target_include_directories(test_surface PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_surface PRIVATE
+  nlohmann_json::nlohmann_json
+  httplib::httplib
+  OpenSSL::SSL
+  OpenSSL::Crypto
+  Threads::Threads
+)
+target_compile_definitions(test_surface PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+add_test(NAME test_surface COMMAND test_surface)
+
 add_executable(test_sentence_tts
   tests/test_sentence_tts.cpp
   src/turn_pipeline.cpp
@@ -163,6 +216,12 @@ add_executable(test_sentence_tts
   src/fast_path.cpp
   src/home_intent.cpp
   src/home_client.cpp
+  src/surface.cpp
+  src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
   src/clock.cpp
   src/arbiter_client.cpp
   src/filler_client.cpp
@@ -173,9 +232,12 @@ target_include_directories(test_sentence_tts PRIVATE
 target_link_libraries(test_sentence_tts PRIVATE
   nlohmann_json::nlohmann_json
   httplib::httplib
+  OpenSSL::SSL
+  OpenSSL::Crypto
   SQLite::SQLite3
   Threads::Threads
 )
+target_compile_definitions(test_sentence_tts PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
 if(APPLE)
   target_compile_definitions(test_sentence_tts PRIVATE CPPHTTPLIB_USE_POLL)
 endif()
@@ -192,6 +254,12 @@ add_executable(test_ws_stream
   src/fast_path.cpp
   src/home_intent.cpp
   src/home_client.cpp
+  src/surface.cpp
+  src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
   src/clock.cpp
   src/arbiter_client.cpp
   src/filler_client.cpp
@@ -203,9 +271,12 @@ target_include_directories(test_ws_stream PRIVATE
 target_link_libraries(test_ws_stream PRIVATE
   nlohmann_json::nlohmann_json
   httplib::httplib
+  OpenSSL::SSL
+  OpenSSL::Crypto
   SQLite3::SQLite3
   Threads::Threads
 )
+target_compile_definitions(test_ws_stream PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
 if(APPLE)
   target_compile_definitions(test_ws_stream PRIVATE CPPHTTPLIB_USE_POLL)
 endif()
@@ -226,6 +297,12 @@ add_executable(test_speakback
   src/fast_path.cpp
   src/home_intent.cpp
   src/home_client.cpp
+  src/surface.cpp
+  src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
   src/filler_client.cpp
 )
 target_include_directories(test_speakback PRIVATE
@@ -234,9 +311,12 @@ target_include_directories(test_speakback PRIVATE
 target_link_libraries(test_speakback PRIVATE
   nlohmann_json::nlohmann_json
   httplib::httplib
+  OpenSSL::SSL
+  OpenSSL::Crypto
   SQLite3::SQLite3
   Threads::Threads
 )
+target_compile_definitions(test_speakback PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
 if(APPLE)
   target_compile_definitions(test_speakback PRIVATE CPPHTTPLIB_USE_POLL)
 endif()

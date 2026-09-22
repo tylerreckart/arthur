@@ -28,6 +28,26 @@
       "default": "light.living_room"
     }
   },
+  "news": {
+    "timeout_ms": 2500,
+    "max_items": 8,
+    "google_news_rss": "https://news.google.com/rss",
+    "feeds": [
+      {
+        "name": "Top stories",
+        "url": "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"
+      },
+      {
+        "name": "World",
+        "url": "https://news.google.com/rss/headlines/section/topic/WORLD?hl=en-US&gl=US&ceid=US:en"
+      }
+    ]
+  },
+  "markets": {
+    "timeout_ms": 2500,
+    "quote_base": "https://query1.finance.yahoo.com",
+    "default_symbols": ["^GSPC", "^DJI", "^IXIC", "BTC-USD"]
+  },
   "kokoro": {
     "binary": "~/.intercom/venv-kokoro/bin/kokoro-tts",
     "voice": "af_nova:0.6+af_nicole:0.3+af_heart:0.1",

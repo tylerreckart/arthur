@@ -71,11 +71,39 @@ int main() {
 
   auto weather = intercom::parse_home_intent("what's the weather");
   CHECK(weather.has_value());
-  if (weather) CHECK(weather->kind == intercom::HomeIntentKind::Weather);
+  if (weather) {
+    CHECK(weather->kind == intercom::HomeIntentKind::Weather);
+    CHECK(weather->place.empty());
+  }
 
-  CHECK(!intercom::parse_home_intent("what's the weather in Tokyo").has_value());
+  auto tokyo = intercom::parse_home_intent("what's the weather in Tokyo");
+  CHECK(tokyo.has_value());
+  if (tokyo) {
+    CHECK(tokyo->kind == intercom::HomeIntentKind::Weather);
+    CHECK(tokyo->place == "tokyo");
+  }
+
+  auto nyc = intercom::parse_home_intent("forecast for New York today");
+  CHECK(nyc.has_value());
+  if (nyc) {
+    CHECK(nyc->place == "new york");
+  }
+
+  auto rain = intercom::parse_home_intent("is it going to rain in Chicago");
+  CHECK(rain.has_value());
+  if (rain) CHECK(rain->place == "chicago");
+
+  CHECK(intercom::extract_weather_place("what's the weather in Tokyo") == "tokyo");
+  CHECK(intercom::extract_weather_place("weather in San Francisco tonight") ==
+        "san francisco");
+  CHECK(intercom::extract_weather_place("what's the weather in the morning").empty());
+  CHECK(intercom::extract_weather_place("forecast for today").empty());
+  CHECK(intercom::extract_weather_place("what's the weather").empty());
+
   CHECK(!intercom::parse_home_intent("hello").has_value());
   CHECK(!intercom::parse_home_intent("what time is it").has_value());
+  CHECK(!intercom::parse_home_intent("news about the weather").has_value());
+  CHECK(!intercom::parse_home_intent("what's in the news").has_value());
 
   auto up = intercom::parse_home_intent("turn the volume up");
   CHECK(up.has_value());

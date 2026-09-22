@@ -7,16 +7,26 @@ struct DiscussionLine: Identifiable, Equatable, Codable {
   /// Same-turn Arthur `said` chunks share this key so the desk can stitch
   /// them into one bubble. Empty on pre-stitch transcripts.
   var turnId: String
+  /// Versioned cards for this turn (weather, generic fallback). Empty on
+  /// older transcripts and speech-only turns.
+  var surfaces: [ChatSurface]
 
   enum CodingKeys: String, CodingKey {
-    case id, fromYou, text, turnId
+    case id, fromYou, text, turnId, surfaces
   }
 
-  init(fromYou: Bool, text: String, id: UUID = UUID(), turnId: String = "") {
+  init(
+    fromYou: Bool,
+    text: String,
+    id: UUID = UUID(),
+    turnId: String = "",
+    surfaces: [ChatSurface] = []
+  ) {
     self.id = id
     self.fromYou = fromYou
     self.text = text
     self.turnId = turnId
+    self.surfaces = surfaces
   }
 
   init(from decoder: Decoder) throws {
@@ -25,6 +35,7 @@ struct DiscussionLine: Identifiable, Equatable, Codable {
     fromYou = try c.decode(Bool.self, forKey: .fromYou)
     text = try c.decode(String.self, forKey: .text)
     turnId = try c.decodeIfPresent(String.self, forKey: .turnId) ?? ""
+    surfaces = try c.decodeIfPresent([ChatSurface].self, forKey: .surfaces) ?? []
   }
 }
 
