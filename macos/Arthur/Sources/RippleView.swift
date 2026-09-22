@@ -9,31 +9,30 @@ struct SpeakingRipple: View {
 
   var body: some View {
     RippleMetal(active: active, energy: Float(energy), restrained: restrained)
-      // Restrained is still dimmer than full, but stronger than the old full-mode wash.
-      .opacity(active ? (restrained ? 0.82 : 1.0) : 0)
+      .opacity(active ? (restrained ? 0.72 : 0.92) : 0)
       .mask {
         LinearGradient(
           stops: restrained
             ? [
               .init(color: .black, location: 0),
-              .init(color: .black.opacity(0.94), location: 0.18),
-              .init(color: .black.opacity(0.58), location: 0.46),
-              .init(color: .black.opacity(0.18), location: 0.68),
-              .init(color: .clear, location: 0.86),
+              .init(color: .black.opacity(0.90), location: 0.14),
+              .init(color: .black.opacity(0.50), location: 0.40),
+              .init(color: .black.opacity(0.16), location: 0.62),
+              .init(color: .clear, location: 0.80),
             ]
             : [
               .init(color: .black, location: 0),
-              .init(color: .black.opacity(0.98), location: 0.20),
-              .init(color: .black.opacity(0.78), location: 0.48),
-              .init(color: .black.opacity(0.38), location: 0.70),
-              .init(color: .clear, location: 0.92),
+              .init(color: .black.opacity(0.96), location: 0.14),
+              .init(color: .black.opacity(0.74), location: 0.38),
+              .init(color: .black.opacity(0.32), location: 0.64),
+              .init(color: .clear, location: 0.90),
             ],
           startPoint: .top,
           endPoint: .bottom
         )
       }
-      .animation(active ? .easeOut(duration: 0.16) : .easeInOut(duration: 1.12), value: active)
-      .animation(.easeInOut(duration: 0.35), value: restrained)
+      .animation(active ? .easeInOut(duration: 0.85) : .easeInOut(duration: 1.30), value: active)
+      .animation(.easeInOut(duration: 0.40), value: restrained)
       .allowsHitTesting(false)
       .accessibilityHidden(true)
   }
@@ -63,8 +62,7 @@ private struct RippleMetal: NSViewRepresentable {
   }
 }
 
-/// CPU-side speak envelope. Audio RMS is the lead; onset / shimmer / flashes
-/// keep the wash from looking like one looping sine when TTS is flat.
+/// Slow speak envelope. RMS brightens and widens curtains; no attack flashes.
 private struct SpeakMotion {
   var energy: Float = 0
   var onset: Float = 0
@@ -72,57 +70,26 @@ private struct SpeakMotion {
   var drive: Float = 0
 
   private var smooth: Float = 0
-  private var flashEnv: Float = 0
   private var wasActive = false
-  private var prevRaw: Float = 0
-  private var nextFlash: Float = 0.22
 
   mutating func tick(dt: Float, time: Float, active: Bool, raw: Float, restrained: Bool) {
     if active && !wasActive {
-      onset = 1
-      flashEnv = restrained ? 0.72 : 1
-      smooth = max(smooth, restrained ? 0.74 : 0.88)
-      nextFlash = 0.14
+      onset = 0.42
+      smooth = max(smooth, restrained ? 0.28 : 0.36)
     }
     wasActive = active
 
-    let shimmer: Float
-    if active {
-      let s1 = sin(time * 2.17)
-      let s2 = sin(time * 3.71 + 1.3)
-      let s3 = sin(time * 0.91 + 2.4)
-      let syllable = max(0, s1 * s2)
-      shimmer = 0.24 + 0.18 * (0.5 + 0.5 * s3) + 0.28 * syllable * syllable
-    } else {
-      shimmer = 0
-    }
-
-    let target: Float = active ? min(1, max(raw, shimmer) + raw * 0.42) : 0
-    let tau: Float = active ? 0.070 : 0.30
+    let breath: Float = active ? 0.16 + 0.07 * (0.5 + 0.5 * sin(time * 0.48)) : 0
+    let target: Float = active ? min(1, 0.22 + raw * 0.58 + breath) : 0
+    let tau: Float = active ? 0.36 : 0.58
     smooth += (target - smooth) * (1 - exp(-dt / tau))
 
-    onset *= exp(-dt / (active ? 0.28 : 0.12))
+    onset *= exp(-dt / (active ? 0.90 : 0.40))
 
-    let attack = raw - prevRaw
-    prevRaw = raw
-    if active, attack > 0.08 {
-      flashEnv = min(1, flashEnv + attack * (restrained ? 1.35 : 2.25))
-    }
-
-    nextFlash -= dt
-    if active, nextFlash <= 0 {
-      nextFlash = 0.22 + Float.random(in: 0.14...0.78)
-      if smooth > 0.12 {
-        flashEnv = min(1, flashEnv + Float.random(in: 0.22...0.58) * (restrained ? 0.68 : 1))
-      }
-    }
-    flashEnv *= exp(-dt / 0.16)
-
-    let breath = 0.5 + 0.5 * sin(time * 0.74)
-    let gain: Float = restrained ? 0.92 : 1.18
+    let gain: Float = restrained ? 0.70 : 1
     energy = min(1, smooth * gain)
-    drive = gain * (0.90 + 0.42 * smooth + 0.38 * onset + 0.10 * breath)
-    flash = min(1, flashEnv * (restrained ? 0.82 : 1))
+    drive = 1
+    flash = 0
   }
 }
 
@@ -150,7 +117,7 @@ final class RippleRenderer: NSObject, MTKViewDelegate {
     view.framebufferOnly = true
     view.isPaused = false
     view.enableSetNeedsDisplay = false
-    view.preferredFramesPerSecond = 45
+    view.preferredFramesPerSecond = 30
     view.colorPixelFormat = .bgra8Unorm
     view.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
     view.wantsLayer = true
@@ -171,7 +138,7 @@ final class RippleRenderer: NSObject, MTKViewDelegate {
     let dt = Float(min(now - last, 0.05))
     last = now
     let target: Float = active ? 1 : 0
-    let tau: Float = active ? 0.38 : 0.85
+    let tau: Float = active ? 0.70 : 1.15
     opacity += (target - opacity) * (1 - exp(-dt / tau))
 
     let time = Float(now - t0)
@@ -271,76 +238,70 @@ private enum RippleShaderSource {
     return out;
   }
 
-  float3 ripple_hue(float h) {
-    h = fract(h);
-    float3 ember  = float3(1.00, 0.32, 0.06);
-    float3 ruby   = float3(0.96, 0.10, 0.16);
-    float3 violet = float3(0.56, 0.22, 0.92);
-    float3 aurora = float3(0.10, 0.78, 0.46);
-    float3 gold   = float3(1.00, 0.70, 0.26);
-    float3 c = mix(ember, ruby,   smoothstep(0.00, 0.18, h));
-    c = mix(c, violet, smoothstep(0.18, 0.40, h));
-    c = mix(c, aurora, smoothstep(0.40, 0.62, h));
-    c = mix(c, gold,   smoothstep(0.62, 0.82, h));
-    c = mix(c, ember,  smoothstep(0.82, 1.00, h));
-    return c;
+  // Soft vertical / diagonal Gaussian curtain. `sheets` is how many
+  // hang across the pane; `speed` is sheet-spacings per second (~8–12s).
+  float aurora_sheet(float x, float y, float t, float sheets, float phase,
+                     float speed, float width, float tilt) {
+    float xt = x + tilt * (1.0 - y);
+    xt += 0.050 * sin(y * 2.4 + t * 0.38 + phase);
+    xt += 0.022 * sin(y * 4.0 + t * 0.22 + phase * 1.3);
+    float p = xt * sheets - t * speed - phase;
+    float d = abs(p - round(p));
+    return exp(-(d * d) / max(width * width, 0.0004));
   }
 
   fragment float4 ripple_fragment(VertexOut in [[stage_in]], constant Uniforms &u [[buffer(0)]]) {
     float2 uv = in.uv;
-    float t = u.time * (0.22 + 0.26 * u.drive);
-    float asp = max(u.aspect, 0.7);
+    float t = u.time;
+    float x = uv.x;
+    float y = uv.y;
+    float ytop = saturate(1.0 - uv.y);
 
-    // Large aurora lobes (~1.4×1.2 cycles) with inner veins — reads across
-    // the window instead of a dense 152px top strip of tiny ripples.
-    float2 p = uv * float2(2.20 * asp, 1.35);
-    p.x += 0.09 * u.time * 0.038;
-    p.x += 0.30 * sin(p.y * 1.35 + t * 0.72);
-    p.y += 0.24 * sin(p.x * 1.12 + t * 0.54);
-    p.y += 0.08 * u.energy * sin(t * 1.10);
+    float width = 0.16 + 0.10 * u.energy + 0.03 * u.onset;
+    float bright = 0.50 + 0.32 * u.energy + 0.10 * u.onset;
+    if (u.restrained > 0.5) {
+      bright *= 0.62;
+      width *= 0.88;
+    }
 
-    float sx = sin(p.x * 5.00 + t * 0.95);
-    float sy = sin(p.y * 5.60 - t * 0.78);
-    float sd = sin((p.x + p.y) * 3.80 + t * 0.42);
-    float sm = sin((p.x - p.y) * 4.20 - t * 0.50);
-    float detail = 0.52 + 0.48 * sin(p.x * 8.4 + p.y * 6.6 + t * 1.45);
+    float cGreen   = aurora_sheet(x, y, t, 2.05, 0.10, 0.085, width * 1.15, 0.18);
+    float cViolet  = aurora_sheet(x, y, t, 2.55, 0.62, 0.062, width * 0.92, 0.24);
+    float cTeal    = aurora_sheet(x, y, t, 1.55, 1.18, 0.048, width * 1.25, 0.12);
+    float cMagenta = aurora_sheet(x, y, t, 3.05, 1.85, 0.070, width * 0.72, 0.20);
 
-    float ridges = saturate(sx * sy);
-    float diag = saturate(sd * sm);
-    float caustic = (pow(ridges, 2.05) * 0.62 + pow(diag, 2.25) * 0.40) * detail;
-    caustic += pow(saturate(sx), 2.20) * 0.22;
-    caustic += pow(saturate(sy), 2.20) * 0.18;
-    caustic += (0.10 + 0.22 * u.energy + 0.28 * u.flash) * pow(saturate(detail * ridges), 2.4);
+    float shimmer = 0.82 + 0.18 * sin(y * 1.8 + t * 0.52);
+    float height = saturate(0.20 + 0.80 * exp(-ytop * (0.95 - 0.22 * u.energy)));
+    cGreen   *= shimmer * height;
+    cViolet  *= shimmer * (0.85 + 0.15 * height);
+    cTeal    *= shimmer * height;
+    cMagenta *= shimmer * (0.70 + 0.30 * height);
 
-    float wash = (0.26 + 0.16 * u.energy + 0.18 * u.onset) * pow(saturate(0.52 + 0.28 * sx + 0.28 * sy), 1.45);
-    float veil = 0.16 + 0.10 * u.energy + 0.16 * u.onset;
-    float2 bloomP = float2((uv.x - 0.5) * 1.05, (1.0 - uv.y) * 0.68);
-    float bloom = (0.16 + 0.64 * u.onset) * exp(-dot(bloomP, bloomP) * 1.00);
-    float light = veil + wash + caustic * (1.08 + 0.48 * u.energy + 0.58 * u.flash) + bloom * 0.52;
+    float3 green   = float3(0.22, 0.95, 0.48);
+    float3 teal    = float3(0.12, 0.82, 0.76);
+    float3 violet  = float3(0.52, 0.30, 0.98);
+    float3 magenta = float3(0.88, 0.28, 0.64);
+    float3 ember   = float3(1.00, 0.42, 0.16);
+    float3 indigo  = float3(0.07, 0.08, 0.18);
 
-    float y = saturate(1.0 - uv.y);
-    float cover = u.restrained > 0.5 ? 0.17 : 0.32;
-    float falloff = smoothstep(0.0, 0.028, y) * smoothstep(1.0, cover, y);
-    falloff = max(falloff, smoothstep(1.0, 0.11, y) * 0.24);
-    float sides = smoothstep(0.0, 0.016, uv.x) * smoothstep(1.0, 0.984, uv.x);
+    float3 aur = green * (cGreen * bright)
+               + violet * (cViolet * bright * 0.90)
+               + teal * (cTeal * bright * 0.78)
+               + magenta * (cMagenta * bright * 0.70)
+               + ember * (cGreen * cMagenta * bright * 0.08);
+    float cover = cGreen * 0.85 + cViolet * 0.70 + cTeal * 0.55 + cMagenta * 0.45;
 
-    float gain = 0.46 + 0.20 * u.energy + 0.16 * u.onset + 0.10 * u.flash;
-    if (u.restrained > 0.5) gain *= 0.88;
-    float a = saturate(u.opacity * falloff * sides * light * gain);
-    float cap = u.restrained > 0.5 ? 0.48 : 0.60;
-    a = min(a, cap + 0.10 * u.onset + 0.08 * u.flash);
+    float sky = smoothstep(0.0, 0.045, ytop) * (1.0 - 0.72 * smoothstep(0.22, 0.92, ytop));
+    if (u.restrained > 0.5) {
+      sky *= (1.0 - 0.35 * smoothstep(0.18, 0.70, ytop));
+    }
+    float sides = smoothstep(0.0, 0.028, x) * smoothstep(1.0, 0.972, x);
 
-    // Oil-slick / aurora: orange brand veil, jewel sheen on the lobes.
-    float h = 0.06 + 0.07 * u.time * 0.12 + 0.34 * saturate(sx) + 0.24 * saturate(sy)
-            + 0.16 * uv.x + 0.10 * caustic + 0.08 * u.flash;
-    float3 sheen = ripple_hue(h);
-    float3 ember = float3(1.00, 0.32, 0.06);
-    float3 gold  = float3(1.00, 0.70, 0.26);
-    float3 veilCol = ripple_hue(0.12 + 0.22 * uv.x + 0.18 * (1.0 - uv.y) + 0.10 * saturate(sx));
-    float3 base = ember * 0.68 + veilCol * 0.32;
-    float mixAmt = 0.40 + 0.46 * caustic + 0.08 * u.flash;
-    float3 col = mix(base, sheen, mixAmt);
-    col = mix(col, gold, saturate(u.flash * caustic * 0.48));
+    float night = 0.09 * (0.70 + 0.30 * u.energy);
+    float a = saturate(u.opacity * sky * sides * (night + cover * bright * 0.62));
+    float cap = u.restrained > 0.5 ? 0.30 : 0.44;
+    a = min(a, cap + 0.03 * u.onset);
+
+    float3 col = saturate(indigo * 0.40 + aur);
     return float4(col * a, a);
   }
   """

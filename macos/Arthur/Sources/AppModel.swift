@@ -541,7 +541,7 @@ final class AppModel {
         become(.speaking)
         if work != .speaking { setWork(.speaking) }
         audio.playPCM(data)
-        ingestSpeakLevel(AudioIO.pcmLevel(data, gain: 3.6))
+        ingestSpeakLevel(AudioIO.pcmLevel(data, gain: 2.4))
       }
     case .heard(let text):
       if !text.isEmpty {
@@ -668,7 +668,7 @@ final class AppModel {
 
   private func become(_ p: ArthurPhase) {
     if p == .speaking, phase != .speaking {
-      speakLevel = max(speakLevel, 0.82)
+      speakLevel = max(speakLevel, 0.34)
     }
     if p != .speaking {
       speakLevel = 0
@@ -681,7 +681,7 @@ final class AppModel {
   }
 
   private func ingestSpeakLevel(_ level: Double) {
-    speakLevel = min(1, max(level, speakLevel * 0.68))
+    speakLevel = min(1, max(level, speakLevel * 0.82))
   }
 
   private func setWork(_ w: WorkState) {
