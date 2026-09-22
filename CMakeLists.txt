@@ -237,3 +237,11 @@ if(APPLE)
 endif()
 add_test(NAME test_speakback COMMAND test_speakback)
 
+find_program(Python3_EXECUTABLE NAMES python3 python)
+if(Python3_EXECUTABLE)
+  add_test(
+    NAME test_kokoro_voice
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_kokoro_voice.py
+  )
+endif()
+

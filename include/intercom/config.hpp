@@ -34,6 +34,7 @@ struct SpeechDspConfig {
 
 struct KokoroConfig {
   std::string binary = "kokoro-tts";
+  // Single Kokoro name, legacy `left+right:weight`, or N-way `name:w+name:w`.
   std::string voice = "bm_lewis";
   double speed = 0.96;
   std::string model;

@@ -31,6 +31,7 @@
   "kokoro": {
     "binary": "~/.intercom/venv-kokoro/bin/kokoro-tts",
     "voice": "bm_lewis",
+    "voice_syntax": "name | left+right:0-1 | name:w+name:w (ratios/percentages auto-normalized)",
     "speed": 0.96,
     "model": "~/.intercom/models/kokoro/kokoro-v1.0.onnx",
     "voices": "~/.intercom/models/kokoro/voices-v1.0.bin",

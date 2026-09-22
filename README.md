@@ -41,6 +41,16 @@ cp config/intercom.example.json intercom.json
 ./build/intercom --config intercom.json
 ```
 
+`kokoro.voice` is a single Kokoro name or a `+`-separated style blend. Weights are optional and auto-normalized (percentages or raw ratios). Language follows the heaviest component’s prefix (`bm_` / `bf_` → `en-gb`; `af_` / `am_` and other unlisted prefixes → `en-us`).
+
+- `bm_lewis`
+- `bm_lewis+af_nova:0.35` — legacy two-way: 35% Nova, 65% Lewis
+- `af_nova:0.6+af_nicole:0.3+af_heart:0.1`
+- `af_nova+af_nicole+af_heart` — equal mix
+- `af_nova:3+af_nicole:1+af_heart:1` — same as 60/20/20
+
+For two voices with raw ratios, write both weights (`af_nova:3+af_nicole:1`). `left+right:weight` still means “fraction of the right voice” in `[0, 1]`.
+
 Install speech tools separately (not vendored):
 
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) → `whisper-cli` + `whisper-server` + `ggml-base.en.bin`
