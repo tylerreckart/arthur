@@ -769,6 +769,18 @@ struct SettingsView: View {
           Text("Intercom maps each device onto one conversation. This stays in settings so the desk app can share memory with the hallway speaker.")
         }
 
+        Section {
+          Picker("Shortcut", selection: $model.pttHotkey) {
+            ForEach(pttHotkeyChoices) { hotkey in
+              Text(hotkey.display).tag(hotkey)
+            }
+          }
+        } header: {
+          Text("Push to talk")
+        } footer: {
+          Text(pttHotkeyFooter)
+        }
+
         McpSettingsSection()
 
         if !model.mcpSaveError.isEmpty {
@@ -807,5 +819,22 @@ struct SettingsView: View {
   private func mcpServer(for route: McpEditorRoute) -> McpServer? {
     guard case .edit(let name) = route else { return nil }
     return model.mcpServers.first { $0.name == name }
+  }
+
+  private var pttHotkeyChoices: [PTTHotkey] {
+    var items = PTTHotkey.presets
+    if !items.contains(model.pttHotkey) {
+      items.insert(model.pttHotkey, at: 0)
+    }
+    return items
+  }
+
+  private var pttHotkeyFooter: String {
+    var text = "Hold \(model.pttHotkey.display) from anywhere — the Arthur window does not need to be focused. Space still works as push-to-talk inside the window when you are not typing."
+    text += " The default shortcut uses the system hotkey API and does not need Accessibility or Input Monitoring."
+    if DeskAccessory.shared.usingInputMonitoringFallback {
+      text += " Arthur could not register that system hotkey, so it is listening with a global key monitor. Grant Input Monitoring to Arthur in System Settings → Privacy & Security if the shortcut does nothing while another app is focused."
+    }
+    return text
   }
 }

@@ -26,6 +26,11 @@
 	<string>public.app-category.utilities</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- Menu bar extra is an NSStatusItem in-process; no extra Info.plist key.
+	     Global PTT (default ⌥Space) uses RegisterEventHotKey and does not
+	     require Accessibility or Input Monitoring. Microphone is still
+	     required to speak. If the system hotkey API fails, Arthur falls
+	     back to NSEvent global key monitors and then needs Input Monitoring. -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Arthur needs the microphone so you can speak to him from this Mac, the same way the hallway speaker does.</string>
 	<key>NSUserNotificationsUsageDescription</key>
