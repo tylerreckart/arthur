@@ -1,8 +1,8 @@
 # Arthur
 
-Arthur is the person on the other end of a home intercom — a local-first voice assistant you talk to from a wall button or a Mac on the desk.
+Arthur is Tyler Reckart's personal silicon assistant — local-first, on a wall button and a Mac on the desk. The person on the other end of his home intercom.
 
-He is a capable British personal assistant: spoken aloud, addresses you as sir, understated warmth, then leaves space. The constitution lives in [`config/arthur.agent.json`](config/arthur.agent.json). This repository is the voice layer around him: capture, speech, devices, and the spoken reply.
+You talk; he answers aloud. This repository is the voice layer: capture, speech, devices, and the spoken reply. The spoken-agent definition is [`config/arthur.agent.json`](config/arthur.agent.json).
 
 STT and TTS run on the machine that hosts Intercom. [whisper.cpp](https://github.com/ggerganov/whisper.cpp) transcribes, [Kokoro](https://github.com/hexgrad/kokoro) speaks, and [Arbiter](https://github.com/tylerreckart/arbiter) (a separate process) stays text + SSE in the middle.
 
@@ -104,7 +104,7 @@ Shipped `kokoro.voice` is `af_nova:0.6+af_nicole:0.3+af_heart:0.1` (language fro
 - [`docs/api.md`](docs/api.md) — HTTP and WebSocket contract, Arbiter mapping, speak-back, Kokoro
 - [`docs/device.md`](docs/device.md) — PCM format, PTT flow, ESP32 endpoint, colocation
 - [`config/intercom.example.json`](config/intercom.example.json) — daemon config
-- [`config/arthur.agent.json`](config/arthur.agent.json) — who Arthur is
+- [`config/arthur.agent.json`](config/arthur.agent.json) — spoken-agent definition
 
 ## License
 
