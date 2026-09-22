@@ -67,8 +67,7 @@ struct ContentView: View {
               )
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 12)
-            .padding(.top, 2)
+            .padding(.vertical, 10)
           }
           .sheet(isPresented: $model.settingsOpen) {
             SettingsView()
@@ -516,17 +515,23 @@ private struct ComposerBar: View {
   var body: some View {
     @Bindable var model = model
 
-    HStack(alignment: .center, spacing: 8) {
-      if model.holding {
-        listeningAffordance
-      } else {
-        QuietModeToggle()
-        VStack(alignment: .leading, spacing: 3) {
-          if showReturnHint {
-            Text("Return to send · Shift-Return for a new line")
-              .font(.caption2)
-              .foregroundStyle(.tertiary)
-          }
+    VStack(alignment: .leading, spacing: 6) {
+      if showReturnHint {
+        HStack(spacing: 8) {
+          Color.clear
+            .frame(width: 32, height: 1)
+            .accessibilityHidden(true)
+          Text("Return to send · Shift-Return for a new line")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
+      }
+
+      HStack(alignment: .center, spacing: 8) {
+        if model.holding {
+          listeningAffordance
+        } else {
+          QuietModeToggle()
           TextField(
             "Ask Arthur",
             text: $model.draft,
@@ -537,46 +542,46 @@ private struct ComposerBar: View {
           .font(.body)
           .lineLimit(1...8)
           .focused($typing)
-          .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+          .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
           .accessibilityLabel("Ask Arthur")
         }
-      }
 
-      if model.canCancel {
-        ComposerStop {
-          model.cancelTurn()
-        }
-      }
-
-      if model.hasDraft, !model.holding {
-        ComposerCircle(systemImage: "arrow.up", enabled: model.canTalk) {
-          model.sendDraft()
-        }
-        .help("Send")
-        .accessibilityLabel("Send")
-      }
-
-      ComposerCircle(
-        systemImage: model.holding ? "waveform" : "mic.fill",
-        enabled: model.canTalk,
-        active: model.holding || model.phase == .speaking,
-        action: {}
-      )
-      .help(model.holding ? "Release to send" : "Hold to talk · \(model.pttHotkey.display) also talks")
-      .accessibilityLabel(model.holding ? "Release" : "Talk")
-      .accessibilityHint("Hold to talk. \(model.pttHotkey.display) also starts push-to-talk.")
-      .simultaneousGesture(
-        DragGesture(minimumDistance: 0)
-          .onChanged { _ in
-            if model.canTalk, !model.holding { model.pttDown(explicit: true) }
+        if model.canCancel {
+          ComposerStop {
+            model.cancelTurn()
           }
-          .onEnded { _ in
-            if model.holding { model.pttUp() }
+        }
+
+        if model.hasDraft, !model.holding {
+          ComposerCircle(systemImage: "arrow.up", enabled: model.canTalk) {
+            model.sendDraft()
           }
-      )
+          .help("Send")
+          .accessibilityLabel("Send")
+        }
+
+        ComposerCircle(
+          systemImage: model.holding ? "waveform" : "mic.fill",
+          enabled: model.canTalk,
+          active: model.holding || model.canCancel,
+          action: {}
+        )
+        .help(model.holding ? "Release to send" : "Hold to talk · \(model.pttHotkey.display) also talks")
+        .accessibilityLabel(model.holding ? "Release" : "Talk")
+        .accessibilityHint("Hold to talk. \(model.pttHotkey.display) also starts push-to-talk.")
+        .simultaneousGesture(
+          DragGesture(minimumDistance: 0)
+            .onChanged { _ in
+              if model.canTalk, !model.holding { model.pttDown(explicit: true) }
+            }
+            .onEnded { _ in
+              if model.holding { model.pttUp() }
+            }
+        )
+      }
     }
     .padding(.horizontal, 12)
-    .padding(.vertical, 10)
+    .padding(.vertical, 8)
     .animation(.easeInOut(duration: 0.16), value: model.holding)
     .animation(.easeInOut(duration: 0.16), value: model.canCancel)
     .animation(.easeInOut(duration: 0.16), value: model.quietTextMode)
