@@ -17,6 +17,7 @@ swiftc -parse-as-library -O \
   -sdk "$SDK" \
   -framework SwiftUI \
   -framework AppKit \
+  -framework Carbon \
   -framework AVFoundation \
   -framework Metal \
   -framework MetalKit \

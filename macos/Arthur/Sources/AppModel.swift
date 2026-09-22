@@ -57,6 +57,13 @@ final class AppModel {
     }
   }
   var speakBack: SpeakBackNotice?
+  var pttHotkey: PTTHotkey = .optionSpace {
+    didSet {
+      guard oldValue != pttHotkey else { return }
+      pttHotkey.persist()
+      DeskAccessory.shared.registerHotkey(pttHotkey)
+    }
+  }
 
   private let client = IntercomClient()
   private let audio = AudioIO()
@@ -83,6 +90,7 @@ final class AppModel {
     }
     soundOn = ConfigStore.loadSoundOn()
     audio.soundEnabled = soundOn
+    pttHotkey = PTTHotkey.load()
     transcriptDeviceId = config.deviceId
     discussion = ConfigStore.loadTranscript(deviceId: transcriptDeviceId)
     draft = ConfigStore.loadDraft()
@@ -249,10 +257,22 @@ final class AppModel {
     persistMcpRegistry()
   }
 
+  func talkPressed() {
+    if !holding { pttDown(explicit: true) }
+  }
+
+  func talkReleased() {
+    if holding { pttUp() }
+  }
+
+  func toggleTalk() {
+    if holding { pttUp() } else { pttDown(explicit: true) }
+  }
+
   /// Starts push-to-talk. Implicit Space only reaches here when the composer is
-  /// unfocused and the draft is empty. Pass `explicit: true` for the mic hold
-  /// or ⌥Space — those may run even when there is typed text, and they never
-  /// clear `draft`.
+  /// unfocused and the draft is empty. Pass `explicit: true` for the mic hold,
+  /// menu bar extra, or configured global hotkey — those may run even when
+  /// there is typed text, and they never clear `draft`.
   func pttDown(explicit: Bool = false) {
     guard canSend else { return }
     if !explicit && hasDraft { return }
@@ -607,16 +627,29 @@ final class AppModel {
     }.resume()
   }
 
-  /// Keyboard contract (desk window, settings sheet closed):
+  /// Keyboard contract (desk window):
+  /// - Configured global PTT (default ⌥Space) always talks, even with a draft.
   /// - ⌘L / ⌘K focus Ask Arthur (menu + this monitor).
   /// - Return sends, Shift-Return inserts a newline (single path; not onSubmit).
   /// - Escape calls `cancelTurn()` when `canCancel`.
   /// - Space is PTT only when the composer is unfocused and the draft is empty.
-  /// - ⌥Space is explicit PTT even with a draft or while focused.
   /// Space is never stolen while typing.
   private func installKeys() {
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
       guard let self else { return event }
+
+      // Configured chord (menu-bar/global PTT). Consume it so the Space-only
+      // in-window path does not also fire.
+      if self.pttHotkey.matches(event) {
+        if event.type == .keyDown {
+          if event.isARepeat { return nil }
+          Task { @MainActor in self.talkPressed() }
+        } else if event.type == .keyUp {
+          Task { @MainActor in self.talkReleased() }
+        }
+        return nil
+      }
+
       if self.settingsOpen { return event }
 
       if event.type == .keyDown {
@@ -676,6 +709,9 @@ final class AppModel {
 
   private func handlePushToTalk(_ event: NSEvent) -> NSEvent? {
     guard event.keyCode == 49 else { return event }
+    // The configured global chord is consumed above so Space-only PTT
+    // and the hotkey do not both fire.
+    if pttHotkey.matches(event) { return event }
     if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
       return event
     }

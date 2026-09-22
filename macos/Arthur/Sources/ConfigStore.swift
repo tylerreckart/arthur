@@ -24,6 +24,8 @@ enum ConfigStore {
   private static let deviceIdKey = "arthur.deviceId"
   private static let hostKey = "arthur.host"
   private static let soundOnKey = "arthur.soundOn"
+  private static let pttKeyCodeKey = "arthur.pttKeyCode"
+  private static let pttModifiersKey = "arthur.pttModifierFlags"
 
   static func load() -> ClientConfig {
     let path = resolvedConfigPath()
@@ -86,6 +88,19 @@ enum ConfigStore {
       return
     }
     try? text.data(using: .utf8)?.write(to: url, options: .atomic)
+  }
+
+  static func loadPTTHotkey() -> (keyCode: UInt16, modifiers: UInt)? {
+    let defaults = UserDefaults.standard
+    guard defaults.object(forKey: pttKeyCodeKey) != nil else { return nil }
+    let code = UInt16(clamping: defaults.integer(forKey: pttKeyCodeKey))
+    let modifiers = UInt(bitPattern: defaults.integer(forKey: pttModifiersKey))
+    return (code, modifiers)
+  }
+
+  static func savePTTHotkey(keyCode: UInt16, modifiers: UInt) {
+    UserDefaults.standard.set(Int(keyCode), forKey: pttKeyCodeKey)
+    UserDefaults.standard.set(Int(modifiers), forKey: pttModifiersKey)
   }
 
   static func loadTranscript(deviceId: String) -> [DiscussionLine] {

@@ -9,6 +9,17 @@ macos/Arthur/build.sh
 open macos/Arthur/dist/Arthur.app
 ```
 
+The desk app stays armed from the menu bar after you close the window. Hold the **Arthur** extra (or **Hold to Talk** in its menu) to speak; **Mute Sound** and **Quit** are there too. The default global shortcut is **⌥Space** (Option-Space). It calls the same `pttDown` / `pttUp` path as the in-window Talk button and Space bar.
+
+That shortcut uses the system hotkey API (`RegisterEventHotKey`) and does **not** need Accessibility or Input Monitoring. Microphone permission is still required to speak. Change the chord in Arthur → Settings → Push to talk, or:
+
+```bash
+defaults write run.intercom.Arthur arthur.pttKeyCode -int 49
+defaults write run.intercom.Arthur arthur.pttModifierFlags -int 524288   # NSEvent.ModifierFlags.option
+```
+
+If the system hotkey API cannot register the chord, Arthur falls back to a global key monitor and then needs **Input Monitoring** (System Settings → Privacy & Security) so ⌥Space works while another app is focused. In-window Space push-to-talk is unchanged and never needs that permission.
+
 ## Build
 
 ```bash
