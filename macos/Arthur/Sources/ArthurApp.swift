@@ -7,6 +7,7 @@ struct ArthurApp: App {
   @State private var model = AppModel()
 
   var body: some Scene {
+    @Bindable var model = model
     WindowGroup("Arthur", id: "main") {
       ArthurWindowRoot()
         .environment(model)
@@ -30,6 +31,7 @@ struct ArthurApp: App {
           .keyboardShortcut(",", modifiers: [.command])
         Button("Ask Arthur") { model.focusComposer() }
           .keyboardShortcut("l", modifiers: [.command])
+        Toggle("Quiet Text Mode", isOn: $model.quietTextMode)
         Divider()
         Button(model.soundOn ? "Mute Sound" : "Unmute Sound") {
           model.soundOn.toggle()

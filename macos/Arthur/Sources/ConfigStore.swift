@@ -26,6 +26,7 @@ enum ConfigStore {
   private static let soundOnKey = "arthur.soundOn"
   private static let pttKeyCodeKey = "arthur.pttKeyCode"
   private static let pttModifiersKey = "arthur.pttModifierFlags"
+  private static let quietTextKey = "arthur.quietTextMode"
 
   static func load() -> ClientConfig {
     let path = resolvedConfigPath()
@@ -101,6 +102,14 @@ enum ConfigStore {
   static func savePTTHotkey(keyCode: UInt16, modifiers: UInt) {
     UserDefaults.standard.set(Int(keyCode), forKey: pttKeyCodeKey)
     UserDefaults.standard.set(Int(modifiers), forKey: pttModifiersKey)
+  }
+
+  static func loadQuietTextMode() -> Bool {
+    UserDefaults.standard.bool(forKey: quietTextKey)
+  }
+
+  static func saveQuietTextMode(_ on: Bool) {
+    UserDefaults.standard.set(on, forKey: quietTextKey)
   }
 
   static func loadTranscript(deviceId: String) -> [DiscussionLine] {

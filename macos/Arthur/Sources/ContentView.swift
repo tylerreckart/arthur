@@ -20,6 +20,9 @@ struct ContentView: View {
           .navigationTitle("Arthur")
           .toolbarTitleDisplayMode(.inline)
           .toolbar {
+            ToolbarItem(placement: .navigation) {
+              ContinuityChip()
+            }
             ToolbarItemGroup(placement: .primaryAction) {
               Button {
                 model.soundOn.toggle()
@@ -58,13 +61,10 @@ struct ContentView: View {
                   model.dismissError()
                 }
               }
-              if showReturnHint, !model.holding {
-                Text("Return to send · Shift-Return for a new line")
-                  .font(.caption2)
-                  .foregroundStyle(.tertiary)
-                  .padding(.horizontal, 6)
-              }
-              ComposerBar(typing: $typing)
+              ComposerBar(
+                typing: $typing,
+                showReturnHint: showReturnHint && !model.holding
+              )
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
@@ -266,7 +266,7 @@ struct ContentView: View {
           VStack(spacing: 8) { starterChips }
         }
       }
-      Text("Hold Talk or ⌥Space to speak · ⌘L to type")
+      Text(emptyFooter)
         .font(.caption)
         .foregroundStyle(.tertiary)
     }
@@ -283,23 +283,33 @@ struct ContentView: View {
     case .listening:
       return "Release to send"
     default:
-      return "Hold Talk or ⌥Space, or type below"
+      if model.quietTextMode {
+        return "Type below — Space won’t talk"
+      }
+      return "Hold Talk or \(model.pttHotkey.display), or type below"
     }
+  }
+
+  private var emptyFooter: String {
+    if model.quietTextMode {
+      return "Quiet text on · \(model.pttHotkey.display) still talks · ⌘L to type"
+    }
+    return "Hold Talk or \(model.pttHotkey.display) to speak · ⌘L to type"
   }
 
   @ViewBuilder
   private var starterChips: some View {
-    StarterChip("What’s on today?") {
-      model.applyStarter("What’s on my calendar today?", send: model.canSend)
-      if !model.canSend { typing = true }
-    }
     StarterChip("Remind me") {
       model.prefillDraft("Remind me ")
       typing = true
     }
-    StarterChip("What’s up?") {
-      model.applyStarter("What’s up?", send: model.canSend)
-      if !model.canSend { typing = true }
+    StarterChip("What’s on today?") {
+      model.prefillDraft("What’s on my calendar today?")
+      typing = true
+    }
+    StarterChip("What did we say?") {
+      model.prefillDraft("What did we say earlier?")
+      typing = true
     }
   }
 
@@ -308,6 +318,72 @@ struct ContentView: View {
     transaction.animation = .easeOut(duration: 0.18)
     withTransaction(transaction) {
       proxy.scrollTo("bottom", anchor: .bottom)
+    }
+  }
+}
+
+private struct ContinuityChip: View {
+  @Environment(AppModel.self) private var model
+  @State private var dim = false
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Circle()
+        .fill(dotColor)
+        .frame(width: 6, height: 6)
+        .opacity(shouldPulse && dim ? 0.35 : 1)
+      VStack(alignment: .leading, spacing: 0) {
+        Text(model.chromeLabel)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+        if let last = lastSurfaceLine {
+          Text(last)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+        }
+      }
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 3)
+    .background(.fill.quaternary, in: Capsule())
+    .animation(.easeInOut(duration: 0.2), value: model.chromeLabel)
+    .animation(.easeInOut(duration: 0.2), value: model.lastSurface)
+    .help(model.chromeDetail)
+    .onAppear { syncPulse() }
+    .onChange(of: shouldPulse) { _, _ in syncPulse() }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(model.chromeDetail)
+  }
+
+  private var lastSurfaceLine: String? {
+    guard model.phase == .idle, model.sharesHallwayMemory, let surface = model.lastSurface else {
+      return nil
+    }
+    return surface == .desk ? "Last from Mac" : "Last from hallway"
+  }
+
+  private var shouldPulse: Bool {
+    model.phase == .connecting || model.phase == .listening || model.phase == .thinking
+  }
+
+  private func syncPulse() {
+    if shouldPulse {
+      withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+        dim = true
+      }
+    } else {
+      withAnimation(.easeOut(duration: 0.15)) { dim = false }
+    }
+  }
+
+  private var dotColor: Color {
+    switch model.phase {
+    case .disconnected: return .red.opacity(0.8)
+    case .connecting: return .secondary
+    case .idle: return model.micGranted ? Color.green.opacity(0.85) : ArthurTheme.accent
+    case .listening, .thinking, .speaking: return ArthurTheme.accent
     }
   }
 }
@@ -435,26 +511,35 @@ private struct StarterChip: View {
 private struct ComposerBar: View {
   @Environment(AppModel.self) private var model
   @FocusState.Binding var typing: Bool
+  var showReturnHint = false
 
   var body: some View {
     @Bindable var model = model
 
-    HStack(alignment: .bottom, spacing: 8) {
+    HStack(alignment: .center, spacing: 8) {
       if model.holding {
         listeningAffordance
       } else {
-        TextField(
-          "Ask Arthur",
-          text: $model.draft,
-          prompt: Text("Ask Arthur"),
-          axis: .vertical
-        )
-        .textFieldStyle(.plain)
-        .font(.body)
-        .lineLimit(2...8)
-        .focused($typing)
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .accessibilityLabel("Ask Arthur")
+        QuietModeToggle()
+        VStack(alignment: .leading, spacing: 3) {
+          if showReturnHint {
+            Text("Return to send · Shift-Return for a new line")
+              .font(.caption2)
+              .foregroundStyle(.tertiary)
+          }
+          TextField(
+            "Ask Arthur",
+            text: $model.draft,
+            prompt: Text(model.quietTextMode ? "Ask Arthur — Space types" : "Ask Arthur"),
+            axis: .vertical
+          )
+          .textFieldStyle(.plain)
+          .font(.body)
+          .lineLimit(1...8)
+          .focused($typing)
+          .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+          .accessibilityLabel("Ask Arthur")
+        }
       }
 
       if model.canCancel {
@@ -474,11 +559,12 @@ private struct ComposerBar: View {
       ComposerCircle(
         systemImage: model.holding ? "waveform" : "mic.fill",
         enabled: model.canTalk,
+        active: model.holding || model.phase == .speaking,
         action: {}
       )
-      .help(model.holding ? "Release to send" : "Hold to talk · ⌥Space also talks")
+      .help(model.holding ? "Release to send" : "Hold to talk · \(model.pttHotkey.display) also talks")
       .accessibilityLabel(model.holding ? "Release" : "Talk")
-      .accessibilityHint("Hold to talk. Option-Space also starts push-to-talk.")
+      .accessibilityHint("Hold to talk. \(model.pttHotkey.display) also starts push-to-talk.")
       .simultaneousGesture(
         DragGesture(minimumDistance: 0)
           .onChanged { _ in
@@ -489,12 +575,11 @@ private struct ComposerBar: View {
           }
       )
     }
-    .padding(.leading, 16)
-    .padding(.trailing, 8)
-    .padding(.top, 10)
-    .padding(.bottom, 8)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 10)
     .animation(.easeInOut(duration: 0.16), value: model.holding)
     .animation(.easeInOut(duration: 0.16), value: model.canCancel)
+    .animation(.easeInOut(duration: 0.16), value: model.quietTextMode)
     .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22, style: .continuous))
   }
 
@@ -511,7 +596,7 @@ private struct ComposerBar: View {
       }
       Spacer(minLength: 0)
     }
-    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+    .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("Listening, release to send")
   }
@@ -539,6 +624,41 @@ private struct ListeningMeter: View {
   }
 }
 
+private struct QuietModeToggle: View {
+  @Environment(AppModel.self) private var model
+
+  var body: some View {
+    Button {
+      model.toggleQuietTextMode()
+    } label: {
+      HStack(spacing: 4) {
+        Image(systemName: model.quietTextMode ? "keyboard.fill" : "keyboard")
+          .font(.system(size: 12, weight: .semibold))
+        if model.quietTextMode {
+          Text("Text")
+            .font(.caption2.weight(.semibold))
+        }
+      }
+      .foregroundStyle(model.quietTextMode ? ArthurTheme.accent : .secondary)
+      .padding(.horizontal, model.quietTextMode ? 8 : 6)
+      .frame(height: 32)
+      .background(
+        model.quietTextMode ? ArthurTheme.accent.opacity(0.16) : Color.clear,
+        in: Capsule()
+      )
+    }
+    .buttonStyle(.plain)
+    .help(
+      model.quietTextMode
+        ? "Quiet text on — Space types. \(model.pttHotkey.display) still talks."
+        : "Quiet text — Space will not start talk"
+    )
+    .accessibilityLabel(model.quietTextMode ? "Quiet text on" : "Quiet text off")
+    .accessibilityHint("Turns off Space as push-to-talk. Option-Space and the menu bar still talk.")
+    .accessibilityAddTraits(model.quietTextMode ? [.isSelected] : [])
+  }
+}
+
 private struct ComposerStop: View {
   var action: () -> Void
 
@@ -550,10 +670,10 @@ private struct ComposerStop: View {
         Text("Stop")
           .font(.callout.weight(.semibold))
       }
-      .foregroundStyle(.white)
+      .foregroundStyle(.black)
       .padding(.horizontal, 11)
       .frame(height: 32)
-      .background(ArthurTheme.accent, in: Capsule())
+      .background(Color.white, in: Capsule())
     }
     .buttonStyle(.plain)
     .help("Stop Arthur")
@@ -564,18 +684,26 @@ private struct ComposerStop: View {
 private struct ComposerCircle: View {
   let systemImage: String
   var enabled = true
+  /// Listening / speaking — white fill instead of the idle orange.
+  var active = false
   var action: () -> Void
 
   var body: some View {
     Button(action: action) {
       Image(systemName: systemImage)
         .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(.white)
+        .foregroundStyle(active ? Color.black : .white)
         .frame(width: 32, height: 32)
-        .background(enabled ? ArthurTheme.accent : Color.secondary.opacity(0.35), in: Circle())
+        .background(circleFill, in: Circle())
     }
     .buttonStyle(.plain)
     .disabled(!enabled)
+  }
+
+  private var circleFill: Color {
+    if !enabled { return Color.secondary.opacity(0.35) }
+    if active { return .white }
+    return ArthurTheme.accent
   }
 }
 
@@ -766,7 +894,15 @@ struct SettingsView: View {
         } header: {
           Text("Shared memory")
         } footer: {
-          Text("Intercom maps each device onto one conversation. This stays in settings so the desk app can share memory with the hallway speaker.")
+          Text("Intercom maps each device onto one conversation. Pick the hallway device so this Mac shares memory with the wall button. The title-bar chip reads Shared with hallway when that session is connected.")
+        }
+
+        Section {
+          Toggle("Quiet text mode", isOn: $model.quietTextMode)
+        } header: {
+          Text("Typing")
+        } footer: {
+          Text("When on, Space will not start push-to-talk. \(model.pttHotkey.display) and the menu bar extra still talk.")
         }
 
         Section {
@@ -830,7 +966,12 @@ struct SettingsView: View {
   }
 
   private var pttHotkeyFooter: String {
-    var text = "Hold \(model.pttHotkey.display) from anywhere — the Arthur window does not need to be focused. Space still works as push-to-talk inside the window when you are not typing."
+    var text = "Hold \(model.pttHotkey.display) from anywhere — the Arthur window does not need to be focused."
+    if model.quietTextMode {
+      text += " Quiet text is on, so Space will not start talk inside the window."
+    } else {
+      text += " Space still works as push-to-talk inside the window when you are not typing."
+    }
     text += " The default shortcut uses the system hotkey API and does not need Accessibility or Input Monitoring."
     if DeskAccessory.shared.usingInputMonitoringFallback {
       text += " Arthur could not register that system hotkey, so it is listening with a global key monitor. Grant Input Monitoring to Arthur in System Settings → Privacy & Security if the shortcut does nothing while another app is focused."

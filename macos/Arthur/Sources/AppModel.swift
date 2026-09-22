@@ -11,6 +11,12 @@ enum ArthurPhase: Equatable {
   case speaking
 }
 
+/// Which surface last contributed a user turn to the shared conversation.
+enum ConversationSurface: Equatable {
+  case desk
+  case hallway
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -64,6 +70,19 @@ final class AppModel {
       DeskAccessory.shared.registerHotkey(pttHotkey)
     }
   }
+  /// When on, Space does not start push-to-talk. ⌥Space, the configured
+  /// global chord, the mic hold, and the menu bar extra still talk.
+  var quietTextMode = false {
+    didSet {
+      guard oldValue != quietTextMode else { return }
+      ConfigStore.saveQuietTextMode(quietTextMode)
+    }
+  }
+  /// Last user-turn surface we can infer: this Mac, or the hallway button
+  /// (session `last_turn_id` moved without a local send).
+  var lastSurface: ConversationSurface?
+  /// Device id echoed on the WebSocket `ready` frame, when present.
+  var socketDeviceId = ""
 
   private let client = IntercomClient()
   private let audio = AudioIO()
@@ -81,6 +100,7 @@ final class AppModel {
   private var pttFromKeyboard = false
   private var speakBackDismiss: DispatchWorkItem?
   private var activeObserver: NSObjectProtocol?
+  private var lastPolledTurnId = ""
 
   init() {
     config = ConfigStore.load()
@@ -91,10 +111,12 @@ final class AppModel {
     soundOn = ConfigStore.loadSoundOn()
     audio.soundEnabled = soundOn
     pttHotkey = PTTHotkey.load()
+    quietTextMode = ConfigStore.loadQuietTextMode()
     transcriptDeviceId = config.deviceId
     discussion = ConfigStore.loadTranscript(deviceId: transcriptDeviceId)
     draft = ConfigStore.loadDraft()
     loadMcpRegistry()
+    refreshSessionContinuity(initial: true)
     client.onEvent = { [weak self] event in
       Task { @MainActor in self?.handle(event) }
     }
@@ -190,7 +212,10 @@ final class AppModel {
     if config.deviceId != transcriptDeviceId {
       transcriptDeviceId = config.deviceId
       discussion = ConfigStore.loadTranscript(deviceId: transcriptDeviceId)
+      lastSurface = nil
+      lastPolledTurnId = ""
     }
+    refreshSessionContinuity(initial: true)
     persistMcpRegistry()
     audio.interruptPlayback()
     connect()
@@ -203,6 +228,7 @@ final class AppModel {
     if !keepId.isEmpty { config.deviceId = keepId }
     if !keepHost.isEmpty { config.host = keepHost }
     sessions = ConfigStore.loadSessions(dbPath: config.sessionDb)
+    refreshSessionContinuity(initial: true)
     loadMcpRegistry()
   }
 
@@ -275,6 +301,7 @@ final class AppModel {
   /// there is typed text, and they never clear `draft`.
   func pttDown(explicit: Bool = false) {
     guard canSend else { return }
+    if !explicit && quietTextMode { return }
     if !explicit && hasDraft { return }
     if phase == .speaking || phase == .thinking {
       client.sendCancel()
@@ -297,6 +324,7 @@ final class AppModel {
       become(.listening)
       setWork(.none)
       errorText = ""
+      lastSurface = .desk
     } catch {
       clearHearing()
       errorText = error.localizedDescription
@@ -341,6 +369,7 @@ final class AppModel {
     expectingReply = true
     setWork(.findingWords)
     become(.thinking)
+    lastSurface = .desk
     client.sendText(text)
   }
 
@@ -398,6 +427,55 @@ final class AppModel {
     if send { sendDraft() }
   }
 
+  func toggleQuietTextMode() {
+    quietTextMode.toggle()
+  }
+
+  /// Title-bar chip copy. Idle + shared device id reads as the hallway
+  /// conversation; other phases stay glanceable (Listening / Writing / …).
+  var chromeLabel: String {
+    switch phase {
+    case .disconnected: return "Disconnected"
+    case .connecting: return "Reaching intercom…"
+    case .listening: return "Listening"
+    case .thinking: return "Writing"
+    case .speaking: return "Speaking"
+    case .idle:
+      if sharesHallwayMemory { return "Shared with hallway" }
+      return micGranted ? "This Mac" : "Mic off"
+    }
+  }
+
+  /// Tooltip / VoiceOver detail: device id, conversation, last surface.
+  var chromeDetail: String {
+    var parts: [String] = [chromeLabel]
+    let device = socketDeviceId.isEmpty ? config.deviceId : socketDeviceId
+    if !device.isEmpty { parts.append(device) }
+    if conversationId > 0 { parts.append("conversation \(conversationId)") }
+    if let lastSurface {
+      parts.append(lastSurface == .desk ? "last from Mac" : "last from hallway")
+    }
+    return parts.joined(separator: " · ")
+  }
+
+  /// True when this desk session uses the hallway device identity (or the
+  /// same Arbiter conversation as a `nano-` / `speaker-` session).
+  var sharesHallwayMemory: Bool {
+    if Self.deviceLooksLikeHallway(config.deviceId) { return true }
+    if Self.deviceLooksLikeHallway(socketDeviceId) { return true }
+    guard conversationId > 0 else { return false }
+    return sessions.contains {
+      Self.deviceLooksLikeHallway($0.deviceId) && $0.conversationId == conversationId
+    }
+  }
+
+  static func deviceLooksLikeHallway(_ id: String) -> Bool {
+    let lower = id.lowercased()
+    return lower.hasPrefix("nano-")
+      || lower.hasPrefix("speaker-")
+      || lower.hasPrefix("hallway")
+  }
+
   private func beginHearing() {
     hearingLineId = UUID()
     hearingText = "…"
@@ -439,16 +517,20 @@ final class AppModel {
 
   private func handle(_ event: IntercomEvent) {
     switch event {
-    case .ready:
+    case .ready(_, let deviceId):
       reconnectWork?.cancel()
       reconnectWork = nil
       reconnectAttempt = 0
+      if !deviceId.isEmpty { socketDeviceId = deviceId }
       become(.idle)
       healthOK = true
       healthDetail = "connected"
       errorText = ""
+      refreshSessionContinuity(initial: lastPolledTurnId.isEmpty)
     case .accept(let id):
       turnId = id
+      lastSurface = .desk
+      if !id.isEmpty { lastPolledTurnId = id }
     case .pcm(let data):
       if expectingReply || phase == .speaking {
         become(.speaking)
@@ -517,6 +599,7 @@ final class AppModel {
       become(.disconnected)
       healthOK = false
       healthDetail = msg
+      socketDeviceId = ""
       guard wantsSocket else { return }
       if reconnectAttempt >= 1, errorText.isEmpty {
         errorText = msg.isEmpty ? "Disconnected from intercom." : msg
@@ -623,6 +706,7 @@ final class AppModel {
             self.healthDetail = "intercom not reachable on :\(self.config.httpPort)"
           }
         }
+        self.refreshSessionContinuity()
       }
     }.resume()
   }
@@ -632,8 +716,9 @@ final class AppModel {
   /// - ⌘L / ⌘K focus Ask Arthur (menu + this monitor).
   /// - Return sends, Shift-Return inserts a newline (single path; not onSubmit).
   /// - Escape calls `cancelTurn()` when `canCancel`.
-  /// - Space is PTT only when the composer is unfocused and the draft is empty.
-  /// Space is never stolen while typing.
+  /// - Space is PTT only when the composer is unfocused, the draft is empty,
+  ///   and quiet text mode is off.
+  /// Space is never stolen while typing or in quiet text mode.
   private func installKeys() {
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
       guard let self else { return event }
@@ -721,9 +806,34 @@ final class AppModel {
       return consumePTT(event, explicit: true)
     }
 
+    if quietTextMode { return event }
     if composerFocused { return event }
     if hasDraft { return event }
     return consumePTT(event, explicit: false)
+  }
+
+  /// Reload `device_sessions` and infer hallway vs desk when Intercom's
+  /// `last_turn_id` moves without a local send. No new protocol — same
+  /// SQLite the Settings device picker already reads.
+  private func refreshSessionContinuity(initial: Bool = false) {
+    sessions = ConfigStore.loadSessions(dbPath: config.sessionDb)
+    guard let match = sessions.first(where: { $0.deviceId == config.deviceId }) else {
+      return
+    }
+    if match.conversationId > 0 { conversationId = match.conversationId }
+    let remote = match.lastTurnId
+    guard !remote.isEmpty else { return }
+    if initial {
+      lastPolledTurnId = remote
+      return
+    }
+    guard remote != lastPolledTurnId else { return }
+    lastPolledTurnId = remote
+    if remote == turnId || expectingReply || holding {
+      lastSurface = .desk
+      return
+    }
+    lastSurface = .hallway
   }
 
   private func consumePTT(_ event: NSEvent, explicit: Bool) -> NSEvent? {
