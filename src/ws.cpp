@@ -373,7 +373,9 @@ void WsServer::accept_loop() {
     if (fd < 0) continue;
     int one = 1;
     ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+#ifdef SO_NOSIGPIPE
     ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
     std::thread([this, fd] { handle_client(fd); }).detach();
   }
 }
