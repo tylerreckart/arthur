@@ -50,6 +50,22 @@ final class AudioIO {
     if playEngine.isRunning { player.play() }
   }
 
+  /// RMS of 16-bit little-endian mono PCM, scaled into 0…1.
+  /// Mic capture uses a higher gain; TTS playback is already hotter.
+  static func pcmLevel(_ data: Data, gain: Double = 3.4) -> Double {
+    let count = data.count / 2
+    guard count > 0 else { return 0 }
+    return data.withUnsafeBytes { raw in
+      let samples = raw.bindMemory(to: Int16.self)
+      var sum = 0.0
+      for i in 0..<count {
+        let x = Double(samples[i]) / 32768.0
+        sum += x * x
+      }
+      return min(1, sqrt(sum / Double(count)) * gain)
+    }
+  }
+
   func playPCM(_ data: Data) {
     guard soundEnabled, !data.isEmpty else {
       leftover.removeAll(keepingCapacity: true)

@@ -11,7 +11,11 @@ struct ContentView: View {
   var body: some View {
     @Bindable var model = model
     ZStack(alignment: .top) {
-      SpeakingRipple(active: model.phase == .speaking, restrained: rippleRestrained)
+      SpeakingRipple(
+        active: model.phase == .speaking,
+        energy: model.speakLevel,
+        restrained: rippleRestrained
+      )
         .frame(maxWidth: .infinity)
         .frame(height: rippleRestrained ? 128 : 152)
         .allowsHitTesting(false)
