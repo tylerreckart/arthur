@@ -4,23 +4,21 @@ Arthur is my personal silicon assistant — local-first and available on the des
 
 This repository is the voice layer: capture, speech, devices, and the spoken reply. The spoken-agent definition is [`config/arthur.agent.json`](config/arthur.agent.json).
 
-STT and TTS run on the machine that hosts Intercom. [whisper.cpp](https://github.com/ggerganov/whisper.cpp) transcribes, [Kokoro](https://github.com/hexgrad/kokoro) speaks, and [Arbiter](https://github.com/tylerreckart/arbiter) (a separate process) stays text + SSE in the middle.
-
-## How it fits together
+STT and TTS run on the machine that hosts Intercom. [whisper.cpp](https://github.com/ggerganov/whisper.cpp) transcribes, [Kokoro](https://github.com/hexgrad/kokoro) speaks, and [Arbiter](https://github.com/tylerreckart/arbiter) handles reasoning.
 
 ```
-Physical device ──────┐
-                      │  PCM up while you hold talk
-Mac desk app ─────────┼─ ws://…:8093/v1/stream ── Intercom daemon (this repo)
-                      │  PCM down as Arthur answers      │
-                      │                                  ├── whisper.cpp  STT
-                      │                                  ├── Kokoro       TTS
-                      │                                  └── SQLite sessions
-                      │                                          │
-                      └──────── HTTP :8090 fallback ─────────────┤
-                                                                 │
-                                                          Arbiter :8080
-                                                            text + SSE
+Input ─┐
+       │  PCM up while you hold talk
+       ├─ ws://…:8093/v1/stream ── Intercom daemon (this repo)
+       │  PCM down as Arthur answers      │
+       │                                  ├── whisper.cpp  STT
+       │                                  ├── Kokoro       TTS
+       │                                  └── SQLite sessions
+       │                                          │
+       └──────── HTTP :8090 fallback ─────────────┤
+                                                  │
+                                            Arbiter :8080
+                                              text + SSE
 ```
 
 Hold talk, speak, release. The device streams 24 kHz mono s16le while the button is down, then sends `{"type":"end"}`. Intercom runs Whisper on the clip, then either answers locally (greetings, time, a few home commands) or sends the transcript to Arbiter. Kokoro starts speaking as sentences arrive; the same socket plays the PCM back. Idle sockets also take unsolicited speak-back — a scheduled reminder, spoken without another press.
