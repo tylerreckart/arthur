@@ -218,11 +218,25 @@ struct ContentView: View {
     var clusters: [TranscriptCluster] = []
     for line in model.discussion {
       if var last = clusters.last, last.fromYou == line.fromYou {
-        last.texts.append(line.text)
-        clusters[clusters.count - 1] = last
-      } else {
-        clusters.append(TranscriptCluster(id: line.id, fromYou: line.fromYou, texts: [line.text]))
+        let splitArthurTurn = !line.fromYou
+          && !last.turnId.isEmpty
+          && !line.turnId.isEmpty
+          && last.turnId != line.turnId
+        if !splitArthurTurn {
+          last.texts.append(line.text)
+          clusters[clusters.count - 1] = last
+          continue
+        }
       }
+      clusters.append(
+        TranscriptCluster(id: line.id, fromYou: line.fromYou, texts: [line.text], turnId: line.turnId)
+      )
+    }
+    for i in clusters.indices where !clusters[i].fromYou {
+      clusters[i].texts = ArthurProseJoin.coalesce(
+        clusters[i].texts,
+        oneBubble: !clusters[i].turnId.isEmpty
+      )
     }
     let ghost = model.hearingText.trimmingCharacters(in: .whitespacesAndNewlines)
     if !ghost.isEmpty {
@@ -241,8 +255,14 @@ struct ContentView: View {
     }
     if showForming {
       let live = model.formingText
-      if var last = clusters.last, !last.fromYou {
-        last.texts.append(live)
+      let liveTurn = model.liveArthurTurnId
+      if var last = clusters.last, !last.fromYou,
+         last.turnId.isEmpty || liveTurn.isEmpty || last.turnId == liveTurn {
+        if let prior = last.texts.last {
+          last.texts[last.texts.count - 1] = ArthurProseJoin.join(prior, live)
+        } else {
+          last.texts.append(live)
+        }
         last.liveLast = true
         clusters[clusters.count - 1] = last
       } else {
@@ -250,6 +270,7 @@ struct ContentView: View {
           id: model.formingLineId,
           fromYou: false,
           texts: [live],
+          turnId: liveTurn,
           liveLast: true
         ))
       }
@@ -261,7 +282,7 @@ struct ContentView: View {
     guard model.phase == .thinking || model.phase == .speaking else { return false }
     let live = fold(model.formingText)
     guard !live.isEmpty else { return false }
-    let spoken = fold(
+    let spoken = ArthurProseJoin.fold(
       model.discussion.reversed().filter { !$0.fromYou }.prefix(8).map(\.text).joined(separator: " ")
     )
     return spoken.isEmpty || !spoken.contains(live)
@@ -280,17 +301,11 @@ struct ContentView: View {
   }
 
   private var rippleRestrained: Bool {
-    model.discussion.count >= 4 || scrolledAway
+    model.discussion.filter(\.fromYou).count >= 2 || scrolledAway
   }
 
   private func fold(_ text: String) -> String {
-    let lowered = text.lowercased().map { ch -> Character in
-      if ch.isLetter || ch.isNumber { return ch }
-      return " "
-    }
-    return String(lowered)
-      .split(whereSeparator: \.isWhitespace)
-      .joined(separator: " ")
+    ArthurProseJoin.fold(text)
   }
 
   private var emptyState: some View {
@@ -750,6 +765,7 @@ private struct TranscriptCluster: Identifiable {
   let id: UUID
   let fromYou: Bool
   var texts: [String]
+  var turnId = ""
   var liveLast = false
 }
 
@@ -851,7 +867,7 @@ private struct ArthurCopy: View {
       Text(live ? "Arthur · writing" : "Arthur")
         .font(.caption2)
         .foregroundStyle(ArthurTheme.accent.opacity(0.8))
-      VStack(alignment: .leading, spacing: 10) {
+      VStack(alignment: .leading, spacing: 4) {
         ForEach(Array(texts.enumerated()), id: \.offset) { index, text in
           let streaming = live && index == texts.count - 1
           ArthurReply(text: text, live: streaming)
@@ -864,7 +880,7 @@ private struct ArthurCopy: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .animation(.easeOut(duration: 0.2), value: live)
     .contextMenu {
-      Button("Copy") { ArthurPasteboard.copy(texts.joined(separator: "\n\n")) }
+      Button("Copy") { ArthurPasteboard.copy(texts.joined(separator: " ")) }
       if showStop {
         Button("Stop") { model.cancelTurn() }
       }
@@ -872,7 +888,7 @@ private struct ArthurCopy: View {
     .accessibilityElement(children: .combine)
     .accessibilityLabel("Arthur, \(texts.joined(separator: " "))")
     .accessibilityAction(named: "Copy") {
-      ArthurPasteboard.copy(texts.joined(separator: "\n\n"))
+      ArthurPasteboard.copy(texts.joined(separator: " "))
     }
   }
 }

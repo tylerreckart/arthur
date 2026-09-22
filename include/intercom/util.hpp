@@ -66,6 +66,8 @@ std::string fold_phatic(std::string_view raw);
 // Pull completed sentences from a growing buffer; leaves incomplete tail in buf.
 // When early_words > 0 and no sentence boundary is ready, emit a chunk once
 // at least that many words are followed by a break (space or comma).
+// Leading leftover clause punctuation ("," / ";" / ":") from a prior cut is
+// stripped so the next emit does not start with a hanging comma.
 std::vector<std::string> flush_sentences(std::string& buf, bool final_flush,
                                          std::size_t early_words = 0);
 

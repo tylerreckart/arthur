@@ -9,23 +9,23 @@ struct SpeakingRipple: View {
 
   var body: some View {
     RippleMetal(active: active, energy: Float(energy), restrained: restrained)
-      .opacity(active ? (restrained ? 0.72 : 0.92) : 0)
+      .opacity(active ? (restrained ? 0.80 : 0.96) : 0)
       .mask {
         LinearGradient(
           stops: restrained
             ? [
               .init(color: .black, location: 0),
-              .init(color: .black.opacity(0.90), location: 0.14),
-              .init(color: .black.opacity(0.50), location: 0.40),
-              .init(color: .black.opacity(0.16), location: 0.62),
-              .init(color: .clear, location: 0.80),
+              .init(color: .black.opacity(0.94), location: 0.16),
+              .init(color: .black.opacity(0.64), location: 0.48),
+              .init(color: .black.opacity(0.28), location: 0.74),
+              .init(color: .clear, location: 0.94),
             ]
             : [
               .init(color: .black, location: 0),
-              .init(color: .black.opacity(0.96), location: 0.14),
-              .init(color: .black.opacity(0.74), location: 0.38),
-              .init(color: .black.opacity(0.32), location: 0.64),
-              .init(color: .clear, location: 0.90),
+              .init(color: .black.opacity(0.98), location: 0.18),
+              .init(color: .black.opacity(0.84), location: 0.46),
+              .init(color: .black.opacity(0.50), location: 0.74),
+              .init(color: .clear, location: 0.97),
             ],
           startPoint: .top,
           endPoint: .bottom
@@ -79,12 +79,12 @@ private struct SpeakMotion {
     }
     wasActive = active
 
-    let breath: Float = active ? 0.16 + 0.07 * (0.5 + 0.5 * sin(time * 0.48)) : 0
-    let target: Float = active ? min(1, 0.22 + raw * 0.58 + breath) : 0
-    let tau: Float = active ? 0.36 : 0.58
+    let breath: Float = active ? 0.14 + 0.08 * (0.5 + 0.5 * sin(time * 0.30)) : 0
+    let target: Float = active ? min(1, 0.28 + raw * 0.50 + breath) : 0
+    let tau: Float = active ? 0.52 : 0.78
     smooth += (target - smooth) * (1 - exp(-dt / tau))
 
-    onset *= exp(-dt / (active ? 0.90 : 0.40))
+    onset *= exp(-dt / (active ? 1.10 : 0.48))
 
     let gain: Float = restrained ? 0.70 : 1
     energy = min(1, smooth * gain)
@@ -138,7 +138,7 @@ final class RippleRenderer: NSObject, MTKViewDelegate {
     let dt = Float(min(now - last, 0.05))
     last = now
     let target: Float = active ? 1 : 0
-    let tau: Float = active ? 0.70 : 1.15
+    let tau: Float = active ? 0.90 : 1.35
     opacity += (target - opacity) * (1 - exp(-dt / tau))
 
     let time = Float(now - t0)
@@ -239,12 +239,14 @@ private enum RippleShaderSource {
   }
 
   // Soft vertical / diagonal Gaussian curtain. `sheets` is how many
-  // hang across the pane; `speed` is sheet-spacings per second (~8–12s).
+  // hang across the pane; `speed` is sheet-spacings per second (~20–30s).
+  // Wider `width` + fewer sheets = broad night-sky bands, not thin ribbons.
   float aurora_sheet(float x, float y, float t, float sheets, float phase,
                      float speed, float width, float tilt) {
     float xt = x + tilt * (1.0 - y);
-    xt += 0.050 * sin(y * 2.4 + t * 0.38 + phase);
-    xt += 0.022 * sin(y * 4.0 + t * 0.22 + phase * 1.3);
+    xt += 0.090 * sin(y * 1.05 + t * 0.14 + phase * 0.65);
+    xt += 0.048 * sin(y * 1.90 + t * 0.22 + phase);
+    xt += 0.016 * sin(y * 3.20 + t * 0.17 + phase * 1.35);
     float p = xt * sheets - t * speed - phase;
     float d = abs(p - round(p));
     return exp(-(d * d) / max(width * width, 0.0004));
@@ -253,28 +255,30 @@ private enum RippleShaderSource {
   fragment float4 ripple_fragment(VertexOut in [[stage_in]], constant Uniforms &u [[buffer(0)]]) {
     float2 uv = in.uv;
     float t = u.time;
-    float x = uv.x;
+    float x = uv.x + 0.040 * sin(t * 0.085);
     float y = uv.y;
     float ytop = saturate(1.0 - uv.y);
 
-    float width = 0.16 + 0.10 * u.energy + 0.03 * u.onset;
-    float bright = 0.50 + 0.32 * u.energy + 0.10 * u.onset;
+    float width = 0.38 + 0.16 * u.energy + 0.04 * u.onset;
+    float bright = 0.60 + 0.26 * u.energy + 0.08 * u.onset;
     if (u.restrained > 0.5) {
-      bright *= 0.62;
-      width *= 0.88;
+      bright *= 0.72;
+      width *= 0.96;
     }
 
-    float cGreen   = aurora_sheet(x, y, t, 2.05, 0.10, 0.085, width * 1.15, 0.18);
-    float cViolet  = aurora_sheet(x, y, t, 2.55, 0.62, 0.062, width * 0.92, 0.24);
-    float cTeal    = aurora_sheet(x, y, t, 1.55, 1.18, 0.048, width * 1.25, 0.12);
-    float cMagenta = aurora_sheet(x, y, t, 3.05, 1.85, 0.070, width * 0.72, 0.20);
+    float cWash    = aurora_sheet(x, y, t, 0.78, 0.04, 0.022, width * 1.85, 0.08);
+    float cGreen   = aurora_sheet(x, y, t, 1.08, 0.12, 0.038, width * 1.42, 0.12);
+    float cViolet  = aurora_sheet(x, y, t, 1.28, 0.58, 0.028, width * 1.22, 0.18);
+    float cTeal    = aurora_sheet(x, y, t, 0.90, 1.14, 0.024, width * 1.58, 0.09);
+    float cMagenta = aurora_sheet(x, y, t, 1.48, 1.72, 0.032, width * 1.02, 0.14);
 
-    float shimmer = 0.82 + 0.18 * sin(y * 1.8 + t * 0.52);
-    float height = saturate(0.20 + 0.80 * exp(-ytop * (0.95 - 0.22 * u.energy)));
+    float shimmer = 0.90 + 0.10 * sin(y * 1.15 + t * 0.28);
+    float height = saturate(0.36 + 0.64 * exp(-ytop * (0.46 - 0.14 * u.energy)));
+    cWash    *= shimmer * height;
     cGreen   *= shimmer * height;
-    cViolet  *= shimmer * (0.85 + 0.15 * height);
+    cViolet  *= shimmer * (0.88 + 0.12 * height);
     cTeal    *= shimmer * height;
-    cMagenta *= shimmer * (0.70 + 0.30 * height);
+    cMagenta *= shimmer * (0.76 + 0.24 * height);
 
     float3 green   = float3(0.22, 0.95, 0.48);
     float3 teal    = float3(0.12, 0.82, 0.76);
@@ -283,23 +287,25 @@ private enum RippleShaderSource {
     float3 indigo  = float3(0.07, 0.08, 0.18);
 
     float3 aur = green * (cGreen * bright)
-               + violet * (cViolet * bright * 0.90)
-               + teal * (cTeal * bright * 0.78)
-               + magenta * (cMagenta * bright * 0.70);
-    float cover = cGreen * 0.85 + cViolet * 0.70 + cTeal * 0.55 + cMagenta * 0.45;
+               + violet * (cViolet * bright * 0.86)
+               + teal * (cTeal * bright * 0.80)
+               + magenta * (cMagenta * bright * 0.58)
+               + indigo * (cWash * bright * 0.40);
+    float cover = cWash * 0.75 + cGreen * 0.78 + cViolet * 0.60
+                + cTeal * 0.52 + cMagenta * 0.36;
 
-    float sky = smoothstep(0.0, 0.045, ytop) * (1.0 - 0.72 * smoothstep(0.22, 0.92, ytop));
+    float sky = smoothstep(0.0, 0.022, ytop) * (1.0 - 0.42 * smoothstep(0.34, 0.98, ytop));
     if (u.restrained > 0.5) {
-      sky *= (1.0 - 0.35 * smoothstep(0.18, 0.70, ytop));
+      sky *= (1.0 - 0.20 * smoothstep(0.24, 0.82, ytop));
     }
-    float sides = smoothstep(0.0, 0.028, x) * smoothstep(1.0, 0.972, x);
+    float sides = smoothstep(0.0, 0.010, uv.x) * smoothstep(1.0, 0.990, uv.x);
 
-    float night = 0.09 * (0.70 + 0.30 * u.energy);
-    float a = saturate(u.opacity * sky * sides * (night + cover * bright * 0.62));
-    float cap = u.restrained > 0.5 ? 0.30 : 0.44;
-    a = min(a, cap + 0.03 * u.onset);
+    float night = 0.15 * (0.74 + 0.26 * u.energy);
+    float a = saturate(u.opacity * sky * sides * (night + cover * bright * 0.56));
+    float cap = u.restrained > 0.5 ? 0.36 : 0.52;
+    a = min(a, cap + 0.02 * u.onset);
 
-    float3 col = saturate(indigo * 0.40 + aur);
+    float3 col = saturate(indigo * 0.36 + aur);
     return float4(col * a, a);
   }
   """

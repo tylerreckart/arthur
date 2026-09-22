@@ -97,6 +97,32 @@ void test_early_words() {
   CHECK_EQ(short_buf, "Hello there");
 }
 
+void test_early_words_does_not_leave_leading_comma() {
+  std::string buf =
+      "Let me dig up what's recent, sir, and given the Lucy on your shelf";
+  auto first = intercom::flush_sentences(buf, false, 7);
+  CHECK_SIZE(first, 1);
+  CHECK_EQ(first[0], "Let me dig up what's recent, sir");
+  CHECK_EQ(buf.substr(0, 3), "and");
+  CHECK(buf.empty() || buf.front() != ',');
+
+  // Comma arrives in a later token after the 7-word cut (streaming).
+  std::string late = "Let me dig up what's recent, sir ";
+  auto cut = intercom::flush_sentences(late, false, 7);
+  CHECK_SIZE(cut, 1);
+  CHECK_EQ(cut[0], "Let me dig up what's recent, sir");
+  CHECK(late.empty());
+
+  std::string rest =
+      ", and given the Lucy on your shelf, I'll lean toward human origins.";
+  auto second = intercom::flush_sentences(rest, false, 7);
+  CHECK_SIZE(second, 1);
+  CHECK_EQ(second[0],
+           "and given the Lucy on your shelf, I'll lean toward human origins.");
+  CHECK(rest.empty());
+  CHECK(second[0].front() != ',');
+}
+
 }  // namespace
 
 int main() {
@@ -105,6 +131,7 @@ int main() {
   test_final_flush_unpunctuated();
   test_multiple_sentences();
   test_early_words();
+  test_early_words_does_not_leave_leading_comma();
   if (g_fails != 0) {
     std::cerr << g_fails << " failure(s)\n";
     return 1;

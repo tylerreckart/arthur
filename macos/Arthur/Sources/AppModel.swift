@@ -32,6 +32,10 @@ final class AppModel {
   /// Stable id for the in-flight Arthur bubble so `.forming` → `.said`
   /// does not remount the cluster (avoids a jump / flash).
   var formingLineId = UUID()
+  /// Shared by every Arthur `said` in the current turn (or live speak-back)
+  /// so later `accept` ids do not split one reply into two bubbles.
+  private var arthurReplyKey = ""
+  var liveArthurTurnId: String { arthurReplyKey }
   /// Live ghost for voice turns. `"…"` while listening / Whisper runs;
   /// real words if a `heard` partial ever arrives. Empty when idle.
   var hearingText = ""
@@ -321,6 +325,7 @@ final class AppModel {
       expectingReply = false
       typedThisTurn = false
       formingText = ""
+      resetArthurReplyKey()
       beginHearing()
       try audio.startCapture()
       holding = true
@@ -369,6 +374,7 @@ final class AppModel {
     appendDiscussion(fromYou: true, text: text)
     draft = ""
     formingText = ""
+    resetArthurReplyKey()
     clearHearing()
     typedThisTurn = true
     expectingReply = true
@@ -418,6 +424,7 @@ final class AppModel {
     expectingReply = false
     typedThisTurn = false
     formingText = ""
+    resetArthurReplyKey()
     clearHearing()
     setWork(.none)
     become(client.isConnected ? .idle : .disconnected)
@@ -501,11 +508,59 @@ final class AppModel {
     clearHearing()
   }
 
-  private func appendDiscussion(fromYou: Bool, text: String, id: UUID? = nil) {
+  private func resetArthurReplyKey() {
+    arthurReplyKey = ""
+  }
+
+  /// Key shared by every Arthur `said` in the in-flight turn (or speak-back).
+  private func bindArthurReplyKey() -> String {
+    if let notice = speakBack, notice.live {
+      let key = notice.runId.isEmpty ? "speak:\(notice.id.uuidString)" : "speak:\(notice.runId)"
+      arthurReplyKey = key
+      return key
+    }
+    if arthurReplyKey.isEmpty {
+      arthurReplyKey = !turnId.isEmpty ? "turn:\(turnId)" : "forming:\(formingLineId.uuidString)"
+    }
+    return arthurReplyKey
+  }
+
+  private var arthurTurnIsLive: Bool {
+    expectingReply || phase == .speaking || phase == .thinking || (speakBack?.live == true)
+  }
+
+  private func appendDiscussion(fromYou: Bool, text: String, id: UUID? = nil, turnId: String? = nil) {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
     if let last = discussion.last, last.fromYou == fromYou, last.text == trimmed { return }
-    discussion.append(DiscussionLine(fromYou: fromYou, text: trimmed, id: id ?? UUID()))
+
+    if !fromYou, let idx = discussion.indices.last, !discussion[idx].fromYou {
+      let last = discussion[idx]
+      let turnKey = turnId ?? bindArthurReplyKey()
+      let sameTurn = !last.turnId.isEmpty && last.turnId == turnKey
+      let liveOrphan = last.turnId.isEmpty && arthurTurnIsLive
+      if sameTurn || liveOrphan || ArthurProseJoin.shouldStitch(last.text, trimmed) {
+        if ArthurProseJoin.foldedContains(last.text, trimmed) { return }
+        let joined = ArthurProseJoin.join(last.text, trimmed)
+        discussion[idx] = DiscussionLine(
+          fromYou: false,
+          text: joined,
+          id: last.id,
+          turnId: last.turnId.isEmpty ? turnKey : last.turnId
+        )
+        persistTranscript()
+        return
+      }
+    }
+
+    discussion.append(
+      DiscussionLine(
+        fromYou: fromYou,
+        text: trimmed,
+        id: id ?? UUID(),
+        turnId: fromYou ? "" : (turnId ?? bindArthurReplyKey())
+      )
+    )
     if discussion.count > 40 {
       discussion.removeFirst(discussion.count - 40)
     }
@@ -560,12 +615,14 @@ final class AppModel {
       expectingReply = false
       typedThisTurn = false
       formingText = ""
+      resetArthurReplyKey()
       clearHearing()
       setWork(.none)
       if !ok, !err.isEmpty { errorText = err }
       become(client.isConnected ? .idle : .disconnected)
       if speakBack?.live == true { finishSpeakBack() }
     case .speak(let kind, let runId, let text):
+      resetArthurReplyKey()
       expectingReply = true
       become(.speaking)
       setWork(.speaking)
@@ -581,6 +638,7 @@ final class AppModel {
       if formingText.isEmpty {
         formingLineId = UUID()
       }
+      _ = bindArthurReplyKey()
       formingText = text
       if phase != .speaking, phase != .listening {
         become(.thinking)
@@ -604,6 +662,7 @@ final class AppModel {
       expectingReply = false
       typedThisTurn = false
       formingText = ""
+      resetArthurReplyKey()
       clearHearing()
       if speakBack?.live == true { finishSpeakBack() }
       become(.disconnected)
@@ -642,8 +701,8 @@ final class AppModel {
     guard !trimmed.isEmpty, var notice = speakBack, notice.live else { return }
     if notice.spokenText.isEmpty {
       notice.spokenText = trimmed
-    } else if notice.spokenText != trimmed, !notice.spokenText.contains(trimmed) {
-      notice.spokenText += " " + trimmed
+    } else if notice.spokenText != trimmed, !ArthurProseJoin.foldedContains(notice.spokenText, trimmed) {
+      notice.spokenText = ArthurProseJoin.join(notice.spokenText, trimmed)
     } else {
       return
     }

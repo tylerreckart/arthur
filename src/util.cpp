@@ -385,6 +385,30 @@ std::string fold_phatic(std::string_view raw) {
 
 namespace {
 
+bool is_clause_punct(char c) {
+  return c == ',' || c == ';' || c == ':';
+}
+
+std::size_t skip_space_and_clause_punct(std::string_view s, std::size_t i) {
+  while (i < s.size() &&
+         (std::isspace(static_cast<unsigned char>(s[i])) || is_clause_punct(s[i]))) {
+    ++i;
+  }
+  return i;
+}
+
+void strip_leading_clause_punct(std::string& s) {
+  const std::size_t i = skip_space_and_clause_punct(s, 0);
+  if (i > 0) s.erase(0, i);
+}
+
+void strip_trailing_clause_punct(std::string& s) {
+  while (!s.empty() &&
+         (std::isspace(static_cast<unsigned char>(s.back())) || is_clause_punct(s.back()))) {
+    s.pop_back();
+  }
+}
+
 // Index after the Nth word if a break follows it; 0 if the Nth word is still
 // growing or there are fewer than N words.
 std::size_t early_word_cut(std::string_view s, std::size_t n) {
@@ -425,6 +449,11 @@ std::size_t early_word_cut(std::string_view s, std::size_t n) {
 
 std::vector<std::string> flush_sentences(std::string& buf, bool final_flush,
                                          std::size_t early_words) {
+  // A previous early-word cut may leave ", and …" when the comma arrives
+  // in a later token. Drop leftover clause punctuation so the next `said`
+  // does not start with a hanging comma.
+  strip_leading_clause_punct(buf);
+
   std::vector<std::string> out;
   std::size_t start = 0;
   for (std::size_t i = 0; i < buf.size(); ++i) {
@@ -437,16 +466,13 @@ std::vector<std::string> flush_sentences(std::string& buf, bool final_flush,
       if (boundary) {
         std::string sentence = trim(buf.substr(start, i - start + 1));
         if (!sentence.empty()) out.push_back(std::move(sentence));
-        start = i + 1;
-        while (start < buf.size() &&
-               std::isspace(static_cast<unsigned char>(buf[start]))) {
-          ++start;
-        }
+        start = skip_space_and_clause_punct(buf, i + 1);
       }
     }
   }
   if (final_flush) {
     std::string rest = trim(buf.substr(start));
+    strip_leading_clause_punct(rest);
     if (!rest.empty()) out.push_back(std::move(rest));
     buf.clear();
     return out;
@@ -457,12 +483,9 @@ std::vector<std::string> flush_sentences(std::string& buf, bool final_flush,
     const std::size_t cut = early_word_cut(buf, early_words);
     if (cut > 0) {
       std::string chunk = trim(buf.substr(0, cut));
+      strip_trailing_clause_punct(chunk);
       if (!chunk.empty()) out.push_back(std::move(chunk));
-      std::size_t next = cut;
-      while (next < buf.size() &&
-             std::isspace(static_cast<unsigned char>(buf[next]))) {
-        ++next;
-      }
+      const std::size_t next = skip_space_and_clause_punct(buf, cut);
       buf.erase(0, next);
     }
   }
