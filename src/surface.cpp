@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <sstream>
 #include <vector>
 
@@ -636,4 +637,314 @@ WeatherExtract weather_from_open_meteo(std::string_view geocode_json,
   }
 }
 
+namespace {
+
+void replace_all(std::string* s, std::string_view from, std::string_view to) {
+  if (!s || from.empty()) return;
+  std::size_t pos = 0;
+  while ((pos = s->find(from, pos)) != std::string::npos) {
+    s->replace(pos, from.size(), to);
+    pos += to.size();
+  }
+}
+
+std::string decode_entities(std::string s) {
+  replace_all(&s, "&amp;", "&");
+  replace_all(&s, "&lt;", "<");
+  replace_all(&s, "&gt;", ">");
+  replace_all(&s, "&quot;", "\"");
+  replace_all(&s, "&apos;", "'");
+  replace_all(&s, "&#39;", "'");
+  replace_all(&s, "&#x27;", "'");
+  replace_all(&s, "&nbsp;", " ");
+  return s;
+}
+
+std::string strip_html(std::string_view raw) {
+  std::string out;
+  out.reserve(raw.size());
+  bool in_tag = false;
+  for (char c : raw) {
+    if (c == '<') {
+      in_tag = true;
+      continue;
+    }
+    if (c == '>') {
+      in_tag = false;
+      continue;
+    }
+    if (!in_tag) out.push_back(c);
+  }
+  return trim(decode_entities(out));
+}
+
+std::string xml_text(std::string_view block, std::string_view tag) {
+  const std::string open = "<" + std::string(tag);
+  auto start = block.find(open);
+  if (start == std::string_view::npos) return {};
+  start = block.find('>', start);
+  if (start == std::string_view::npos) return {};
+  ++start;
+  const std::string close = "</" + std::string(tag) + ">";
+  auto end = block.find(close, start);
+  if (end == std::string_view::npos) return {};
+  std::string inner(block.substr(start, end - start));
+  constexpr std::string_view cdata = "<![CDATA[";
+  if (inner.compare(0, cdata.size(), cdata) == 0) {
+    auto cend = inner.find("]]>");
+    if (cend != std::string::npos) {
+      inner = inner.substr(cdata.size(), cend - cdata.size());
+    }
+  }
+  return trim(decode_entities(strip_html(inner)));
+}
+
+std::string xml_attr(std::string_view block, std::string_view tag, std::string_view attr) {
+  const std::string open = "<" + std::string(tag);
+  auto start = block.find(open);
+  if (start == std::string_view::npos) return {};
+  auto gt = block.find('>', start);
+  if (gt == std::string_view::npos) return {};
+  const std::string head(block.substr(start, gt - start));
+  const std::string needle = std::string(attr) + "=\"";
+  auto a = head.find(needle);
+  if (a == std::string::npos) return {};
+  a += needle.size();
+  auto b = head.find('"', a);
+  if (b == std::string::npos) return {};
+  return decode_entities(std::string(head.substr(a, b - a)));
+}
+
+std::string split_source_from_title(std::string* title) {
+  if (!title) return {};
+  auto pos = title->rfind(" - ");
+  if (pos == std::string::npos || pos == 0) return {};
+  std::string source = trim(title->substr(pos + 3));
+  if (source.empty() || source.size() > 48) return {};
+  *title = trim(title->substr(0, pos));
+  return source;
+}
+
+std::string spoken_instrument_name(std::string_view symbol, std::string_view name) {
+  if (symbol == "^GSPC") return "The S and P";
+  if (symbol == "^DJI") return "The Dow";
+  if (symbol == "^IXIC") return "The Nasdaq";
+  if (symbol == "BTC-USD") return "Bitcoin";
+  if (symbol == "ETH-USD") return "Ethereum";
+  std::string n(name);
+  for (const char* tail : {" Inc.", " Inc", " Corporation", " Corp.", " Corp",
+                           " Company", " Co.", " Holdings", " Ltd.", " Ltd"}) {
+    if (n.size() > std::strlen(tail) &&
+        n.compare(n.size() - std::strlen(tail), std::strlen(tail), tail) == 0) {
+      n = trim(n.substr(0, n.size() - std::strlen(tail)));
+      break;
+    }
+  }
+  if (!n.empty()) return n;
+  return std::string(symbol);
+}
+
+const nlohmann::json* quote_result_array(const nlohmann::json& quote) {
+  if (quote.is_array()) return &quote;
+  if (!quote.is_object()) return nullptr;
+  if (quote.contains("quoteResponse") && quote["quoteResponse"].is_object() &&
+      quote["quoteResponse"].contains("result") &&
+      quote["quoteResponse"]["result"].is_array()) {
+    return &quote["quoteResponse"]["result"];
+  }
+  if (quote.contains("result") && quote["result"].is_array()) return &quote["result"];
+  return nullptr;
+}
+
+}  // namespace
+
+NewsExtract news_from_rss(std::string_view rss_xml, std::string_view topic, int max_items) {
+  NewsExtract out;
+  if (rss_xml.empty()) return out;
+  if (max_items <= 0) max_items = 8;
+
+  nlohmann::json items = nlohmann::json::array();
+  std::size_t pos = 0;
+  const std::string body(rss_xml);
+  while (static_cast<int>(items.size()) < max_items) {
+    auto item_start = body.find("<item", pos);
+    std::string close_tag = "</item>";
+    if (item_start == std::string::npos) {
+      item_start = body.find("<entry", pos);
+      close_tag = "</entry>";
+    }
+    if (item_start == std::string::npos) break;
+    auto item_end = body.find(close_tag, item_start);
+    if (item_end == std::string::npos) break;
+    item_end += close_tag.size();
+    const std::string item = body.substr(item_start, item_end - item_start);
+    pos = item_end;
+
+    std::string title = xml_text(item, "title");
+    if (title.empty()) continue;
+    std::string link = xml_text(item, "link");
+    if (link.empty()) link = xml_attr(item, "link", "href");
+    std::string source = xml_text(item, "source");
+    if (source.empty()) source = xml_text(item, "author");
+    if (source.empty()) source = split_source_from_title(&title);
+    if (title.empty()) continue;
+
+    std::string summary = xml_text(item, "description");
+    if (summary.empty()) summary = xml_text(item, "summary");
+    std::string published = xml_text(item, "pubDate");
+    if (published.empty()) published = xml_text(item, "published");
+    if (published.empty()) published = xml_text(item, "updated");
+
+    nlohmann::json row = {{"title", title}};
+    if (!summary.empty()) row["summary"] = summary;
+    if (!source.empty()) row["source"] = source;
+    if (!link.empty()) row["url"] = link;
+    if (!published.empty()) row["published_at"] = published;
+    items.push_back(std::move(row));
+  }
+  if (items.empty()) return out;
+
+  const std::string topic_s = trim(std::string(topic));
+  Surface surface;
+  surface.kind = SurfaceKind::News;
+  surface.version = kSurfaceVersion;
+  if (!topic_s.empty()) {
+    surface.title = title_case(topic_s);
+    surface.summary = "Latest on " + surface.title;
+  } else {
+    surface.title = "Top stories";
+    surface.summary = std::to_string(items.size()) +
+                      (items.size() == 1 ? " headline" : " headlines");
+  }
+  nlohmann::json payload = {{"items", items}};
+  if (!topic_s.empty()) payload["topic"] = topic_s;
+  surface.payload = std::move(payload);
+  surface.sources.push_back(SurfaceSource{"Google News", "https://news.google.com/"});
+
+  if (!topic_s.empty()) {
+    out.spoken = "Here's the latest on " + topic_s + ", sir.";
+  } else {
+    out.spoken = "Here are the top headlines, sir.";
+  }
+  out.surface = std::move(surface);
+  out.ok = true;
+  return out;
+}
+
+MarketsExtract markets_from_yahoo_quote(const nlohmann::json& quote) {
+  MarketsExtract out;
+  const nlohmann::json* rows = quote_result_array(quote);
+  if (!rows || rows->empty()) return out;
+
+  nlohmann::json instruments = nlohmann::json::array();
+  int up = 0;
+  int down = 0;
+  std::string lead_name;
+  double lead_price = 0;
+  bool lead_has_price = false;
+
+  for (const auto& row : *rows) {
+    if (!row.is_object()) continue;
+    const std::string symbol = first_string(row, {"symbol"});
+    if (symbol.empty()) continue;
+    const std::string name =
+        first_string(row, {"shortName", "displayName", "longName", "name"});
+    nlohmann::json inst = {{"symbol", symbol}};
+    if (!name.empty()) inst["name"] = name;
+
+    if (const auto* p =
+            first_number(row, {"regularMarketPrice", "price", "regularMarketPreviousClose"})) {
+      inst["price"] = as_number(*p);
+      if (!lead_has_price) {
+        lead_has_price = true;
+        lead_price = as_number(*p);
+        lead_name = spoken_instrument_name(symbol, name);
+      }
+    }
+    if (const auto* c = first_number(row, {"regularMarketChange", "change"})) {
+      const double ch = as_number(*c);
+      inst["change"] = ch;
+      if (ch > 0) ++up;
+      else if (ch < 0) ++down;
+    }
+    if (const auto* pct =
+            first_number(row, {"regularMarketChangePercent", "changePercent", "change_pct"})) {
+      inst["change_pct"] = as_number(*pct);
+    }
+    const std::string currency = first_string(row, {"currency"});
+    if (!currency.empty()) inst["currency"] = currency;
+    if (row.contains("regularMarketTime") && row["regularMarketTime"].is_number_integer()) {
+      inst["as_of"] = row["regularMarketTime"].get<std::int64_t>();
+    } else {
+      const std::string as_of = first_string(row, {"as_of", "regularMarketTime"});
+      if (!as_of.empty()) inst["as_of"] = as_of;
+    }
+    instruments.push_back(std::move(inst));
+  }
+  if (instruments.empty()) return out;
+
+  std::string market_summary;
+  if (up && down) {
+    market_summary = "Markets are mixed";
+  } else if (up) {
+    market_summary = "Markets are up";
+  } else if (down) {
+    market_summary = "Markets are down";
+  } else {
+    market_summary = "Here's the market";
+  }
+
+  Surface surface;
+  surface.kind = SurfaceKind::Markets;
+  surface.version = kSurfaceVersion;
+  if (instruments.size() == 1) {
+    const auto& first = instruments[0];
+    surface.title = first.value("symbol", "Markets");
+    if (first.contains("name")) {
+      surface.title = first.value("name", surface.title);
+    }
+    if (first.contains("price")) {
+      char buf[64];
+      std::snprintf(buf, sizeof(buf), "%.2f", first["price"].get<double>());
+      std::string change_s;
+      if (first.contains("change_pct")) {
+        const double pct = first["change_pct"].get<double>();
+        char pbuf[32];
+        std::snprintf(pbuf, sizeof(pbuf), "%+.2f%%", pct);
+        change_s = pbuf;
+      }
+      surface.summary = std::string(buf) + (change_s.empty() ? "" : ("  " + change_s));
+    } else {
+      surface.summary = market_summary;
+    }
+  } else {
+    surface.title = "Markets";
+    surface.summary = market_summary;
+  }
+
+  nlohmann::json payload = {{"instruments", instruments}};
+  payload["market_summary"] = market_summary;
+  surface.payload = std::move(payload);
+  surface.sources.push_back(
+      SurfaceSource{"Yahoo Finance", "https://finance.yahoo.com/"});
+
+  if (instruments.size() == 1 && lead_has_price) {
+    out.spoken = lead_name + " is at " + spoken_number(round_nearest(lead_price)) + ", sir.";
+  } else {
+    out.spoken = market_summary + ", sir.";
+  }
+  out.surface = std::move(surface);
+  out.ok = true;
+  return out;
+}
+
+MarketsExtract markets_from_yahoo_quote(std::string_view raw_json) {
+  try {
+    return markets_from_yahoo_quote(nlohmann::json::parse(std::string(raw_json)));
+  } catch (...) {
+    return {};
+  }
+}
+
 }  // namespace intercom
+

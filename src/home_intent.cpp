@@ -131,6 +131,8 @@ bool looks_like_timer(std::string_view t) {
 }
 
 bool looks_like_weather(std::string_view t) {
+  // "news about the weather" / "weather headlines" belong to briefing, not HA.
+  if (has_any(t, {"news", "headlines", "headline"})) return false;
   if (has_any(t, {"weather", "forecast", "temperature"})) return true;
   if (t == "is it raining" || t == "is it going to rain") return true;
   if (has_word(t, "raining") && (has_word(t, "is") || has_word(t, "it"))) return true;

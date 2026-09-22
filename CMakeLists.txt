@@ -47,6 +47,10 @@ add_executable(intercom
   src/home_client.cpp
   src/surface.cpp
   src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
   src/clock.cpp
   src/turn_pipeline.cpp
   src/http_server.cpp
@@ -135,6 +139,10 @@ add_executable(test_fast_path
   src/home_client.cpp
   src/surface.cpp
   src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
   src/clock.cpp
   src/util.cpp
 )
@@ -164,10 +172,25 @@ target_include_directories(test_home_intent PRIVATE
 )
 add_test(NAME test_home_intent COMMAND test_home_intent)
 
+add_executable(test_briefing_intent
+  tests/test_briefing_intent.cpp
+  src/briefing_intent.cpp
+  src/home_intent.cpp
+  src/util.cpp
+)
+target_include_directories(test_briefing_intent PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME test_briefing_intent COMMAND test_briefing_intent)
+
 add_executable(test_surface
   tests/test_surface.cpp
   src/surface.cpp
   src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
   src/home_intent.cpp
   src/util.cpp
 )
@@ -195,6 +218,10 @@ add_executable(test_sentence_tts
   src/home_client.cpp
   src/surface.cpp
   src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
   src/clock.cpp
   src/arbiter_client.cpp
   src/filler_client.cpp
@@ -229,6 +256,10 @@ add_executable(test_ws_stream
   src/home_client.cpp
   src/surface.cpp
   src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
   src/clock.cpp
   src/arbiter_client.cpp
   src/filler_client.cpp
@@ -268,6 +299,10 @@ add_executable(test_speakback
   src/home_client.cpp
   src/surface.cpp
   src/weather_client.cpp
+  src/briefing_intent.cpp
+  src/news_client.cpp
+  src/markets_client.cpp
+  src/http_fetch.cpp
   src/filler_client.cpp
 )
 target_include_directories(test_speakback PRIVATE

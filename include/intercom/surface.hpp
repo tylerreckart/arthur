@@ -46,13 +46,15 @@ nlohmann::json surface_event_body(std::string_view turn_id, const nlohmann::json
 // Full `{type:surface, turn_id, surface}` text frame.
 nlohmann::json surface_ws_event(std::string_view turn_id, const nlohmann::json& surface);
 
-// Spoken line + versioned weather card from a Home Assistant weather entity
-// state document (the same JSON HomeClient already fetches). No second request.
+// Spoken line + versioned desk card. Weather, news, and markets share this.
 struct WeatherExtract {
   std::string spoken;
   Surface surface;
   bool ok = false;
 };
+
+using NewsExtract = WeatherExtract;
+using MarketsExtract = WeatherExtract;
 
 WeatherExtract weather_from_ha_state(const nlohmann::json& ha,
                                      std::string_view title = "Home");
@@ -70,5 +72,14 @@ std::string weather_condition_from_wmo(int code, bool is_day = true);
 
 // Title-case / alias HA condition tokens ("partlycloudy" → "Partly cloudy").
 std::string weather_condition_label(std::string_view raw);
+
+// News v1 card from an RSS 2.0 / Atom-ish feed body (Google News or any
+// configured feed). Topic is optional ("news about X").
+NewsExtract news_from_rss(std::string_view rss_xml, std::string_view topic = {},
+                          int max_items = 8);
+
+// Markets v1 card from Yahoo v7 `quoteResponse` JSON (or a raw result array).
+MarketsExtract markets_from_yahoo_quote(const nlohmann::json& quote);
+MarketsExtract markets_from_yahoo_quote(std::string_view raw_json);
 
 }  // namespace intercom

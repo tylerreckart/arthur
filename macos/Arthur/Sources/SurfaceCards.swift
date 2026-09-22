@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Desk card for a versioned Intercom `surface`. Weather gets a typed
-/// layout; everything else (including unknown kinds) uses generic.
+/// Desk card for a versioned Intercom `surface`. Weather, news, and
+/// markets get typed layouts; everything else (including unknown kinds)
+/// uses generic.
 struct SurfaceCard: View {
   let surface: ChatSurface
   var preferCompact = false
@@ -25,6 +26,10 @@ struct SurfaceCard: View {
   private var full: some View {
     if surface.kind == .weather, let weather = surface.weather {
       WeatherCard(surface: surface, weather: weather, compact: false)
+    } else if surface.kind == .news, let news = surface.news {
+      NewsCard(surface: surface, news: news, compact: false)
+    } else if surface.kind == .markets, let markets = surface.markets {
+      MarketsCard(surface: surface, markets: markets, compact: false)
     } else {
       GenericSurfaceCard(surface: surface, compact: false)
     }
@@ -34,6 +39,10 @@ struct SurfaceCard: View {
   private var compact: some View {
     if surface.kind == .weather, let weather = surface.weather {
       WeatherCard(surface: surface, weather: weather, compact: true)
+    } else if surface.kind == .news, let news = surface.news {
+      NewsCard(surface: surface, news: news, compact: true)
+    } else if surface.kind == .markets, let markets = surface.markets {
+      MarketsCard(surface: surface, markets: markets, compact: true)
     } else {
       GenericSurfaceCard(surface: surface, compact: true)
     }
@@ -177,6 +186,233 @@ private struct WeatherCard: View {
         }
       }
     }
+  }
+
+  @ViewBuilder
+  private var sourceRow: some View {
+    if let source = surface.sources.first {
+      if let url = source.link {
+        Link(destination: url) {
+          Text(source.title.isEmpty ? url.host ?? "Source" : source.title)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+        }
+      } else if !source.title.isEmpty {
+        Text(source.title)
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .lineLimit(1)
+      }
+    }
+  }
+}
+
+private struct NewsCard: View {
+  let surface: ChatSurface
+  let news: NewsPayload
+  var compact = false
+
+  var body: some View {
+    if compact {
+      compactBody
+    } else {
+      fullBody
+    }
+  }
+
+  private var fullBody: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(surface.title.isEmpty ? "News" : surface.title)
+        .font(.system(.caption, design: .serif).weight(.semibold))
+        .foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 8) {
+        ForEach(news.items.prefix(6)) { item in
+          headlineRow(item, showSummary: false)
+        }
+      }
+      sourceRow
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 12)
+    .frame(maxWidth: 360, alignment: .leading)
+    .glassEffect(.regular, in: .rect(cornerRadius: 16, style: .continuous))
+  }
+
+  private var compactBody: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(surface.title.isEmpty ? "News" : surface.title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+      if let first = news.items.first {
+        Text(first.title)
+          .font(.callout)
+          .foregroundStyle(.primary)
+          .lineLimit(2)
+        Text(compactMeta(first))
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .lineLimit(1)
+      } else if !surface.summary.isEmpty {
+        Text(surface.summary)
+          .font(.callout)
+          .foregroundStyle(.primary)
+          .lineLimit(2)
+      }
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
+  }
+
+  @ViewBuilder
+  private func headlineRow(_ item: NewsItem, showSummary: Bool) -> some View {
+    let content = VStack(alignment: .leading, spacing: 2) {
+      Text(item.title)
+        .font(.callout)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
+      HStack(spacing: 6) {
+        if !item.source.isEmpty {
+          Text(item.source)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        if !item.relativeTime.isEmpty {
+          Text(item.relativeTime)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
+      }
+      if showSummary, !item.summary.isEmpty {
+        Text(item.summary)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
+    }
+    if let url = item.link {
+      Link(destination: url) { content }
+    } else {
+      content
+    }
+  }
+
+  private func compactMeta(_ item: NewsItem) -> String {
+    [item.source, item.relativeTime].filter { !$0.isEmpty }.joined(separator: "  ·  ")
+  }
+
+  @ViewBuilder
+  private var sourceRow: some View {
+    if let source = surface.sources.first {
+      if let url = source.link {
+        Link(destination: url) {
+          Text(source.title.isEmpty ? url.host ?? "Source" : source.title)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+        }
+      } else if !source.title.isEmpty {
+        Text(source.title)
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .lineLimit(1)
+      }
+    }
+  }
+}
+
+private struct MarketsCard: View {
+  let surface: ChatSurface
+  let markets: MarketsPayload
+  var compact = false
+
+  private static let up = Color(red: 0.40, green: 0.72, blue: 0.52)
+  private static let down = Color(red: 0.86, green: 0.40, blue: 0.42)
+
+  var body: some View {
+    if compact {
+      compactBody
+    } else {
+      fullBody
+    }
+  }
+
+  private var fullBody: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(surface.title.isEmpty ? "Markets" : surface.title)
+        .font(.system(.caption, design: .serif).weight(.semibold))
+        .foregroundStyle(.secondary)
+      VStack(spacing: 6) {
+        ForEach(markets.instruments.prefix(8)) { inst in
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+              Text(inst.symbol)
+                .font(.callout.weight(.semibold).monospaced())
+                .foregroundStyle(.primary)
+              if !inst.name.isEmpty, inst.name != inst.symbol {
+                Text(inst.name)
+                  .font(.caption2)
+                  .foregroundStyle(.tertiary)
+                  .lineLimit(1)
+              }
+            }
+            Spacer(minLength: 8)
+            Text(inst.priceText)
+              .font(.callout.monospacedDigit())
+              .foregroundStyle(.primary)
+            Text(inst.changeText)
+              .font(.caption.monospacedDigit().weight(.semibold))
+              .foregroundStyle(changeColor(inst))
+              .frame(minWidth: 58, alignment: .trailing)
+          }
+        }
+      }
+      sourceRow
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 12)
+    .frame(maxWidth: 360, alignment: .leading)
+    .glassEffect(.regular, in: .rect(cornerRadius: 16, style: .continuous))
+  }
+
+  private var compactBody: some View {
+    HStack(spacing: 10) {
+      Image(systemName: "chart.line.uptrend.xyaxis")
+        .font(.body)
+        .foregroundStyle(ArthurTheme.accent)
+        .symbolRenderingMode(.hierarchical)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(surface.title.isEmpty ? "Markets" : surface.title)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        Text(compactSummary)
+          .font(.callout)
+          .foregroundStyle(.primary)
+          .lineLimit(2)
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
+  }
+
+  private var compactSummary: String {
+    if !surface.summary.isEmpty { return surface.summary }
+    if !markets.marketSummary.isEmpty { return markets.marketSummary }
+    if let first = markets.instruments.first {
+      return "\(first.symbol)  \(first.priceText)  \(first.changeText)"
+    }
+    return "Markets"
+  }
+
+  private func changeColor(_ inst: MarketInstrument) -> Color {
+    if inst.isUp { return Self.up }
+    if inst.isDown { return Self.down }
+    return .secondary
   }
 
   @ViewBuilder

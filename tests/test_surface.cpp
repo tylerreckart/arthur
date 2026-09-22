@@ -1,4 +1,6 @@
 #include "intercom/surface.hpp"
+#include "intercom/markets_client.hpp"
+#include "intercom/news_client.hpp"
 #include "intercom/weather_client.hpp"
 
 #include <httplib.h>
@@ -229,6 +231,160 @@ int main() {
     CHECK(fetched.ok);
     CHECK(contains(fetched.surface.title, "Tokyo"));
     CHECK(fetched.surface.payload.value("temperature", 0) == 18);
+    svr.stop();
+    if (th.joinable()) th.join();
+  }
+
+  const char* rss = R"(<?xml version="1.0"?>
+<rss><channel>
+  <item>
+    <title>Fed holds rates - Reuters</title>
+    <link>https://example.com/fed</link>
+    <pubDate>Tue, 22 Sep 2026 12:00:00 GMT</pubDate>
+    <description>The Federal Reserve left rates unchanged.</description>
+    <source url="https://reuters.com">Reuters</source>
+  </item>
+  <item>
+    <title><![CDATA[Markets rally into the close]]></title>
+    <link>https://example.com/rally</link>
+    <pubDate>Tue, 22 Sep 2026 15:30:00 GMT</pubDate>
+  </item>
+</channel></rss>)";
+
+  auto news = intercom::news_from_rss(std::string_view{rss}, "markets", 8);
+  CHECK(news.ok);
+  CHECK(contains(news.spoken, "markets"));
+  CHECK(contains(news.spoken, "sir"));
+  CHECK(news.surface.kind == intercom::SurfaceKind::News);
+  CHECK(news.surface.version == 1);
+  const auto news_wire = intercom::surface_to_json(news.surface);
+  CHECK(news_wire.value("kind", "") == "news");
+  CHECK(news_wire["payload"].contains("items"));
+  CHECK(news_wire["payload"].value("topic", "") == "markets");
+  if (news_wire["payload"]["items"].is_array() && !news_wire["payload"]["items"].empty()) {
+    CHECK(contains(news_wire["payload"]["items"][0].value("title", ""), "Fed holds"));
+    CHECK(news_wire["payload"]["items"][0].value("source", "") == "Reuters");
+    CHECK(news_wire["payload"]["items"][0].value("url", "") == "https://example.com/fed");
+  }
+
+  auto top = intercom::news_from_rss(std::string_view{rss});
+  CHECK(top.ok);
+  CHECK(contains(top.spoken, "headlines"));
+  CHECK(top.surface.title == "Top stories");
+
+  auto empty_news = intercom::news_from_rss(std::string_view{"<rss></rss>"});
+  CHECK(!empty_news.ok);
+
+  const char* yahoo = R"({
+    "quoteResponse": {
+      "result": [
+        {
+          "symbol": "AAPL",
+          "shortName": "Apple Inc.",
+          "regularMarketPrice": 230.4,
+          "regularMarketChange": 1.5,
+          "regularMarketChangePercent": 0.66,
+          "currency": "USD",
+          "regularMarketTime": 1758547200
+        },
+        {
+          "symbol": "^GSPC",
+          "shortName": "S&P 500",
+          "regularMarketPrice": 5712.1,
+          "regularMarketChange": -12.2,
+          "regularMarketChangePercent": -0.21,
+          "currency": "USD"
+        }
+      ]
+    }
+  })";
+  auto quotes = intercom::markets_from_yahoo_quote(std::string_view{yahoo});
+  CHECK(quotes.ok);
+  CHECK(contains(quotes.spoken, "sir"));
+  CHECK(quotes.surface.kind == intercom::SurfaceKind::Markets);
+  const auto mkt_wire = intercom::surface_to_json(quotes.surface);
+  CHECK(mkt_wire.value("kind", "") == "markets");
+  CHECK(mkt_wire["payload"].contains("instruments"));
+  CHECK(mkt_wire["payload"].contains("market_summary"));
+  if (mkt_wire["payload"]["instruments"].is_array() &&
+      mkt_wire["payload"]["instruments"].size() >= 2) {
+    CHECK(mkt_wire["payload"]["instruments"][0].value("symbol", "") == "AAPL");
+    CHECK(mkt_wire["payload"]["instruments"][0].value("price", 0.0) > 230.0);
+    CHECK(mkt_wire["payload"]["instruments"][1].value("symbol", "") == "^GSPC");
+  }
+
+  auto one = intercom::markets_from_yahoo_quote(std::string_view{R"({
+    "quoteResponse": {"result": [{
+      "symbol": "AAPL",
+      "shortName": "Apple Inc.",
+      "regularMarketPrice": 230
+    }]}
+  })"});
+  CHECK(one.ok);
+  CHECK(contains(one.spoken, "Apple"));
+  CHECK(contains(one.spoken, "two hundred"));
+
+  auto no_quotes = intercom::markets_from_yahoo_quote(std::string_view{R"({"quoteResponse":{"result":[]}})"});
+  CHECK(!no_quotes.ok);
+
+  {
+    httplib::Server svr;
+    svr.Get("/rss", [](const httplib::Request&, httplib::Response& res) {
+      res.set_content(R"(<rss><channel><item>
+        <title>City council votes - Local</title>
+        <link>https://example.com/city</link>
+        <source>Local</source>
+      </item></channel></rss>)",
+                      "application/rss+xml");
+    });
+    svr.Get("/rss/search", [](const httplib::Request& req, httplib::Response& res) {
+      CHECK(req.get_param_value("q") == "tesla");
+      res.set_content(R"(<rss><channel><item>
+        <title>Tesla deliveries rise - Wire</title>
+        <link>https://example.com/tesla</link>
+        <source>Wire</source>
+      </item></channel></rss>)",
+                      "application/rss+xml");
+    });
+    svr.Get("/v7/finance/quote", [](const httplib::Request& req, httplib::Response& res) {
+      CHECK(req.get_param_value("symbols") == "AAPL");
+      res.set_content(R"({"quoteResponse":{"result":[{
+        "symbol":"AAPL","shortName":"Apple Inc.",
+        "regularMarketPrice":201.5,"regularMarketChange":2.0,
+        "regularMarketChangePercent":1.0,"currency":"USD"
+      }]}})",
+                      "application/json");
+    });
+    int port = svr.bind_to_any_port("127.0.0.1");
+    CHECK(port > 0);
+    std::thread th([&svr] { svr.listen_after_bind(); });
+    for (int i = 0; i < 50 && !svr.is_running(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const std::string origin = "http://127.0.0.1:" + std::to_string(port);
+
+    intercom::NewsConfig ncfg;
+    ncfg.google_news_rss = origin + "/rss";
+    ncfg.feeds = {{"Top stories", origin + "/rss"}};
+    ncfg.timeout_ms = 800;
+    intercom::NewsClient news_client(ncfg);
+    std::string nerr;
+    auto fetched_news = news_client.fetch("tesla", &nerr);
+    CHECK(fetched_news.ok);
+    CHECK(contains(fetched_news.surface.payload["items"][0].value("title", ""), "Tesla"));
+    auto top_news = news_client.fetch("", &nerr);
+    CHECK(top_news.ok);
+    CHECK(contains(top_news.surface.payload["items"][0].value("title", ""), "City council"));
+
+    intercom::MarketsConfig mcfg;
+    mcfg.quote_base = origin;
+    mcfg.timeout_ms = 800;
+    intercom::MarketsClient markets_client(mcfg);
+    std::string merr;
+    auto fetched_mkt = markets_client.fetch({"AAPL"}, &merr);
+    CHECK(fetched_mkt.ok);
+    CHECK(fetched_mkt.surface.payload["instruments"][0].value("price", 0.0) == 201.5);
+
     svr.stop();
     if (th.joinable()) th.join();
   }

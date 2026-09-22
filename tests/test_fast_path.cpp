@@ -1,6 +1,9 @@
 #include "intercom/fast_path.hpp"
+#include "intercom/briefing.hpp"
 #include "intercom/clock.hpp"
 #include "intercom/home_client.hpp"
+#include "intercom/markets_client.hpp"
+#include "intercom/news_client.hpp"
 #include "intercom/surface.hpp"
 #include "intercom/weather_client.hpp"
 
@@ -8,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -121,7 +125,12 @@ int main() {
   CHECK(intercom::withholds_fillers("what's the weather"));
   CHECK(intercom::withholds_fillers("set a timer for 5 minutes"));
   CHECK(intercom::withholds_fillers("what's the weather in Tokyo"));
+  CHECK(intercom::withholds_fillers("what's in the news"));
+  CHECK(intercom::withholds_fillers("how's the market"));
+  CHECK(!intercom::withholds_fillers("tell me a joke"));
   CHECK(!intercom::is_clock_query("what time is it in Tokyo"));
+  CHECK(!on.try_handle("what's in the news").has_value());
+  CHECK(!on.try_handle("how's the market").has_value());
 
   class FakeHome : public intercom::HomeClient {
    public:
@@ -230,6 +239,81 @@ int main() {
     }
   }
   CHECK(!place_wx.try_handle("what's the weather").has_value());
+
+  class FakeNews : public intercom::NewsClient {
+   public:
+    intercom::NewsExtract fetch(const std::string& topic, std::string*) const override {
+      const char* rss = R"(<rss><channel><item>
+        <title>Headline one - Wire</title>
+        <link>https://example.com/1</link>
+        <source>Wire</source>
+      </item></channel></rss>)";
+      return intercom::news_from_rss(std::string_view{rss}, topic, 8);
+    }
+  };
+
+  class FakeMarkets : public intercom::MarketsClient {
+   public:
+    intercom::MarketsExtract fetch(const std::vector<std::string>& symbols,
+                                   std::string*) const override {
+      std::string symbol = symbols.empty() ? "AAPL" : symbols[0];
+      if (symbol == "^GSPC") symbol = "AAPL";
+      nlohmann::json row = {{"symbol", symbol},
+                            {"shortName", "Apple Inc."},
+                            {"regularMarketPrice", 230},
+                            {"regularMarketChange", 1.2},
+                            {"regularMarketChangePercent", 0.5},
+                            {"currency", "USD"}};
+      nlohmann::json body;
+      body["quoteResponse"]["result"] = nlohmann::json::array({row});
+      return intercom::markets_from_yahoo_quote(body);
+    }
+  };
+
+  intercom::FastPath news_fp(true, intercom::HomeConfig{}, nullptr, nullptr,
+                             std::make_shared<FakeNews>(), nullptr);
+  auto news = news_fp.try_handle("what's in the news");
+  CHECK(news.has_value());
+  if (news) {
+    CHECK(news->kind == "news");
+    CHECK(contains(news->reply, "headlines") || contains(news->reply, "latest"));
+    CHECK(news->surface.is_object());
+    if (news->surface.is_object()) {
+      CHECK(news->surface.value("kind", "") == "news");
+      CHECK(news->surface["payload"].contains("items"));
+    }
+  }
+  auto tesla_news = news_fp.try_handle("news about Tesla");
+  CHECK(tesla_news.has_value());
+  if (tesla_news) {
+    CHECK(tesla_news->kind == "news");
+    CHECK(contains(tesla_news->surface.value("title", ""), "Tesla") ||
+          tesla_news->surface["payload"].value("topic", "") == "tesla");
+  }
+  auto social = news_fp.try_handle("hello");
+  CHECK(social.has_value());
+  if (social) CHECK(social->kind == "social");
+  CHECK(!news_fp.try_handle("what's the weather").has_value());
+
+  intercom::FastPath mkt_fp(true, intercom::HomeConfig{}, nullptr, nullptr, nullptr,
+                            std::make_shared<FakeMarkets>());
+  auto mkt = mkt_fp.try_handle("how's the market");
+  CHECK(mkt.has_value());
+  if (mkt) {
+    CHECK(mkt->kind == "markets");
+    CHECK(mkt->surface.is_object());
+    if (mkt->surface.is_object()) {
+      CHECK(mkt->surface.value("kind", "") == "markets");
+      CHECK(mkt->surface["payload"].contains("instruments"));
+    }
+  }
+  auto aapl = mkt_fp.try_handle("what's AAPL doing");
+  CHECK(aapl.has_value());
+  if (aapl) {
+    CHECK(aapl->kind == "markets");
+    CHECK(aapl->surface["payload"]["instruments"][0].value("symbol", "") == "AAPL");
+  }
+  CHECK(!mkt_fp.try_handle("turn on the kitchen lights").has_value());
 
   auto lights = ha.try_handle("turn on the kitchen lights");
   CHECK(lights.has_value());

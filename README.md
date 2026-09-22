@@ -33,7 +33,7 @@ Intercom maps each `X-Device-Id` to one Arbiter conversation in SQLite (`session
 
 **Hardware device** (`firmware/`, `hardware/`) — a thin audio endpoint, not the brain. Firmware for an ESP32-S3 (Arduino Nano ESP32 or a board with the same pin map) plus I2S mic (INMP441) and amp (MAX98357A) lives in `firmware/nano-esp32/intercom-endpoint`.
 
-Weather (home via Home Assistant, or any city via Open-Meteo) speaks a short line and emits a versioned `{type:surface}` card on the desk WebSocket. Voice-only devices ignore `surface`. See [`docs/api.md`](docs/api.md).
+Weather (home via Home Assistant, or any city via Open-Meteo), news (Google News RSS / configured feeds), and markets (Yahoo public quotes) each speak a short line and emit a versioned `{type:surface}` card on the desk WebSocket. Voice-only devices ignore `surface`. See [`docs/api.md`](docs/api.md).
 
 ## Build
 
@@ -89,7 +89,7 @@ Default ports, all on `listen_host` (example config uses `0.0.0.0`):
 
 `GET /health` is ready when Whisper and Kokoro are up; Arbiter may still be down. Set `whisper.use_server` / `kokoro.use_server` to `false` to force the one-shot CLI path.
 
-Optional `home` block: when `ha_base_url` and `ha_token` are set, hallway phrases for lights, volume, weather at home, timers, and the next alarm skip Arbiter.
+Optional `home` block: when `ha_base_url` and `ha_token` are set, hallway phrases for lights, volume, weather at home, timers, and the next alarm skip Arbiter. Optional `news` and `markets` blocks configure RSS feeds and the quote host; both work without API keys (see `config/intercom.example.json`).
 
 **Firmware.** Copy Wi-Fi and token into `firmware/nano-esp32/intercom-endpoint/secrets.h` (gitignored) or edit [`config.h`](firmware/nano-esp32/intercom-endpoint/config.h). `INTERCOM_HOST` must be the LAN address of the Intercom machine — not `127.0.0.1`. WebSocket is on `INTERCOM_WS_PORT` (8093); set it to `0` for HTTP-only. Flash the sketch in `firmware/nano-esp32/intercom-endpoint`. Contract: [`docs/device.md`](docs/device.md).
 

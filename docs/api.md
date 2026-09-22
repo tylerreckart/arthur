@@ -46,7 +46,7 @@ Body: raw mono PCM **s16le** (default 24 kHz).
 | `X-Device-Id` | Echo |
 | `X-Conversation-Id` | Present when a prior session exists |
 | `X-Fast-Path` | `1` when the turn skipped Arbiter |
-| `X-Fast-Path-Kind` | `social`, `clock`, `echo`, `timer`, `light_on`, `light_off`, `light_toggle`, `volume_up`, `volume_down`, `weather`, or `alarm` |
+| `X-Fast-Path-Kind` | `social`, `clock`, `echo`, `timer`, `light_on`, `light_off`, `light_toggle`, `volume_up`, `volume_down`, `weather`, `alarm`, `news`, or `markets` |
 | `X-Intercom-Error` | Error detail when present |
 
 Errors before streaming are JSON (`401`, `400`, `502`).
@@ -79,8 +79,10 @@ Fast-path phrases never call Arbiter:
 - Echo: `echo …`
 - Home (only when `home.ha_base_url` and `home.ha_token` are set): timers, lights, volume, weather at home, next alarm. A timer with no duration answers `How long, sir?` even without Home Assistant.
 - Place weather (`what's the weather in Tokyo`, `forecast for London`): Open-Meteo geocoding + forecast (no API key, no Home Assistant). Speaks a short line and emits a weather `surface`. Home weather without a place still uses HA when configured.
+- News (`what's in the news`, `news about Tesla`, `top headlines`): Google News RSS (or configured feeds). Speaks a short line and emits a news `surface`. No API key.
+- Markets (`how's the market`, `what's AAPL doing`, `bitcoin price`): Yahoo Finance public v7 quote JSON. Speaks a short line and emits a markets `surface`. No API key. Quote lookup failure falls through to Arthur for speech only.
 
-Social turns greet back and invite a follow-up. Home intents that match but have no Home Assistant config fall through to Arthur (except the bare timer prompt and place weather).
+Social turns greet back and invite a follow-up. Home intents that match but have no Home Assistant config fall through to Arthur (except the bare timer prompt and place weather). News and markets fast-path when Intercom is confident and the fetch succeeds; otherwise Arthur speaks and Intercom still attaches a card if it can fetch structured data for that turn.
 
 ## `POST /v1/turns/:turn_id/cancel`
 
@@ -186,10 +188,12 @@ PCM. Existing installs that never emit `surface` are unchanged.
 | Kind | Desk UI |
 |------|---------|
 | `weather` | Full card (condition, temperature, feel, forecast strip, source) |
+| `news` | Headline stack (title, source, relative time, tappable link) |
+| `markets` | Symbol / price / change rows (color for up/down) |
 | `generic` | Title + summary, optional key-values / markdown-ish body |
-| `article` / `news` / `source_list` / `markets` | Decoded, rendered as generic until a later slice |
+| `article` / `source_list` | Decoded, rendered as generic until a later slice |
 
-Unknown `kind` values decode as `generic`. They never drop the turn.
+Unknown `kind` values decode as `generic`. They never drop the turn. The wire kind is `markets` (not `finance`).
 
 Weather v1 uses the same schema for **home** and **place** forecasts. The
 LLM is not asked to emit card JSON. `turn_id` matches `{type:accept}` /
@@ -206,6 +210,80 @@ returns them. Voice-only devices ignore `surface`. If the place lookup
 fails, the turn falls through to Arthur for speech only.
 
 Hallway / compact windows collapse the card to a summary line.
+
+#### `news` v1
+
+Headlines. Intercom fetches RSS; the LLM is not asked for card JSON.
+
+```json
+{
+  "kind": "news",
+  "version": 1,
+  "title": "Top stories",
+  "summary": "8 headlines",
+  "payload": {
+    "topic": "tesla",
+    "items": [
+      {
+        "title": "Tesla deliveries rise",
+        "summary": "…",
+        "source": "Reuters",
+        "url": "https://…",
+        "published_at": "Tue, 22 Sep 2026 12:00:00 GMT"
+      }
+    ]
+  },
+  "sources": [{"title": "Google News", "url": "https://news.google.com/"}]
+}
+```
+
+| Query | Source | `surface.title` |
+|-------|--------|-----------------|
+| `what's in the news` / `top headlines` | First configured feed, or Google News top RSS | Feed `name` or `Top stories` |
+| `news about Tesla` / `headlines on Ukraine` | Google News RSS search (`{google_news_rss}/search?q=…`) | Topic (title-cased) |
+
+Provider is **Google News RSS** (no API key). Default and extra feeds live under `news.feeds` in `intercom.json`. `news.google_news_rss` is the search base (default `https://news.google.com/rss`). Headlines and links only — no article body scrape. If the feed is empty or unreachable, the turn falls through to Arthur for speech only.
+
+Hallway / compact windows show the first headline and hide the stack.
+
+#### `markets` v1
+
+Quotes. Kind name is `markets` in the schema and the Swift enum.
+
+```json
+{
+  "kind": "markets",
+  "version": 1,
+  "title": "Markets",
+  "summary": "Markets are mixed",
+  "payload": {
+    "market_summary": "Markets are mixed",
+    "instruments": [
+      {
+        "symbol": "AAPL",
+        "name": "Apple Inc.",
+        "price": 230.12,
+        "change": 1.5,
+        "change_pct": 0.65,
+        "currency": "USD",
+        "as_of": 1758547200
+      }
+    ]
+  },
+  "sources": [{"title": "Yahoo Finance", "url": "https://finance.yahoo.com/"}]
+}
+```
+
+| Query | Symbols | Source |
+|-------|---------|--------|
+| `how's the market` / `the markets` | `markets.default_symbols` (S&P, Dow, Nasdaq, BTC) | Yahoo v7 quote |
+| `what's AAPL doing` / `apple stock` / `bitcoin price` | Resolved tickers (`AAPL`, `BTC-USD`, …) | same |
+
+Provider is Yahoo Finance’s unofficial public quote JSON (`{quote_base}/v7/finance/quote?symbols=…`, default `https://query1.finance.yahoo.com`). No API key. It is the same family of endpoints Yahoo’s own pages use — not a licensed market-data product. Intercom sends a browser-like User-Agent; some networks still see `403`. Point `markets.quote_base` at a proxy if needed. Stooq CSV was considered (more ToS-friendly, weaker batch metadata) and was not used for v1.
+
+If quote lookup fails, Intercom does **not** invent prices — Arthur speaks without a card.
+
+Hallway / compact windows collapse to the summary line.
 
 Idle devices keep the socket open. When Arbiter fires a `/schedule` (or
 Intercom sees `run.completed` on `GET /v1/notifications/stream`), Intercom

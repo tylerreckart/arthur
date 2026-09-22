@@ -2,6 +2,8 @@
 
 #include "intercom/home.hpp"
 #include "intercom/home_client.hpp"
+#include "intercom/markets_client.hpp"
+#include "intercom/news_client.hpp"
 #include "intercom/weather_client.hpp"
 
 #include <nlohmann/json.hpp>
@@ -31,7 +33,9 @@ class FastPath {
  public:
   explicit FastPath(bool enabled);
   FastPath(bool enabled, HomeConfig home, std::shared_ptr<HomeClient> home_client,
-           std::shared_ptr<WeatherClient> weather_client = nullptr);
+           std::shared_ptr<WeatherClient> weather_client = nullptr,
+           std::shared_ptr<NewsClient> news_client = nullptr,
+           std::shared_ptr<MarketsClient> markets_client = nullptr);
 
   // Returns a local reply when the utterance should skip Arbiter.
   std::optional<FastPathResult> try_handle(const std::string& transcript) const;
@@ -41,6 +45,8 @@ class FastPath {
   HomeConfig home_;
   std::shared_ptr<HomeClient> home_client_;
   std::shared_ptr<WeatherClient> weather_client_;
+  std::shared_ptr<NewsClient> news_client_;
+  std::shared_ptr<MarketsClient> markets_client_;
 };
 
 }  // namespace intercom

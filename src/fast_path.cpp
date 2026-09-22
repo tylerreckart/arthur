@@ -1,4 +1,5 @@
 #include "intercom/fast_path.hpp"
+#include "intercom/briefing.hpp"
 #include "intercom/clock.hpp"
 #include "intercom/surface.hpp"
 #include "intercom/util.hpp"
@@ -81,18 +82,28 @@ bool is_clock_query(std::string_view transcript) {
 }
 
 bool withholds_fillers(std::string_view transcript) {
-  return is_social_turn(transcript) || is_clock_query(transcript) ||
-         parse_home_intent(transcript).has_value();
+  if (is_social_turn(transcript) || is_clock_query(transcript) ||
+      parse_home_intent(transcript).has_value()) {
+    return true;
+  }
+  if (auto briefing = parse_briefing_intent(transcript)) {
+    return briefing->confidence == BriefingConfidence::High;
+  }
+  return false;
 }
 
 FastPath::FastPath(bool enabled) : enabled_(enabled) {}
 
 FastPath::FastPath(bool enabled, HomeConfig home, std::shared_ptr<HomeClient> home_client,
-                   std::shared_ptr<WeatherClient> weather_client)
+                   std::shared_ptr<WeatherClient> weather_client,
+                   std::shared_ptr<NewsClient> news_client,
+                   std::shared_ptr<MarketsClient> markets_client)
     : enabled_(enabled),
       home_(std::move(home)),
       home_client_(std::move(home_client)),
-      weather_client_(std::move(weather_client)) {}
+      weather_client_(std::move(weather_client)),
+      news_client_(std::move(news_client)),
+      markets_client_(std::move(markets_client)) {}
 
 std::optional<FastPathResult> FastPath::try_handle(const std::string& transcript) const {
   if (!enabled_) return std::nullopt;
@@ -189,6 +200,36 @@ std::optional<FastPathResult> FastPath::try_handle(const std::string& transcript
       result.surface = std::move(action.surface);
     }
     return result;
+  }
+
+  if (auto briefing = parse_briefing_intent(transcript)) {
+    if (briefing->confidence == BriefingConfidence::High) {
+      if (briefing->kind == BriefingKind::News) {
+        if (!news_client_) return std::nullopt;
+        std::string err;
+        auto extracted = news_client_->fetch(briefing->topic, &err);
+        if (!extracted.ok) {
+          std::cerr << "intercom news: " << (err.empty() ? "failed" : err) << std::endl;
+          return std::nullopt;
+        }
+        FastPathResult result{std::move(extracted.spoken), "news"};
+        result.surface = surface_to_json(extracted.surface);
+        return result;
+      }
+      if (briefing->kind == BriefingKind::Markets) {
+        if (!markets_client_) return std::nullopt;
+        std::string err;
+        auto extracted = markets_client_->fetch(briefing->symbols, &err);
+        if (!extracted.ok) {
+          std::cerr << "intercom markets: " << (err.empty() ? "failed" : err)
+                    << std::endl;
+          return std::nullopt;
+        }
+        FastPathResult result{std::move(extracted.spoken), "markets"};
+        result.surface = surface_to_json(extracted.surface);
+        return result;
+      }
+    }
   }
 
   return std::nullopt;

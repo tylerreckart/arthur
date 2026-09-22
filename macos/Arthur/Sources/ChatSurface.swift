@@ -95,11 +95,22 @@ struct ChatSurface: Equatable, Codable, Identifiable, Hashable {
     return WeatherPayload(payload)
   }
 
+  var news: NewsPayload? {
+    guard kind == .news else { return nil }
+    return NewsPayload(payload)
+  }
+
+  var markets: MarketsPayload? {
+    guard kind == .markets else { return nil }
+    return MarketsPayload(payload)
+  }
+
   /// Primitive payload pairs for the generic card.
   var fields: [(label: String, value: String)] {
     guard case .object(let obj) = payload else { return [] }
     let skip: Set<String> = [
       "hours", "days", "forecast", "body", "markdown", "text", "html",
+      "items", "instruments",
     ]
     var out: [(String, String)] = []
     for key in obj.keys.sorted() {
@@ -263,6 +274,144 @@ enum WeatherSymbol {
       guard let first = part.first else { return "" }
       return String(first).uppercased() + part.dropFirst()
     }.joined(separator: " ")
+  }
+}
+
+struct NewsItem: Equatable, Hashable, Identifiable {
+  var title: String
+  var summary: String
+  var source: String
+  var url: String
+  var publishedAt: String
+
+  var id: String { url.isEmpty ? title : url }
+
+  var link: URL? {
+    let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, let url = URL(string: trimmed),
+          let scheme = url.scheme?.lowercased(),
+          scheme == "http" || scheme == "https"
+    else { return nil }
+    return url
+  }
+
+  var relativeTime: String {
+    guard let date = Self.parsePublished(publishedAt) else { return "" }
+    let fmt = RelativeDateTimeFormatter()
+    fmt.unitsStyle = .abbreviated
+    return fmt.localizedString(for: date, relativeTo: Date())
+  }
+
+  private static func parsePublished(_ raw: String) -> Date? {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let iso = ISO8601DateFormatter()
+    iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = iso.date(from: trimmed) { return date }
+    iso.formatOptions = [.withInternetDateTime]
+    if let date = iso.date(from: trimmed) { return date }
+    let rfc = DateFormatter()
+    rfc.locale = Locale(identifier: "en_US_POSIX")
+    rfc.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+    if let date = rfc.date(from: trimmed) { return date }
+    rfc.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+    return rfc.date(from: trimmed)
+  }
+}
+
+struct NewsPayload: Equatable, Hashable {
+  var items: [NewsItem]
+  var topic: String
+
+  init(_ value: JSONValue) {
+    let obj = value.object
+    topic = obj["topic"]?.displayString ?? ""
+    items = obj["items"]?.array.compactMap(NewsItem.init) ?? []
+  }
+}
+
+private extension NewsItem {
+  init?(_ value: JSONValue) {
+    let obj = value.object
+    let title = obj["title"]?.displayString ?? ""
+    if title.isEmpty { return nil }
+    self.init(
+      title: title,
+      summary: obj["summary"]?.displayString ?? "",
+      source: obj["source"]?.displayString ?? "",
+      url: obj["url"]?.displayString ?? "",
+      publishedAt: obj["published_at"]?.displayString ?? ""
+    )
+  }
+}
+
+struct MarketInstrument: Equatable, Hashable, Identifiable {
+  var symbol: String
+  var name: String
+  var price: Double?
+  var change: Double?
+  var changePct: Double?
+  var currency: String
+  var asOf: String
+
+  var id: String { symbol }
+
+  var priceText: String {
+    guard let price else { return "—" }
+    return MarketInstrument.formatPrice(price, currency: currency)
+  }
+
+  var changeText: String {
+    guard let changePct else {
+      guard let change else { return "" }
+      return String(format: "%+.2f", change)
+    }
+    return String(format: "%+.2f%%", changePct)
+  }
+
+  var isUp: Bool { (changePct ?? change ?? 0) > 0 }
+  var isDown: Bool { (changePct ?? change ?? 0) < 0 }
+
+  static func formatPrice(_ price: Double, currency: String) -> String {
+    let fmt = NumberFormatter()
+    fmt.numberStyle = .decimal
+    fmt.minimumFractionDigits = price >= 1000 ? 0 : 2
+    fmt.maximumFractionDigits = 2
+    let body = fmt.string(from: NSNumber(value: price)) ?? String(format: "%.2f", price)
+    if currency.isEmpty || currency == "USD" { return body }
+    return "\(body) \(currency)"
+  }
+}
+
+struct MarketsPayload: Equatable, Hashable {
+  var instruments: [MarketInstrument]
+  var marketSummary: String
+
+  init(_ value: JSONValue) {
+    let obj = value.object
+    marketSummary = obj["market_summary"]?.displayString ?? ""
+    instruments = obj["instruments"]?.array.compactMap(MarketInstrument.init) ?? []
+  }
+}
+
+private extension MarketInstrument {
+  init?(_ value: JSONValue) {
+    let obj = value.object
+    let symbol = obj["symbol"]?.displayString ?? ""
+    if symbol.isEmpty { return nil }
+    var asOf = obj["as_of"]?.displayString ?? ""
+    if asOf.isEmpty, let unix = obj["as_of"]?.intValue, unix > 0 {
+      asOf = String(unix)
+    }
+    self.init(
+      symbol: symbol,
+      name: obj["name"]?.displayString ?? "",
+      price: obj["price"]?.doubleValue,
+      change: obj["change"]?.doubleValue,
+      changePct: obj["change_pct"]?.doubleValue,
+      currency: obj["currency"]?.displayString ?? "",
+      asOf: asOf
+    )
   }
 }
 

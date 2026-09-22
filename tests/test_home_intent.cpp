@@ -102,6 +102,8 @@ int main() {
 
   CHECK(!intercom::parse_home_intent("hello").has_value());
   CHECK(!intercom::parse_home_intent("what time is it").has_value());
+  CHECK(!intercom::parse_home_intent("news about the weather").has_value());
+  CHECK(!intercom::parse_home_intent("what's in the news").has_value());
 
   auto up = intercom::parse_home_intent("turn the volume up");
   CHECK(up.has_value());

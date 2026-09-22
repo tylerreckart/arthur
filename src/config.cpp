@@ -136,6 +136,46 @@ Config Config::load(const std::string& path) {
     }
   }
 
+  if (j.contains("news") && j["news"].is_object()) {
+    const auto& n = j["news"];
+    c.news.timeout_ms = require_int(n, "timeout_ms", c.news.timeout_ms);
+    c.news.max_items = require_int(n, "max_items", c.news.max_items);
+    c.news.google_news_rss =
+        require_string(n, "google_news_rss", c.news.google_news_rss);
+    if (n.contains("feeds") && n["feeds"].is_array()) {
+      for (const auto& feed : n["feeds"]) {
+        if (!feed.is_object()) continue;
+        NewsFeed row;
+        row.name = require_string(feed, "name", "");
+        row.url = require_string(feed, "url", "");
+        if (!row.url.empty()) c.news.feeds.push_back(std::move(row));
+      }
+    }
+  }
+  if (c.news.feeds.empty()) {
+    c.news.feeds.push_back(
+        NewsFeed{"Top stories",
+                 c.news.google_news_rss + "?hl=en-US&gl=US&ceid=US:en"});
+  }
+
+  if (j.contains("markets") && j["markets"].is_object()) {
+    const auto& m = j["markets"];
+    c.markets.timeout_ms = require_int(m, "timeout_ms", c.markets.timeout_ms);
+    c.markets.quote_base = require_string(m, "quote_base", c.markets.quote_base);
+    if (m.contains("default_symbols") && m["default_symbols"].is_array()) {
+      c.markets.default_symbols.clear();
+      for (const auto& sym : m["default_symbols"]) {
+        if (sym.is_string()) {
+          const std::string s = trim(sym.get<std::string>());
+          if (!s.empty()) c.markets.default_symbols.push_back(s);
+        }
+      }
+      if (c.markets.default_symbols.empty()) {
+        c.markets.default_symbols = {"^GSPC", "^DJI", "^IXIC", "BTC-USD"};
+      }
+    }
+  }
+
   if (j.contains("devices") && j["devices"].is_object()) {
     for (auto it = j["devices"].begin(); it != j["devices"].end(); ++it) {
       if (it.value().is_string()) {
