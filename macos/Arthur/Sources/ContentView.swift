@@ -40,6 +40,17 @@ struct ContentView: View {
             }
           }
           .scrollEdgeEffectStyle(.soft, for: .top)
+          .safeAreaBar(edge: .top) {
+            if let notice = model.speakBack {
+              SpeakBackBanner(notice: notice) {
+                model.dismissSpeakBack()
+              }
+              .padding(.horizontal, 16)
+              .padding(.bottom, 4)
+              .transition(.move(edge: .top).combined(with: .opacity))
+            }
+          }
+          .animation(.easeInOut(duration: 0.22), value: model.speakBack?.id)
           .safeAreaBar(edge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
               if !model.errorText.isEmpty {
@@ -305,6 +316,48 @@ private struct WorkTrail: View {
       }
     }
     .accessibilityLabel(line)
+  }
+}
+
+private struct SpeakBackBanner: View {
+  let notice: SpeakBackNotice
+  var dismiss: () -> Void
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: notice.muted ? "bell.slash.fill" : "bell.fill")
+        .foregroundStyle(ArthurTheme.accent)
+        .padding(.top, 1)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(notice.title)
+          .font(.callout.weight(.semibold))
+          .foregroundStyle(.primary)
+        Text(notice.message)
+          .font(.callout)
+          .foregroundStyle(.primary)
+          .textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        if notice.muted, !notice.spokenText.isEmpty {
+          Text("Arthur spoke a reminder (muted)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+      Button(action: dismiss) {
+        Image(systemName: "xmark")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+          .frame(width: 18, height: 18)
+      }
+      .buttonStyle(.plain)
+      .help("Dismiss")
+      .accessibilityLabel("Dismiss reminder")
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("\(notice.title), \(notice.message)")
   }
 }
 

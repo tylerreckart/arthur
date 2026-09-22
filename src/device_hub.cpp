@@ -124,11 +124,13 @@ bool DeviceHub::speak_on(const std::shared_ptr<Conn>& c, const std::string& text
   if (!c || !tts_) return false;
   const std::string spoken = to_speakable(text);
   if (spoken.empty()) return true;
-  nlohmann::json start = {{"type", "speak"}, {"kind", kind}};
+  nlohmann::json start = {{"type", "speak"}, {"kind", kind}, {"text", spoken}};
   if (run_id > 0) start["run_id"] = run_id;
   if (!write_frame(c, static_cast<std::uint8_t>(WsOpcode::Text), start.dump())) {
     return false;
   }
+  nlohmann::json said = {{"type", "said"}, {"text", spoken}};
+  write_frame(c, static_cast<std::uint8_t>(WsOpcode::Text), said.dump());
   std::string err;
   const bool ok = tts_->synthesize(
       spoken,

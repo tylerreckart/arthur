@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Arthur needs the microphone so you can speak to him from this Mac, the same way the hallway speaker does.</string>
+	<key>NSUserNotificationsUsageDescription</key>
+	<string>Arthur can notify you when a scheduled reminder is spoken and the window is in the background.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
