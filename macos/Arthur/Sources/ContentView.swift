@@ -259,7 +259,13 @@ struct ContentView: View {
       if var last = clusters.last, !last.fromYou,
          last.turnId.isEmpty || liveTurn.isEmpty || last.turnId == liveTurn {
         if let prior = last.texts.last {
-          last.texts[last.texts.count - 1] = ArthurProseJoin.join(prior, live)
+          // Only stitch a remainder *prefix*. A sliding tail that merely
+          // overlaps the said would replace the bubble and drop mid-reply words.
+          if ArthurProseJoin.shouldStitch(prior, live) || ArthurProseJoin.isGrowingPrefix(prior, live) {
+            last.texts[last.texts.count - 1] = ArthurProseJoin.join(prior, live)
+          } else if !ArthurProseJoin.alreadySpoken(prior, live) {
+            last.texts.append(live)
+          }
         } else {
           last.texts.append(live)
         }
@@ -282,9 +288,14 @@ struct ContentView: View {
     guard model.phase == .thinking || model.phase == .speaking else { return false }
     let live = fold(model.formingText)
     guard !live.isEmpty else { return false }
-    let spoken = ArthurProseJoin.fold(
-      model.discussion.reversed().filter { !$0.fromYou }.prefix(8).map(\.text).joined(separator: " ")
-    )
+    // Only the current Arthur bubble — a phrase in an older reply must not
+    // hide this turn's forming remainder (that looked like dropped stream).
+    let lastArthur = model.discussion.last(where: { !$0.fromYou })
+    if let lastArthur, !lastArthur.turnId.isEmpty, !model.liveArthurTurnId.isEmpty,
+       lastArthur.turnId != model.liveArthurTurnId {
+      return true
+    }
+    let spoken = ArthurProseJoin.fold(lastArthur?.text ?? "")
     return spoken.isEmpty || !spoken.contains(live)
   }
 

@@ -34,6 +34,10 @@ struct DiscussionLine: Identifiable, Equatable, Codable {
 /// often cuts after ~7 words, `to_speakable` then appends a period, and
 /// the next chunk arrives as `", and …"` — three spaced paragraphs for
 /// one reply. Join those at append time and again when clustering history.
+///
+/// Join never drops unique words from either side. Loose substring
+/// containment used to treat a forming *tail* as a replacement for the
+/// accumulated `said`, which made mid-reply tokens disappear.
 enum ArthurProseJoin {
   private static let continuations: Set<String> = [
     "and", "but", "or", "so", "yet", "nor", "then", "though",
@@ -45,8 +49,8 @@ enum ArthurProseJoin {
     let right = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
     if left.isEmpty { return right }
     if right.isEmpty { return left }
-    if foldedContains(left, right) { return left }
-    if foldedContains(right, left) { return right }
+    if alreadySpoken(left, right) { return left }
+    if isGrowingPrefix(left, right) { return right }
     return stitch(left, right)
   }
 
@@ -71,7 +75,7 @@ enum ArthurProseJoin {
     let left = previous.trimmingCharacters(in: .whitespacesAndNewlines)
     let right = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !left.isEmpty, !right.isEmpty else { return false }
-    if foldedContains(left, right) || foldedContains(right, left) { return true }
+    if alreadySpoken(left, right) || isGrowingPrefix(left, right) { return true }
     if startsWithClausePunct(right) { return true }
     if endsWithClausePunct(left) { return true }
     if !endsSentence(left) { return true }
@@ -79,12 +83,22 @@ enum ArthurProseJoin {
     return false
   }
 
-  static func foldedContains(_ haystack: String, _ needle: String) -> Bool {
-    let h = fold(haystack)
-    let n = fold(needle)
-    guard !n.isEmpty else { return false }
-    return h == n || h.contains(" \(n) ") || h.hasPrefix("\(n) ")
-      || h.hasSuffix(" \(n)") || h.contains(n) && n.count >= 24
+  /// Incoming is already in `previous` as the same text or a leading prefix.
+  /// Used to skip duplicate `said` chunks without treating a shared suffix
+  /// ("… sir") or a mid-string phrase as "already have this."
+  static func alreadySpoken(_ previous: String, _ incoming: String) -> Bool {
+    let h = fold(previous)
+    let n = fold(incoming)
+    guard !n.isEmpty else { return true }
+    return h == n || h.hasPrefix(n + " ")
+  }
+
+  /// Incoming is the same text grown by more words (streaming prefix).
+  static func isGrowingPrefix(_ previous: String, _ incoming: String) -> Bool {
+    let h = fold(previous)
+    let n = fold(incoming)
+    guard !h.isEmpty, n.count > h.count else { return false }
+    return n.hasPrefix(h + " ")
   }
 
   static func fold(_ text: String) -> String {

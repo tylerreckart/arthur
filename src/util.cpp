@@ -466,7 +466,11 @@ std::vector<std::string> flush_sentences(std::string& buf, bool final_flush,
       if (boundary) {
         std::string sentence = trim(buf.substr(start, i - start + 1));
         if (!sentence.empty()) out.push_back(std::move(sentence));
-        start = skip_space_and_clause_punct(buf, i + 1);
+        start = i + 1;
+        while (start < buf.size() &&
+               std::isspace(static_cast<unsigned char>(buf[start]))) {
+          ++start;
+        }
       }
     }
   }
