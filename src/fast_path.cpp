@@ -1,5 +1,6 @@
 #include "intercom/fast_path.hpp"
 #include "intercom/clock.hpp"
+#include "intercom/surface.hpp"
 #include "intercom/util.hpp"
 
 #include <iostream>
@@ -86,8 +87,12 @@ bool withholds_fillers(std::string_view transcript) {
 
 FastPath::FastPath(bool enabled) : enabled_(enabled) {}
 
-FastPath::FastPath(bool enabled, HomeConfig home, std::shared_ptr<HomeClient> home_client)
-    : enabled_(enabled), home_(std::move(home)), home_client_(std::move(home_client)) {}
+FastPath::FastPath(bool enabled, HomeConfig home, std::shared_ptr<HomeClient> home_client,
+                   std::shared_ptr<WeatherClient> weather_client)
+    : enabled_(enabled),
+      home_(std::move(home)),
+      home_client_(std::move(home_client)),
+      weather_client_(std::move(weather_client)) {}
 
 std::optional<FastPathResult> FastPath::try_handle(const std::string& transcript) const {
   if (!enabled_) return std::nullopt;
@@ -158,6 +163,18 @@ std::optional<FastPathResult> FastPath::try_handle(const std::string& transcript
   if (auto intent = parse_home_intent(transcript)) {
     if (intent->kind == HomeIntentKind::Timer && intent->timer_seconds <= 0) {
       return FastPathResult{"How long, sir?", home_intent_kind_name(intent->kind)};
+    }
+    if (intent->kind == HomeIntentKind::Weather && !intent->place.empty()) {
+      if (!weather_client_) return std::nullopt;
+      std::string err;
+      auto extracted = weather_client_->lookup_place(intent->place, &err);
+      if (!extracted.ok) {
+        std::cerr << "intercom weather: " << (err.empty() ? "failed" : err) << std::endl;
+        return std::nullopt;
+      }
+      FastPathResult result{std::move(extracted.spoken), "weather"};
+      result.surface = surface_to_json(extracted.surface);
+      return result;
     }
     const bool ha_ready = home_client_ && home_client_->configured();
     if (!ha_ready) return std::nullopt;

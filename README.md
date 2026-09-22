@@ -31,13 +31,9 @@ Intercom maps each `X-Device-Id` to one Arbiter conversation in SQLite (`session
 
 **Mac desk app** (`macos/Arthur`) — a native SwiftUI window that uses the same WebSocket, `device_token`, and device id for shared conversation memory.
 
-<<<<<<< HEAD
 **Hardware device** (`firmware/`, `hardware/`) — a thin audio endpoint, not the brain. Firmware for an ESP32-S3 (Arduino Nano ESP32 or a board with the same pin map) plus I2S mic (INMP441) and amp (MAX98357A) lives in `firmware/nano-esp32/intercom-endpoint`.
-=======
-Home weather (fast-path) speaks a short line and also emits a versioned `{type:surface}` card on the desk WebSocket. Voice-only devices ignore `surface`. See `docs/api.md`.
 
-**Quiet text mode** (composer keyboard control, Arthur menu, or Settings → Typing) turns off Space-as-PTT so typing is safe. ⌥Space / the configured global chord and the menu bar extra still talk. Preference: `arthur.quietTextMode`.
->>>>>>> f79b495 (Add versioned weather surface cards to the Arthur desk)
+Weather (home via Home Assistant, or any city via Open-Meteo) speaks a short line and emits a versioned `{type:surface}` card on the desk WebSocket. Voice-only devices ignore `surface`. See [`docs/api.md`](docs/api.md).
 
 ## Build
 

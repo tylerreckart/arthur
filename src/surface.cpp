@@ -331,6 +331,93 @@ std::string weather_condition_label(std::string_view raw) {
   return title_case(key);
 }
 
+std::string weather_condition_from_wmo(int code, bool is_day) {
+  if (code == 0 || code == 1) return is_day ? "sunny" : "clear-night";
+  if (code == 2) return "partlycloudy";
+  if (code == 3) return "cloudy";
+  if (code == 45 || code == 48) return "fog";
+  if (code == 51 || code == 53 || code == 55 || code == 56 || code == 57) return "rainy";
+  if (code == 61 || code == 63 || code == 65 || code == 66 || code == 67) return "rainy";
+  if (code == 71 || code == 73 || code == 75 || code == 77) return "snowy";
+  if (code == 80 || code == 81 || code == 82) return "rainy";
+  if (code == 85 || code == 86) return "snowy";
+  if (code == 95) return "lightning";
+  if (code == 96 || code == 99) return "lightning-rainy";
+  return "cloudy";
+}
+
+namespace {
+
+WeatherExtract make_weather_card(std::string title, std::string spoken_place,
+                                 std::string condition, std::string condition_label,
+                                 bool has_temp, int temp, std::string unit,
+                                 bool has_feels, int feels, bool has_humidity, int humidity,
+                                 bool has_wind, double wind, std::string wind_unit,
+                                 std::vector<nlohmann::json> hours,
+                                 std::vector<nlohmann::json> days,
+                                 std::vector<SurfaceSource> sources) {
+  WeatherExtract out;
+  if (condition_label.empty() && !has_temp) return out;
+
+  std::string spoken;
+  const std::string place_tail =
+      spoken_place.empty() ? std::string() : (" in " + spoken_place);
+  if (!condition_label.empty() && has_temp) {
+    spoken = condition_label + place_tail + ", " + spoken_number(temp) + " degrees, sir.";
+  } else if (has_temp) {
+    spoken = "It's " + spoken_number(temp) + " degrees" + place_tail + ", sir.";
+  } else if (!spoken_place.empty()) {
+    spoken = condition_label + " in " + spoken_place + ", sir.";
+  } else {
+    spoken = condition_label + ", sir.";
+  }
+
+  std::string summary;
+  if (!condition_label.empty() && has_temp) {
+    summary = condition_label + ", " + degree_text(temp, unit);
+  } else if (has_temp) {
+    summary = degree_text(temp, unit);
+  } else {
+    summary = condition_label;
+  }
+
+  nlohmann::json payload = nlohmann::json::object();
+  if (!condition.empty()) payload["condition"] = condition;
+  if (!condition_label.empty()) payload["condition_label"] = condition_label;
+  if (has_temp) {
+    payload["temperature"] = temp;
+    if (!unit.empty()) payload["temperature_unit"] = unit;
+  }
+  if (has_feels) payload["feels_like"] = feels;
+  if (has_humidity) payload["humidity"] = humidity;
+  if (has_wind) {
+    payload["wind_speed"] = wind;
+    if (!wind_unit.empty()) payload["wind_unit"] = wind_unit;
+  }
+  if (!hours.empty()) payload["hours"] = std::move(hours);
+  if (!days.empty()) payload["days"] = std::move(days);
+
+  Surface surface;
+  surface.kind = SurfaceKind::Weather;
+  surface.version = kSurfaceVersion;
+  surface.title = title.empty() ? "Weather" : std::move(title);
+  surface.summary = summary;
+  surface.payload = std::move(payload);
+  surface.sources = std::move(sources);
+
+  out.spoken = std::move(spoken);
+  out.surface = std::move(surface);
+  out.ok = true;
+  return out;
+}
+
+const nlohmann::json* json_obj(const nlohmann::json& j, const char* key) {
+  if (j.contains(key) && j[key].is_object()) return &j[key];
+  return nullptr;
+}
+
+}  // namespace
+
 WeatherExtract weather_from_ha_state(const nlohmann::json& ha, std::string_view title) {
   WeatherExtract out;
   if (!ha.is_object()) return out;
@@ -385,64 +472,165 @@ WeatherExtract weather_from_ha_state(const nlohmann::json& ha, std::string_view 
     }
   }
 
-  if (cond_label.empty() && !has_temp) return out;
-
-  const int temp_i = has_temp ? round_nearest(temp) : 0;
-  const int feels_i = has_feels ? round_nearest(feels) : 0;
-
-  std::string spoken;
-  if (!cond_label.empty() && has_temp) {
-    spoken = cond_label + ", " + spoken_number(temp_i) + " degrees, sir.";
-  } else if (has_temp) {
-    spoken = "It's " + spoken_number(temp_i) + " degrees, sir.";
-  } else {
-    spoken = cond_label + ", sir.";
-  }
-
-  std::string summary;
-  if (!cond_label.empty() && has_temp) {
-    summary = cond_label + ", " + degree_text(temp_i, unit);
-  } else if (has_temp) {
-    summary = degree_text(temp_i, unit);
-  } else {
-    summary = cond_label;
-  }
-
-  nlohmann::json payload = nlohmann::json::object();
-  if (!cond.empty()) payload["condition"] = cond;
-  if (!cond_label.empty()) payload["condition_label"] = cond_label;
-  if (has_temp) {
-    payload["temperature"] = temp_i;
-    if (!unit.empty()) payload["temperature_unit"] = unit;
-  }
-  if (has_feels) payload["feels_like"] = feels_i;
-  if (has_humidity) payload["humidity"] = humidity;
-  if (has_wind) {
-    payload["wind_speed"] = wind;
-    if (!wind_unit.empty()) payload["wind_unit"] = wind_unit;
-  }
-  if (!hours.empty()) payload["hours"] = hours;
-  if (!days.empty()) payload["days"] = days;
-
-  Surface surface;
-  surface.kind = SurfaceKind::Weather;
-  surface.version = kSurfaceVersion;
-  surface.title = friendly.empty() ? std::string(title) : friendly;
-  surface.summary = summary;
-  surface.payload = std::move(payload);
-  if (!attribution.empty()) {
-    surface.sources.push_back(SurfaceSource{attribution, {}});
-  }
-
-  out.spoken = std::move(spoken);
-  out.surface = std::move(surface);
-  out.ok = true;
-  return out;
+  std::vector<SurfaceSource> sources;
+  if (!attribution.empty()) sources.push_back(SurfaceSource{attribution, {}});
+  return make_weather_card(friendly.empty() ? std::string(title) : friendly, {}, cond,
+                           cond_label, has_temp, has_temp ? round_nearest(temp) : 0, unit,
+                           has_feels, has_feels ? round_nearest(feels) : 0, has_humidity,
+                           humidity, has_wind, wind, wind_unit, std::move(hours),
+                           std::move(days), std::move(sources));
 }
 
 WeatherExtract weather_from_ha_state(std::string_view raw_json, std::string_view title) {
   try {
     return weather_from_ha_state(nlohmann::json::parse(std::string(raw_json)), title);
+  } catch (...) {
+    return {};
+  }
+}
+
+WeatherExtract weather_from_open_meteo(const nlohmann::json& geocode,
+                                       const nlohmann::json& forecast) {
+  WeatherExtract out;
+  if (!forecast.is_object()) return out;
+
+  std::string title = "Weather";
+  std::string spoken_place;
+  if (geocode.is_object() && geocode.contains("results") && geocode["results"].is_array() &&
+      !geocode["results"].empty() && geocode["results"][0].is_object()) {
+    const auto& loc = geocode["results"][0];
+    const std::string name = loc.value("name", "");
+    const std::string country = loc.value("country", "");
+    if (!name.empty() && !country.empty() && to_lower(name) != to_lower(country)) {
+      title = name + ", " + country;
+    } else if (!name.empty()) {
+      title = name;
+    } else if (!country.empty()) {
+      title = country;
+    }
+    spoken_place = name.empty() ? title : name;
+  }
+
+  const nlohmann::json* current = json_obj(forecast, "current");
+  const nlohmann::json* current_units = json_obj(forecast, "current_units");
+  const nlohmann::json* hourly = json_obj(forecast, "hourly");
+  const nlohmann::json* daily = json_obj(forecast, "daily");
+
+  std::string cond;
+  std::string cond_label;
+  bool has_temp = false;
+  int temp = 0;
+  std::string unit;
+  bool has_feels = false;
+  int feels = 0;
+  bool has_humidity = false;
+  int humidity = 0;
+  bool has_wind = false;
+  double wind = 0;
+  std::string wind_unit;
+  std::string current_time;
+
+  if (current) {
+    current_time = current->value("time", "");
+    const bool is_day = current->value("is_day", 1) != 0;
+    if (current->contains("weather_code") && (*current)["weather_code"].is_number()) {
+      cond = weather_condition_from_wmo((*current)["weather_code"].get<int>(), is_day);
+      cond_label = weather_condition_label(cond);
+    }
+    if (const auto* t = first_number(*current, {"temperature_2m", "temperature"})) {
+      temp = round_nearest(as_number(*t));
+      has_temp = true;
+    }
+    if (const auto* f = first_number(*current, {"apparent_temperature", "feels_like"})) {
+      feels = round_nearest(as_number(*f));
+      has_feels = true;
+    }
+    if (current->contains("relative_humidity_2m") &&
+        is_finite_number((*current)["relative_humidity_2m"])) {
+      humidity = round_nearest(as_number((*current)["relative_humidity_2m"]));
+      has_humidity = humidity >= 0 && humidity <= 100;
+    }
+    if (const auto* w = first_number(*current, {"wind_speed_10m", "wind_speed"})) {
+      wind = as_number(*w);
+      has_wind = true;
+    }
+  }
+  if (current_units) {
+    unit = first_string(*current_units, {"temperature_2m", "temperature"});
+    wind_unit = first_string(*current_units, {"wind_speed_10m", "wind_speed"});
+  }
+
+  std::vector<nlohmann::json> hours;
+  if (hourly && hourly->contains("time") && (*hourly)["time"].is_array()) {
+    const auto& times = (*hourly)["time"];
+    const nlohmann::json* temps =
+        hourly->contains("temperature_2m") && (*hourly)["temperature_2m"].is_array()
+            ? &(*hourly)["temperature_2m"]
+            : nullptr;
+    const nlohmann::json* codes =
+        hourly->contains("weather_code") && (*hourly)["weather_code"].is_array()
+            ? &(*hourly)["weather_code"]
+            : nullptr;
+    for (std::size_t i = 0; i < times.size() && hours.size() < 8; ++i) {
+      if (!times[i].is_string()) continue;
+      const std::string ts = times[i].get<std::string>();
+      if (!current_time.empty() && ts <= current_time) continue;
+      nlohmann::json item = {{"datetime", ts}};
+      if (temps && i < temps->size() && is_finite_number((*temps)[i])) {
+        item["temperature"] = (*temps)[i];
+      }
+      if (codes && i < codes->size() && (*codes)[i].is_number()) {
+        item["condition"] = weather_condition_from_wmo((*codes)[i].get<int>(), true);
+      }
+      hours.push_back(forecast_slot(item, false));
+    }
+  }
+
+  std::vector<nlohmann::json> days;
+  if (daily && daily->contains("time") && (*daily)["time"].is_array()) {
+    const auto& times = (*daily)["time"];
+    const nlohmann::json* highs =
+        daily->contains("temperature_2m_max") && (*daily)["temperature_2m_max"].is_array()
+            ? &(*daily)["temperature_2m_max"]
+            : nullptr;
+    const nlohmann::json* lows =
+        daily->contains("temperature_2m_min") && (*daily)["temperature_2m_min"].is_array()
+            ? &(*daily)["temperature_2m_min"]
+            : nullptr;
+    const nlohmann::json* codes =
+        daily->contains("weather_code") && (*daily)["weather_code"].is_array()
+            ? &(*daily)["weather_code"]
+            : nullptr;
+    for (std::size_t i = 0; i < times.size() && days.size() < 5; ++i) {
+      if (!times[i].is_string()) continue;
+      nlohmann::json item = {{"datetime", times[i].get<std::string>()}};
+      if (highs && i < highs->size() && is_finite_number((*highs)[i])) {
+        item["temperature"] = (*highs)[i];
+      }
+      if (lows && i < lows->size() && is_finite_number((*lows)[i])) {
+        item["templow"] = (*lows)[i];
+      }
+      if (codes && i < codes->size() && (*codes)[i].is_number()) {
+        item["condition"] = weather_condition_from_wmo((*codes)[i].get<int>(), true);
+      }
+      days.push_back(forecast_slot(item, true));
+    }
+  }
+
+  std::vector<SurfaceSource> sources;
+  sources.push_back(SurfaceSource{"Open-Meteo", "https://open-meteo.com/"});
+
+  return make_weather_card(std::move(title), std::move(spoken_place), cond, cond_label,
+                           has_temp, temp, unit, has_feels, feels, has_humidity, humidity,
+                           has_wind, wind, wind_unit, std::move(hours), std::move(days),
+                           std::move(sources));
+}
+
+WeatherExtract weather_from_open_meteo(std::string_view geocode_json,
+                                       std::string_view forecast_json) {
+  try {
+    return weather_from_open_meteo(nlohmann::json::parse(std::string(geocode_json)),
+                                   nlohmann::json::parse(std::string(forecast_json)));
   } catch (...) {
     return {};
   }

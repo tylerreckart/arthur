@@ -77,7 +77,8 @@ TurnPipeline::TurnPipeline(Config config,
       sessions_(std::move(sessions)),
       filler_(std::move(filler)),
       fast_path_(config_.fast_path, config_.home,
-                 std::make_shared<HomeClient>(config_.home)) {}
+                 std::make_shared<HomeClient>(config_.home),
+                 std::make_shared<WeatherClient>()) {}
 
 void TurnPipeline::register_turn(std::shared_ptr<TurnHandle> h) {
   std::lock_guard<std::mutex> lk(turns_mu_);

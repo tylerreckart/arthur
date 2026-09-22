@@ -2,6 +2,7 @@
 
 #include "intercom/home.hpp"
 #include "intercom/home_client.hpp"
+#include "intercom/weather_client.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -29,7 +30,8 @@ bool withholds_fillers(std::string_view transcript);
 class FastPath {
  public:
   explicit FastPath(bool enabled);
-  FastPath(bool enabled, HomeConfig home, std::shared_ptr<HomeClient> home_client);
+  FastPath(bool enabled, HomeConfig home, std::shared_ptr<HomeClient> home_client,
+           std::shared_ptr<WeatherClient> weather_client = nullptr);
 
   // Returns a local reply when the utterance should skip Arbiter.
   std::optional<FastPathResult> try_handle(const std::string& transcript) const;
@@ -38,6 +40,7 @@ class FastPath {
   bool enabled_ = false;
   HomeConfig home_;
   std::shared_ptr<HomeClient> home_client_;
+  std::shared_ptr<WeatherClient> weather_client_;
 };
 
 }  // namespace intercom

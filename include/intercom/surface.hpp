@@ -59,6 +59,15 @@ WeatherExtract weather_from_ha_state(const nlohmann::json& ha,
 WeatherExtract weather_from_ha_state(std::string_view raw_json,
                                      std::string_view title = "Home");
 
+// Same weather v1 card from Open-Meteo geocoding + forecast JSON (no HA).
+WeatherExtract weather_from_open_meteo(const nlohmann::json& geocode,
+                                       const nlohmann::json& forecast);
+WeatherExtract weather_from_open_meteo(std::string_view geocode_json,
+                                       std::string_view forecast_json);
+
+// WMO weather interpretation code → HA-ish condition token ("partlycloudy").
+std::string weather_condition_from_wmo(int code, bool is_day = true);
+
 // Title-case / alias HA condition tokens ("partlycloudy" → "Partly cloudy").
 std::string weather_condition_label(std::string_view raw);
 

@@ -2,6 +2,7 @@
 #include "intercom/clock.hpp"
 #include "intercom/home_client.hpp"
 #include "intercom/surface.hpp"
+#include "intercom/weather_client.hpp"
 
 #include <iostream>
 #include <memory>
@@ -119,7 +120,7 @@ int main() {
   CHECK(intercom::withholds_fillers("what time is it"));
   CHECK(intercom::withholds_fillers("what's the weather"));
   CHECK(intercom::withholds_fillers("set a timer for 5 minutes"));
-  CHECK(!intercom::withholds_fillers("what's the weather in Tokyo"));
+  CHECK(intercom::withholds_fillers("what's the weather in Tokyo"));
   CHECK(!intercom::is_clock_query("what time is it in Tokyo"));
 
   class FakeHome : public intercom::HomeClient {
@@ -175,6 +176,61 @@ int main() {
     }
   }
   CHECK(!ha.try_handle("what's the weather in Tokyo").has_value());
+
+  class FakeWeather : public intercom::WeatherClient {
+   public:
+    intercom::WeatherExtract lookup_place(const std::string& place,
+                                          std::string*) const override {
+      auto extracted = intercom::weather_from_open_meteo(
+          std::string_view{R"({"results":[{"name":"Tokyo","country":"Japan",
+            "latitude":35.7,"longitude":139.7}]})"},
+          std::string_view{R"({
+            "current": {
+              "time": "2026-09-22T15:00",
+              "temperature_2m": 22.2,
+              "apparent_temperature": 21.0,
+              "relative_humidity_2m": 55,
+              "weather_code": 2,
+              "wind_speed_10m": 8,
+              "is_day": 1
+            },
+            "current_units": {"temperature_2m": "°C", "wind_speed_10m": "km/h"},
+            "hourly": {
+              "time": ["2026-09-22T15:00", "2026-09-22T16:00"],
+              "temperature_2m": [22.2, 21.4],
+              "weather_code": [2, 3]
+            },
+            "daily": {
+              "time": ["2026-09-22", "2026-09-23"],
+              "weather_code": [2, 61],
+              "temperature_2m_max": [24, 20],
+              "temperature_2m_min": [16, 14]
+            }
+          })"});
+      if (extracted.ok && extracted.surface.title.find("Tokyo") == std::string::npos) {
+        extracted.surface.title = place;
+      }
+      return extracted;
+    }
+  };
+
+  intercom::FastPath place_wx(true, intercom::HomeConfig{}, nullptr,
+                              std::make_shared<FakeWeather>());
+  auto tokyo = place_wx.try_handle("what's the weather in Tokyo");
+  CHECK(tokyo.has_value());
+  if (tokyo) {
+    CHECK(tokyo->kind == "weather");
+    CHECK(contains(tokyo->reply, "Tokyo") || contains(tokyo->reply, "tokyo"));
+    CHECK(tokyo->surface.is_object());
+    if (tokyo->surface.is_object()) {
+      CHECK(tokyo->surface.value("kind", "") == "weather");
+      CHECK(tokyo->surface.value("version", 0) == intercom::kSurfaceVersion);
+      CHECK(contains(tokyo->surface.value("title", ""), "Tokyo"));
+      CHECK(tokyo->surface["payload"].value("temperature", 0) == 22);
+    }
+  }
+  CHECK(!place_wx.try_handle("what's the weather").has_value());
+
   auto lights = ha.try_handle("turn on the kitchen lights");
   CHECK(lights.has_value());
   if (lights) CHECK(lights->kind == "light_on");

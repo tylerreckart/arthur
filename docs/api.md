@@ -77,9 +77,10 @@ Fast-path phrases never call Arbiter:
 - Social: `hello` / `good morning` and other greetings, thanks, `status`
 - Clock: `what time is it`, `what's the date` (local clock, not tools)
 - Echo: `echo …`
-- Home (only when `home.ha_base_url` and `home.ha_token` are set): timers, lights, volume, weather at home, next alarm. Weather with a place (`in Tokyo`) still goes to Arthur. A timer with no duration answers `How long, sir?` even without Home Assistant.
+- Home (only when `home.ha_base_url` and `home.ha_token` are set): timers, lights, volume, weather at home, next alarm. A timer with no duration answers `How long, sir?` even without Home Assistant.
+- Place weather (`what's the weather in Tokyo`, `forecast for London`): Open-Meteo geocoding + forecast (no API key, no Home Assistant). Speaks a short line and emits a weather `surface`. Home weather without a place still uses HA when configured.
 
-Social turns greet back and invite a follow-up. Home intents that match but have no Home Assistant config fall through to Arthur (except the bare timer prompt).
+Social turns greet back and invite a follow-up. Home intents that match but have no Home Assistant config fall through to Arthur (except the bare timer prompt and place weather).
 
 ## `POST /v1/turns/:turn_id/cancel`
 
@@ -190,10 +191,19 @@ PCM. Existing installs that never emit `surface` are unchanged.
 
 Unknown `kind` values decode as `generic`. They never drop the turn.
 
-Weather v1 is built by the home fast-path from the same Home Assistant
-entity state already used for the spoken line (`home.weather_entity`).
-The LLM is not asked to emit card JSON. `turn_id` matches `{type:accept}`
-/ `{type:said}` so the desk binds the card to that Arthur bubble.
+Weather v1 uses the same schema for **home** and **place** forecasts. The
+LLM is not asked to emit card JSON. `turn_id` matches `{type:accept}` /
+`{type:said}` so the desk binds the card to that Arthur bubble.
+
+| Query | Source | `surface.title` |
+|-------|--------|-----------------|
+| `what's the weather` (no place) | Home Assistant `home.weather_entity` when configured | HA `friendly_name` or `Home` |
+| `what's the weather in Tokyo` (and similar `in` / `for` / `at`) | Open-Meteo geocoding + forecast (no API key; does not need `home.ha_*`) | Place name (e.g. `Tokyo, Japan`) |
+
+Both paths emit `{type:surface, kind: weather, version: 1}` with condition,
+temperature, feel, humidity, hours/days, and sources when the provider
+returns them. Voice-only devices ignore `surface`. If the place lookup
+fails, the turn falls through to Arthur for speech only.
 
 Hallway / compact windows collapse the card to a summary line.
 

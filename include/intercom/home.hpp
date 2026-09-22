@@ -37,12 +37,17 @@ struct HomeIntent {
   HomeIntentKind kind = HomeIntentKind::Weather;
   int timer_seconds = 0;  // 0 = duration not given
   std::string room;       // raw room phrase, may be empty
+  std::string place;      // weather place ("Tokyo"); empty = home / HA
 };
 
 const char* home_intent_kind_name(HomeIntentKind kind);
 
 // Keyword router for hallway commands. Does not call Home Assistant.
 std::optional<HomeIntent> parse_home_intent(std::string_view transcript);
+
+// Place after "in" / "for" / "at" on a weather utterance. Empty when the
+// tail is a time-of-day or unit, not a city ("in the morning").
+std::string extract_weather_place(std::string_view transcript);
 
 std::string spoken_duration(int seconds);
 std::string spoken_number(int n);
