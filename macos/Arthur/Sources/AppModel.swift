@@ -47,6 +47,8 @@ final class AppModel {
   var settingsOpen = false
   var holding = false
   var inputLevel = 0.0
+  /// Live TTS energy (0…1) while Arthur is speaking. Drives the desk ripple.
+  var speakLevel = 0.0
   var mcpServers: [McpServer] = []
   var mcpRegistryPath = McpRegistryStore.defaultPath
   var mcpSaveError = ""
@@ -122,7 +124,7 @@ final class AppModel {
     }
     audio.onCapture = { [weak self] data in
       self?.client.sendPCM(data)
-      let level = Self.captureLevel(data)
+      let level = AudioIO.pcmLevel(data)
       DispatchQueue.main.async {
         guard let self else { return }
         self.pcmBytes += data.count
@@ -536,6 +538,7 @@ final class AppModel {
         become(.speaking)
         if work != .speaking { setWork(.speaking) }
         audio.playPCM(data)
+        ingestSpeakLevel(AudioIO.pcmLevel(data, gain: 2.6))
       }
     case .heard(let text):
       if !text.isEmpty {
@@ -657,11 +660,21 @@ final class AppModel {
   }
 
   private func become(_ p: ArthurPhase) {
+    if p == .speaking, phase != .speaking {
+      speakLevel = max(speakLevel, 0.64)
+    }
+    if p != .speaking {
+      speakLevel = 0
+    }
     phase = p
     if p == .idle || p == .disconnected {
       formingText = ""
       hearingText = ""
     }
+  }
+
+  private func ingestSpeakLevel(_ level: Double) {
+    speakLevel = min(1, max(level, speakLevel * 0.5))
   }
 
   private func setWork(_ w: WorkState) {
@@ -856,17 +869,4 @@ final class AppModel {
     return event
   }
 
-  private static func captureLevel(_ data: Data) -> Double {
-    let count = data.count / 2
-    guard count > 0 else { return 0 }
-    return data.withUnsafeBytes { raw in
-      let samples = raw.bindMemory(to: Int16.self)
-      var sum = 0.0
-      for i in 0..<count {
-        let x = Double(samples[i]) / 32768.0
-        sum += x * x
-      }
-      return min(1, sqrt(sum / Double(count)) * 3.4)
-    }
-  }
 }
