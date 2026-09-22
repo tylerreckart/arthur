@@ -27,10 +27,16 @@ struct ArthurApp: App {
       CommandMenu("Arthur") {
         Button("Settings…") { model.settingsOpen = true }
           .keyboardShortcut(",", modifiers: [.command])
+        Button("Ask Arthur") { model.focusComposer() }
+          .keyboardShortcut("l", modifiers: [.command])
         Divider()
         Button(model.soundOn ? "Mute Sound" : "Unmute Sound") {
           model.soundOn.toggle()
         }
+      }
+      CommandGroup(after: .textEditing) {
+        Button("Ask Arthur") { model.focusComposer() }
+          .keyboardShortcut("k", modifiers: [.command])
       }
     }
   }

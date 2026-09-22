@@ -70,6 +70,24 @@ enum ConfigStore {
     UserDefaults.standard.set(on, forKey: soundOnKey)
   }
 
+  static func loadDraft() -> String {
+    guard let data = try? Data(contentsOf: draftURL()),
+          let text = String(data: data, encoding: .utf8)
+    else { return "" }
+    return text
+  }
+
+  static func saveDraft(_ text: String) {
+    let url = draftURL()
+    let dir = url.deletingLastPathComponent()
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    if text.isEmpty {
+      try? FileManager.default.removeItem(at: url)
+      return
+    }
+    try? text.data(using: .utf8)?.write(to: url, options: .atomic)
+  }
+
   static func loadTranscript(deviceId: String) -> [DiscussionLine] {
     guard !deviceId.isEmpty,
           let data = try? Data(contentsOf: transcriptURL()),
@@ -157,9 +175,16 @@ enum ConfigStore {
     return path
   }
 
-  private static func transcriptURL() -> URL {
+  private static func supportDirectory() -> URL {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
       .appendingPathComponent("Arthur", isDirectory: true)
-      .appendingPathComponent("transcripts.json")
+  }
+
+  private static func transcriptURL() -> URL {
+    supportDirectory().appendingPathComponent("transcripts.json")
+  }
+
+  private static func draftURL() -> URL {
+    supportDirectory().appendingPathComponent("draft.txt")
   }
 }
