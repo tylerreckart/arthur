@@ -587,7 +587,7 @@ final class AppModel {
 
   private func attachSurface(_ surface: ChatSurface, turnId rawTurnId: String) {
     let keys = replyKeys(for: rawTurnId)
-    if let idx = discussion.indices.last(where: { line in
+    if let idx = discussion.lastIndex(where: { line in
       !line.fromYou && keys.contains(line.turnId)
     }) {
       applySurface(surface, at: idx, turnKey: keys.first { $0.hasPrefix("turn:") } ?? keys.first)
