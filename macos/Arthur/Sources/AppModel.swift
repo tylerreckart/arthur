@@ -46,8 +46,13 @@ final class AppModel {
     didSet {
       ConfigStore.saveSoundOn(soundOn)
       audio.soundEnabled = soundOn
+      if var notice = speakBack {
+        notice.muted = !soundOn
+        speakBack = notice
+      }
     }
   }
+  var speakBack: SpeakBackNotice?
 
   private let client = IntercomClient()
   private let audio = AudioIO()
@@ -63,6 +68,8 @@ final class AppModel {
   private var started = false
   private var transcriptDeviceId = ""
   private var pttFromKeyboard = false
+  private var speakBackDismiss: DispatchWorkItem?
+  private var activeObserver: NSObjectProtocol?
 
   init() {
     config = ConfigStore.load()
@@ -108,6 +115,15 @@ final class AppModel {
       Task { @MainActor in self?.pollHealth() }
     }
     pollHealth()
+    if activeObserver == nil {
+      activeObserver = NotificationCenter.default.addObserver(
+        forName: NSApplication.didBecomeActiveNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor in self?.clearSpeakBackBadge() }
+      }
+    }
   }
 
   func stop() {
@@ -123,6 +139,13 @@ final class AppModel {
     client.disconnect()
     persistTranscript()
     persistDraft()
+    if let activeObserver {
+      NotificationCenter.default.removeObserver(activeObserver)
+      self.activeObserver = nil
+    }
+    speakBackDismiss?.cancel()
+    speakBackDismiss = nil
+    SpeakBackNotifier.clearBadge()
     started = false
   }
 
@@ -319,6 +342,13 @@ final class AppModel {
     errorText = ""
   }
 
+  func dismissSpeakBack() {
+    speakBackDismiss?.cancel()
+    speakBackDismiss = nil
+    speakBack = nil
+    SpeakBackNotifier.clearBadge()
+  }
+
   func cancelTurn() {
     guard canCancel else { return }
     client.sendCancel()
@@ -393,15 +423,18 @@ final class AppModel {
       setWork(.none)
       if !ok, !err.isEmpty { errorText = err }
       become(client.isConnected ? .idle : .disconnected)
-    case .speak:
+      if speakBack?.live == true { finishSpeakBack() }
+    case .speak(let kind, let runId, let text):
       expectingReply = true
       become(.speaking)
       setWork(.speaking)
+      presentSpeakBack(kind: kind, runId: runId, text: text)
     case .said(let text):
       appendDiscussion(fromYou: false, text: text)
       formingText = ""
       become(.speaking)
       setWork(.speaking)
+      if speakBack?.live == true { noteSpeakBackSaid(text) }
     case .forming(let text):
       formingText = text
       if phase != .speaking, phase != .listening {
@@ -425,6 +458,7 @@ final class AppModel {
       expectingReply = false
       typedThisTurn = false
       formingText = ""
+      if speakBack?.live == true { finishSpeakBack() }
       become(.disconnected)
       healthOK = false
       healthDetail = msg
@@ -434,6 +468,54 @@ final class AppModel {
       }
       scheduleReconnect()
     }
+  }
+
+  private func presentSpeakBack(kind: String, runId: String, text: String) {
+    speakBackDismiss?.cancel()
+    speakBackDismiss = nil
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let notice = SpeakBackNotice(
+      id: UUID(),
+      kind: kind.isEmpty ? "schedule" : kind,
+      runId: runId,
+      spokenText: trimmed,
+      muted: !soundOn,
+      live: true
+    )
+    speakBack = notice
+    if !trimmed.isEmpty {
+      appendDiscussion(fromYou: false, text: trimmed)
+    }
+    SpeakBackNotifier.announce(notice)
+  }
+
+  private func noteSpeakBackSaid(_ text: String) {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, var notice = speakBack, notice.live else { return }
+    if notice.spokenText.isEmpty {
+      notice.spokenText = trimmed
+    } else if notice.spokenText != trimmed, !notice.spokenText.contains(trimmed) {
+      notice.spokenText += " " + trimmed
+    } else {
+      return
+    }
+    speakBack = notice
+  }
+
+  private func finishSpeakBack() {
+    guard var notice = speakBack else { return }
+    notice.live = false
+    speakBack = notice
+    speakBackDismiss?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      self?.speakBack = nil
+    }
+    speakBackDismiss = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: work)
+  }
+
+  private func clearSpeakBackBadge() {
+    SpeakBackNotifier.clearBadge()
   }
 
   private func become(_ p: ArthurPhase) {

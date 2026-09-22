@@ -243,6 +243,7 @@ int main() {
 
     incoming.clear();
     bool got_speak = false;
+    bool got_said = false;
     bool speak_binary = false;
     bool speak_done = false;
     std::int64_t speak_run = 0;
@@ -268,6 +269,11 @@ int main() {
               got_speak = true;
               CHECK(j.value("kind", "") == "schedule");
               speak_run = j.value("run_id", 0);
+              CHECK(j.value("text", "").find("Time to leave") != std::string::npos);
+            }
+            if (type == "said") {
+              got_said = true;
+              CHECK(j.value("text", "").find("Time to leave") != std::string::npos);
             }
             if (type == "done" && j.value("kind", "") == "schedule") {
               CHECK(j.value("ok", false));
@@ -280,6 +286,7 @@ int main() {
       if (!speak_done) std::this_thread::sleep_for(std::chrono::milliseconds(15));
     }
     CHECK(got_speak);
+    CHECK(got_said);
     CHECK(speak_binary);
     CHECK(speak_done);
     CHECK(speak_run == 42);

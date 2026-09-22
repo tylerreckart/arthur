@@ -24,6 +24,7 @@ swiftc -parse-as-library -O \
   -framework Network \
   -framework CryptoKit \
   -framework Security \
+  -framework UserNotifications \
   -lsqlite3 \
   -o "$MACOS/Arthur" \
   "$SRC"/*.swift

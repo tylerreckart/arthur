@@ -6,7 +6,7 @@ enum IntercomEvent {
   case pcm(Data)
   case turn(transcript: String, conversationId: Int64, ok: Bool, fastPath: Bool)
   case done(ok: Bool, error: String, turnId: String)
-  case speak(kind: String)
+  case speak(kind: String, runId: String, text: String)
   case said(String)
   case forming(String)
   case working(String)
@@ -223,7 +223,11 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
         turnId: json["turn_id"] as? String ?? ""
       ))
     case "speak":
-      emit(.speak(kind: json["kind"] as? String ?? "schedule"))
+      emit(.speak(
+        kind: json["kind"] as? String ?? "schedule",
+        runId: stringValue(json["run_id"]),
+        text: json["text"] as? String ?? ""
+      ))
     case "said":
       emit(.said(json["text"] as? String ?? ""))
     case "forming":
@@ -250,6 +254,14 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
     if let n = raw as? Int { return Int64(n) }
     if let n = raw as? NSNumber { return n.int64Value }
     return 0
+  }
+
+  private func stringValue(_ raw: Any?) -> String {
+    if let s = raw as? String { return s }
+    if let n = raw as? Int { return String(n) }
+    if let n = raw as? Int64 { return String(n) }
+    if let n = raw as? NSNumber { return n.stringValue }
+    return ""
   }
 
   private func emit(_ event: IntercomEvent) {

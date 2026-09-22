@@ -141,7 +141,7 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 | binary frames | Reply PCM |
 | `{"type":"turn",…}` | Transcript / turn id after the pipeline returns |
 | `{"type":"done","ok","error"}` | Terminal |
-| `{"type":"speak","kind","run_id"}` | Unsolicited speak-back (scheduled reminder) about to stream PCM |
+| `{"type":"speak","kind","run_id","text"}` | Unsolicited speak-back (scheduled reminder) about to stream PCM. `text` is the spoken line when known. |
 | `{"type":"status","phase"}` | `thinking` while waiting on Arbiter (desk clients) |
 | `{"type":"working","tool"}` | Master tool started; value is the tool name |
 | `{"type":"said","text"}` | Sentence about to be spoken (same text Kokoro hears) |
@@ -149,8 +149,10 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 
 Idle devices keep the socket open. When Arbiter fires a `/schedule` (or
 Intercom sees `run.completed` on `GET /v1/notifications/stream`), Intercom
-synthesizes `result_summary` and pushes `{type:speak}` + PCM + `{type:done}`
-on that socket so the reminder is spoken without another PTT. Mid-PTT
+synthesizes `result_summary` and pushes `{type:speak,text}` + `{type:said}`
++ PCM + `{type:done}` on that socket so the reminder is spoken without
+another PTT. `{type:said}` is the same spoken line Kokoro hears, so desk
+clients can show it without treating the event as a user turn. Mid-PTT
 utterances are queued (up to `speakback.max_queued`) and flushed when the
 device is idle again. Offline devices are queued in memory the same way;
 there is no durable disk queue.
