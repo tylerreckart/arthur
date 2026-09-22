@@ -103,20 +103,31 @@ enum ArthurChrome {
   static let fadeBand: CGFloat = 48
 }
 
-/// Soften a row as it slides under the title bar. Kept mild so whole
-/// paragraphs do not jump to a ghost.
+/// Fade content as it slides under the title bar, continuously in Y.
+///
+/// The previous implementation sampled the *entire* view frame against
+/// `fadeBand`, so a multi-line bubble dimmed as one block. This mask is
+/// keyed to chrome-space Y: lines (or the upper part of one bubble) that
+/// sit in the band fade; text below the band stays solid. A mask is used
+/// instead of chopping text so selection and markdown stay intact.
 struct FadeUnderHeader: ViewModifier {
   func body(content: Content) -> some View {
     content.visualEffect { inner, proxy in
       let frame = proxy.frame(in: ArthurChrome.space)
-      let band = ArthurChrome.fadeBand
-      let linear = max(0, min(1, (band - frame.minY) / band))
-      let overflow = max(0, frame.maxY - band)
-      let atten = max(0, 1 - overflow / 48)
-      let t = linear * linear * (3 - 2 * linear) * atten
-      return inner
-        .blur(radius: t * 5, opaque: false)
-        .opacity(1 - t * 0.28)
+      let height = max(proxy.size.height, 1)
+      let startY = (0 - frame.minY) / height
+      let endY = (ArthurChrome.fadeBand - frame.minY) / height
+      return inner.mask {
+        LinearGradient(
+          stops: [
+            .init(color: .black.opacity(0.06), location: 0),
+            .init(color: .black.opacity(0.45), location: 0.42),
+            .init(color: .black, location: 1),
+          ],
+          startPoint: UnitPoint(x: 0.5, y: startY),
+          endPoint: UnitPoint(x: 0.5, y: endY)
+        )
+      }
     }
   }
 }

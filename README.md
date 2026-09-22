@@ -20,7 +20,7 @@ defaults write run.intercom.Arthur arthur.pttModifierFlags -int 524288   # NSEve
 
 If the system hotkey API cannot register the chord, Arthur falls back to a global key monitor and then needs **Input Monitoring** (System Settings → Privacy & Security) so ⌥Space works while another app is focused. In-window Space push-to-talk is unchanged and never needs that permission.
 
-The title-bar chip says **Shared with hallway** when the desk is using the hallway device’s `X-Device-Id` (same Arbiter conversation). Hover it for the device id and, when known, whether the last turn came from this Mac or the hallway button.
+Pick the hallway device in Settings so this Mac shares Arbiter conversation memory with the wall button. Continuity is not shown as a title-bar status pill.
 
 **Quiet text mode** (composer keyboard control, Arthur menu, or Settings → Typing) turns off Space-as-PTT so typing is safe. ⌥Space / the configured global chord and the menu bar extra still talk. Preference: `arthur.quietTextMode`.
 
