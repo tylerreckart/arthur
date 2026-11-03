@@ -193,6 +193,150 @@ std::optional<std::string> resolve_local_action_followup(
   return candidate;
 }
 
+bool has_token(std::string_view text, std::string_view word) {
+  std::size_t pos = 0;
+  while (pos <= text.size()) {
+    const auto found = text.find(word, pos);
+    if (found == std::string_view::npos) return false;
+    const bool left = found == 0 ||
+                      !std::isalnum(static_cast<unsigned char>(text[found - 1]));
+    const bool right = found + word.size() == text.size() ||
+                       !std::isalnum(static_cast<unsigned char>(
+                           text[found + word.size()]));
+    if (left && right) return true;
+    pos = found + 1;
+  }
+  return false;
+}
+
+bool has_explicit_light_polarity(std::string_view text) {
+  for (const char* word :
+       {"on", "off", "toggle", "enable", "disable", "kill", "dark"}) {
+    if (has_token(text, word)) return true;
+  }
+  return false;
+}
+
+std::string expand_clause_shorthand(std::string clause) {
+  if (clause == "the time" || clause == "time") return "what time is it";
+  if (clause == "the date" || clause == "date") return "whats the date";
+  if (clause == "the weather" || clause == "weather") return "whats the weather";
+  if (clause == "the forecast" || clause == "forecast") return "whats the forecast";
+  if (clause == "the news" || clause == "news") return "whats in the news";
+  if (clause == "the headlines" || clause == "headlines") return "top headlines";
+  if (clause == "the market" || clause == "the markets" || clause == "markets") {
+    return "hows the market";
+  }
+  return clause;
+}
+
+std::string inherit_light_target(const std::string& clause,
+                                 const std::string& previous) {
+  if (previous.empty() || has_explicit_light_polarity(clause)) return clause;
+  const auto prev = parse_home_intent(previous);
+  if (!prev || !is_light_kind(home_intent_kind_name(prev->kind))) return clause;
+  if (auto own = parse_home_intent(clause);
+      own && own->kind != HomeIntentKind::LightOn &&
+      own->kind != HomeIntentKind::LightOff &&
+      own->kind != HomeIntentKind::LightToggle) {
+    return clause;
+  }
+
+  std::string probe = clause;
+  if (clause.find("light") == std::string::npos &&
+      clause.find("lamp") == std::string::npos) {
+    probe = "turn on " + clause + " lights";
+  }
+  const auto probed = parse_home_intent(probe);
+  if (!probed || probed->room.empty() ||
+      clause.find(probed->room) == std::string::npos) {
+    return clause;
+  }
+  return light_request(home_intent_kind_name(prev->kind), probed->room);
+}
+
+std::vector<std::string> split_compound(std::string_view folded) {
+  const std::string_view delimiters[] = {" and then ", " then ", " and "};
+  std::vector<std::string> parts;
+  std::string current;
+  std::size_t i = 0;
+  while (i < folded.size()) {
+    const std::string_view rest = folded.substr(i);
+    std::string_view delimiter;
+    for (const auto candidate : delimiters) {
+      if (rest.rfind(candidate, 0) == 0) {
+        delimiter = candidate;
+        break;
+      }
+    }
+    if (!delimiter.empty()) {
+      parts.push_back(trim(current));
+      current.clear();
+      i += delimiter.size();
+      continue;
+    }
+    current.push_back(folded[i]);
+    ++i;
+  }
+  parts.push_back(trim(current));
+  if (parts.size() < 2 || parts.size() > 3) return {};
+  for (const auto& part : parts) {
+    if (part.empty()) return {};
+  }
+  return parts;
+}
+
+bool is_deterministic_clause(const Config& config, const std::string& clause) {
+  const std::string raw = to_lower(trim(clause));
+  if (raw.rfind("echo ", 0) == 0 && !trim(raw.substr(5)).empty()) return true;
+  if (is_clock_query(clause)) return true;
+  if (auto intent = parse_home_intent(clause)) {
+    if (intent->kind == HomeIntentKind::Weather && !intent->place.empty()) return true;
+    if (!config.home.configured()) return false;
+    if (intent->kind == HomeIntentKind::Timer && intent->timer_seconds <= 0 &&
+        config.home.timer_entity.empty()) {
+      return false;
+    }
+    return true;
+  }
+  if (auto briefing = parse_briefing_intent(clause)) {
+    return briefing->confidence == BriefingConfidence::High;
+  }
+  return false;
+}
+
+std::vector<std::string> local_compound_clauses(const Config& config,
+                                                std::string_view transcript) {
+  if (!config.fast_path) return {};
+  const auto parts = split_compound(fold_phatic(transcript));
+  if (parts.empty()) return {};
+
+  std::vector<std::string> resolved;
+  std::string previous;
+  bool all_same_briefing = true;
+  std::optional<BriefingKind> briefing_kind;
+  for (const auto& part : parts) {
+    const std::string clause =
+        inherit_light_target(expand_clause_shorthand(part), previous);
+    if (!is_deterministic_clause(config, clause)) return {};
+    if (auto briefing = parse_briefing_intent(clause);
+        briefing && briefing->confidence == BriefingConfidence::High) {
+      if (!briefing_kind) {
+        briefing_kind = briefing->kind;
+      } else if (*briefing_kind != briefing->kind) {
+        all_same_briefing = false;
+      }
+    } else {
+      all_same_briefing = false;
+    }
+    resolved.push_back(clause);
+    previous = clause;
+  }
+  // "bitcoin and ethereum" is one market request, not two lookups.
+  if (all_same_briefing) return {};
+  return resolved;
+}
+
 std::string context_line(std::string value) {
   for (char& c : value) {
     if (c == '\r' || c == '\n' || c == '\t') c = ' ';
@@ -489,6 +633,79 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     kokoro_total_ms += dt;
     return ok;
   };
+
+  if (const auto clauses = local_compound_clauses(config_, routing_transcript);
+      clauses.size() >= 2) {
+    result.used_fast_path = true;
+    path_name = "fast";
+    pending_kind = "fast";
+    if (auto existing = sessions_->get(device_id)) {
+      result.conversation_id = existing->conversation_id;
+    }
+    std::string joined_reply;
+    std::string joined_kind;
+    std::string saved_kind;
+    std::string saved_request;
+    bool arm_timer = false;
+    for (const auto& clause : clauses) {
+      if (handle->cancel.load()) {
+        result.error = "canceled";
+        return finish(result);
+      }
+      auto handled = fast_path_.try_handle(clause);
+      FastPathResult fp = handled
+                              ? *handled
+                              : FastPathResult{"I couldn't do that, sir.", "failed"};
+      if (!handled) fp.context_valid = false;
+      if (!speak(fp.reply)) {
+        result.error = err.empty() ? "tts failed" : err;
+        return finish(result);
+      }
+      if (fp.surface.is_object()) {
+        sink.event("surface", surface_event_body(result.turn_id, fp.surface).dump());
+      }
+      if (!joined_reply.empty() && !fp.reply.empty()) joined_reply.push_back(' ');
+      joined_reply += fp.reply;
+      if (!joined_kind.empty()) joined_kind.push_back('+');
+      joined_kind += fp.kind;
+      if (fp.context_valid) {
+        saved_kind = fp.kind;
+        saved_request = clause;
+      }
+      if (auto intent = parse_home_intent(clause);
+          intent && intent->kind == HomeIntentKind::Timer &&
+          intent->timer_seconds <= 0) {
+        arm_timer = true;
+      }
+    }
+    result.fast_path_kind = joined_kind;
+    if (result.conversation_id <= 0) {
+      std::string conv_err;
+      result.conversation_id = ensure_conversation(device_id, &conv_err);
+      if (result.conversation_id <= 0) {
+        std::cerr << "intercom fast-path conversation: "
+                  << (conv_err.empty() ? "create failed" : conv_err) << std::endl;
+      }
+    }
+    result.ok = true;
+    if (result.conversation_id > 0) {
+      DeviceSession s;
+      s.device_id = device_id;
+      s.conversation_id = result.conversation_id;
+      s.last_turn_id = result.turn_id;
+      s.last_user = result.transcript;
+      s.last_spoken = joined_reply;
+      s.last_fast_path_kind = saved_kind;
+      s.last_fast_path_request = saved_request;
+      if (arm_timer) {
+        s.pending_intent = "timer_duration";
+        s.pending_at = now_unix();
+      }
+      s.updated_at = now_unix();
+      sessions_->upsert(s, &err);
+    }
+    return finish(result);
+  }
 
   if (auto fp = fast_path_.try_handle(routing_transcript)) {
     result.used_fast_path = true;

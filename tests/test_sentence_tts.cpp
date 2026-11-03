@@ -301,7 +301,80 @@ int main() {
     CHECK(again.fast_path_kind == "volume_up");
 
     CHECK(arbiter_actions->last_message.empty());
+
+    const auto compound_lights = pipe_actions.run_text_utterance(
+        "dev-compound-lights",
+        "turn off the kitchen lights and the hallway", sink_actions);
+    CHECK(compound_lights.ok);
+    CHECK(compound_lights.used_fast_path);
+    CHECK(compound_lights.fast_path_kind == "light_off+light_off");
     std::filesystem::remove(db_actions);
+  }
+
+  {
+    auto tts_compound = std::make_shared<RecordingTts>();
+    auto arbiter_compound = std::make_shared<StreamingArbiter>(tts_compound);
+    auto stt_compound = std::make_shared<DummyStt>();
+    const auto db_compound =
+        std::filesystem::temp_directory_path() / "intercom_compound_turns.db";
+    std::filesystem::remove(db_compound);
+    auto sessions_compound =
+        std::make_shared<intercom::SessionStore>(db_compound.string());
+    CHECK(sessions_compound->open(&err));
+    intercom::Config cfg_compound;
+    cfg_compound.fast_path = true;
+    cfg_compound.filler.enabled = false;
+    cfg_compound.markets.quote_base = "http://127.0.0.1:9";
+    cfg_compound.markets.timeout_ms = 400;
+    intercom::TurnPipeline pipe_compound(
+        cfg_compound, stt_compound, tts_compound, arbiter_compound,
+        sessions_compound, nullptr);
+    CollectingSink sink_compound;
+
+    const auto spoken = pipe_compound.run_text_utterance(
+        "dev-compound", "what time is it and echo hello", sink_compound);
+    CHECK(spoken.ok);
+    CHECK(spoken.used_fast_path);
+    CHECK(spoken.fast_path_kind == "clock+echo");
+    const auto spoken_text = tts_compound->snapshot();
+    CHECK(spoken_text.size() == 2);
+    if (spoken_text.size() == 2) CHECK(spoken_text[1] == "hello.");
+    const auto spoken_session = sessions_compound->get("dev-compound");
+    CHECK(spoken_session.has_value());
+    if (spoken_session) {
+      CHECK(spoken_session->last_user == "what time is it and echo hello");
+      CHECK(spoken_session->last_fast_path_kind == "echo");
+      CHECK(spoken_session->last_fast_path_request == "echo hello");
+      CHECK(spoken_session->last_spoken.find("hello") != std::string::npos);
+    }
+
+    const auto shorthand = pipe_compound.run_text_utterance(
+        "dev-shorthand", "what time is it and the date", sink_compound);
+    CHECK(shorthand.ok);
+    CHECK(shorthand.used_fast_path);
+    CHECK(shorthand.fast_path_kind == "clock+clock");
+
+    const auto mixed = pipe_compound.run_text_utterance(
+        "dev-mixed", "tell me a joke and what time is it", sink_compound);
+    CHECK(mixed.ok);
+    CHECK(!mixed.used_fast_path);
+    CHECK(arbiter_compound->last_message ==
+          "tell me a joke and what time is it");
+
+    const auto quotes = pipe_compound.run_text_utterance(
+        "dev-quotes", "what's bitcoin and ethereum doing", sink_compound);
+    CHECK(quotes.ok);
+    CHECK(!quotes.used_fast_path);
+    CHECK(arbiter_compound->last_message ==
+          "what's bitcoin and ethereum doing");
+
+    const auto too_many = pipe_compound.run_text_utterance(
+        "dev-too-many", "what time is it and echo one and echo two and echo three",
+        sink_compound);
+    CHECK(too_many.ok);
+    CHECK(!too_many.used_fast_path);
+    CHECK(arbiter_compound->last_message.find("echo three") != std::string::npos);
+    std::filesystem::remove(db_compound);
   }
 
   {

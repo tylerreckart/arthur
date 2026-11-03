@@ -97,6 +97,14 @@ short action follow-ups remain deterministic. `turn it off`, `the hallway too`,
 Arbiter round trip. Failed Home Assistant calls are never retained as action
 context, so a failed command cannot later be repeated or reversed by accident.
 
+One utterance can also contain two or three deterministic clauses joined by
+`and`, `then`, or `and then`. Arthur performs each clause in order and speaks
+each result, so `what time is it and the date` or
+`turn off the kitchen lights and the hallway` stays local. A bare later target
+inherits the preceding light action, and short tails such as `the news` expand
+to their normal local request. A combined market or news request stays one
+lookup. If any clause is not deterministic, the whole utterance is left intact.
+
 ## `POST /v1/turns/:turn_id/cancel`
 
 Barge-in: stops TTS and cancels the Arbiter `request_id` when known.
