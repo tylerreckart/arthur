@@ -707,6 +707,7 @@ int main() {
     session.last_spoken = "The kitchen light is on.";
     session.last_fast_path_kind = "light_on";
     session.last_fast_path_request = "turn on the kitchen light";
+    session.last_card = "{\"active\":\"news\"}";
     session.pending_intent = "timer_duration";
     session.pending_at = 123;
     CHECK(migrated.upsert(session, &err));
@@ -718,6 +719,7 @@ int main() {
       CHECK(restored->last_fast_path_kind == session.last_fast_path_kind);
       CHECK(restored->last_fast_path_request ==
             session.last_fast_path_request);
+      CHECK(restored->last_card == session.last_card);
       CHECK(restored->pending_intent == session.pending_intent);
       CHECK(restored->pending_at == session.pending_at);
     }
@@ -1190,6 +1192,87 @@ int main() {
     brief.stop();
     if (brief_thread.joinable()) brief_thread.join();
     std::filesystem::remove(db_cards);
+  }
+
+  {
+    auto tts_card = std::make_shared<RecordingTts>();
+    auto arbiter_card = std::make_shared<StreamingArbiter>(tts_card);
+    auto stt_card = std::make_shared<DummyStt>();
+    const auto db_card =
+        std::filesystem::temp_directory_path() / "intercom_card_reference.db";
+    std::filesystem::remove(db_card);
+    auto sessions_card = std::make_shared<intercom::SessionStore>(db_card.string());
+    CHECK(sessions_card->open(&err));
+    intercom::Config cfg_card;
+    cfg_card.fast_path = true;
+    cfg_card.filler.enabled = false;
+    intercom::TurnPipeline pipe_card(
+        cfg_card, stt_card, tts_card, arbiter_card, sessions_card, nullptr);
+    CollectingSink sink_card;
+    const std::string card_json =
+        "{\"active\":\"news\",\"news\":["
+        "{\"label\":\"Fed holds rates\",\"detail\":\"Reuters\"},"
+        "{\"label\":\"Markets rally\",\"detail\":\"BBC\"}"
+        "],\"markets\":["
+        "{\"label\":\"Apple\",\"detail\":\"one hundred ninety two, up two percent\"},"
+        "{\"label\":\"Microsoft\",\"detail\":\"four hundred, down one percent\"}"
+        "]}";
+    intercom::DeviceSession seeded;
+    seeded.device_id = "dev-card";
+    seeded.conversation_id = 42;
+    seeded.last_user = "what's in the news";
+    seeded.last_spoken = "Here are the top headlines.";
+    seeded.last_fast_path_kind = "news";
+    seeded.last_card = card_json;
+    CHECK(sessions_card->upsert(seeded, &err));
+
+    const auto second = pipe_card.run_text_utterance(
+        "dev-card", "the second one", sink_card);
+    CHECK(second.ok);
+    CHECK(second.used_fast_path);
+    CHECK(second.fast_path_kind == "card");
+    const auto second_text = tts_card->snapshot();
+    CHECK(!second_text.empty());
+    if (!second_text.empty()) {
+      CHECK(second_text.back() ==
+            "The second headline is Markets rally, from BBC.");
+    }
+
+    const auto quote = pipe_card.run_text_utterance(
+        "dev-card", "the second quote", sink_card);
+    CHECK(quote.ok);
+    CHECK(quote.used_fast_path);
+    const auto quote_text = tts_card->snapshot();
+    CHECK(!quote_text.empty());
+    if (!quote_text.empty()) {
+      CHECK(quote_text.back() ==
+            "Microsoft is four hundred, down one percent.");
+    }
+
+    const auto missing = pipe_card.run_text_utterance(
+        "dev-card", "the fifth headline", sink_card);
+    CHECK(missing.ok);
+    CHECK(missing.used_fast_path);
+    const auto missing_text = tts_card->snapshot();
+    CHECK(!missing_text.empty());
+    if (!missing_text.empty()) {
+      CHECK(missing_text.back() == "There isn't a fifth headline.");
+    }
+
+    const auto clock = pipe_card.run_text_utterance(
+        "dev-card", "what time is it", sink_card);
+    CHECK(clock.ok);
+    CHECK(clock.used_fast_path);
+    const auto kept = sessions_card->get("dev-card");
+    CHECK(kept.has_value());
+    if (kept) CHECK(kept->last_card == card_json);
+
+    const auto joke = pipe_card.run_text_utterance(
+        "dev-card", "tell me a joke", sink_card);
+    CHECK(joke.ok);
+    CHECK(!joke.used_fast_path);
+    CHECK(arbiter_card->last_message == "tell me a joke");
+    std::filesystem::remove(db_card);
   }
 
   if (g_fails != 0) {

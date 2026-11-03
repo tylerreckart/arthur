@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <future>
 #include <iostream>
 #include <optional>
@@ -516,6 +517,197 @@ RepairPlan resolve_repair(const Config& config, const DeviceSession& prior,
   return {};
 }
 
+bool consume_prefix(std::string* text, std::string_view prefix) {
+  if (!text || text->size() < prefix.size()) return false;
+  if (text->compare(0, prefix.size(), prefix) != 0) return false;
+  if (text->size() == prefix.size()) {
+    text->clear();
+    return true;
+  }
+  if ((*text)[prefix.size()] != ' ') return false;
+  *text = trim(text->substr(prefix.size()));
+  return true;
+}
+
+int ordinal_index(std::string_view word) {
+  if (word == "first" || word == "one" || word == "1") return 0;
+  if (word == "second" || word == "two" || word == "2") return 1;
+  if (word == "third" || word == "three" || word == "3") return 2;
+  if (word == "fourth" || word == "four" || word == "4") return 3;
+  if (word == "fifth" || word == "five" || word == "5") return 4;
+  if (word == "sixth" || word == "six" || word == "6") return 5;
+  if (word == "seventh" || word == "seven" || word == "7") return 6;
+  if (word == "eighth" || word == "eight" || word == "8") return 7;
+  if (word == "last") return -1;
+  return -2;
+}
+
+std::string percent_phrase(double pct) {
+  const int rounded = static_cast<int>(std::lround(std::abs(pct)));
+  if (rounded == 0) return "about flat";
+  return std::string(pct > 0 ? "up " : "down ") + spoken_number(rounded) + " percent";
+}
+
+nlohmann::json card_items_from_surface(const nlohmann::json& surface) {
+  if (!surface.is_object()) return nullptr;
+  const std::string kind = surface.value("kind", "");
+  const auto payload = surface.contains("payload") && surface["payload"].is_object()
+                           ? surface["payload"]
+                           : nlohmann::json::object();
+  nlohmann::json items = nlohmann::json::array();
+  if (kind == "news" && payload.contains("items") && payload["items"].is_array()) {
+    for (const auto& row : payload["items"]) {
+      if (!row.is_object()) continue;
+      const std::string label = row.value("title", "");
+      if (label.empty()) continue;
+      nlohmann::json item = {{"label", label}};
+      const std::string source = row.value("source", "");
+      if (!source.empty()) item["detail"] = source;
+      items.push_back(std::move(item));
+      if (items.size() >= 8) break;
+    }
+  } else if (kind == "markets" && payload.contains("instruments") &&
+             payload["instruments"].is_array()) {
+    for (const auto& row : payload["instruments"]) {
+      if (!row.is_object()) continue;
+      std::string label = row.value("name", "");
+      if (label.empty()) label = row.value("symbol", "");
+      if (label.empty()) continue;
+      std::string detail;
+      if (row.contains("price") && row["price"].is_number()) {
+        detail = spoken_number(static_cast<int>(std::lround(row["price"].get<double>())));
+      }
+      if (row.contains("change_pct") && row["change_pct"].is_number()) {
+        const std::string change = percent_phrase(row["change_pct"].get<double>());
+        if (!detail.empty()) detail += ", ";
+        detail += change;
+      }
+      nlohmann::json item = {{"label", label}};
+      if (!detail.empty()) item["detail"] = detail;
+      items.push_back(std::move(item));
+      if (items.size() >= 8) break;
+    }
+  }
+  if (items.empty()) return nullptr;
+  return {{"kind", kind}, {"items", std::move(items)}};
+}
+
+std::string merge_card_state(const std::string& prior, const nlohmann::json& surface) {
+  const auto extracted = card_items_from_surface(surface);
+  if (!extracted.is_object()) return prior;
+  nlohmann::json state = nlohmann::json::object();
+  if (!prior.empty()) {
+    try {
+      auto parsed = nlohmann::json::parse(prior);
+      if (parsed.is_object()) state = std::move(parsed);
+    } catch (...) {
+    }
+  }
+  const std::string kind = extracted.value("kind", "");
+  state[kind] = extracted["items"];
+  state["active"] = kind;
+  return state.dump();
+}
+
+struct CardReference {
+  std::string line;
+  std::string list_kind;
+  std::string label;
+};
+
+std::optional<CardReference> resolve_card_reference(const std::string& card_state,
+                                                    std::string_view transcript) {
+  if (card_state.empty()) return std::nullopt;
+  nlohmann::json state;
+  try {
+    state = nlohmann::json::parse(card_state);
+  } catch (...) {
+    return std::nullopt;
+  }
+  if (!state.is_object()) return std::nullopt;
+
+  std::string text = fold_phatic(transcript);
+  if (text.empty() || text.size() > 80) return std::nullopt;
+  bool progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const char* prefix : {"tell me about", "tell me", "what about", "how about",
+                               "more about", "more on", "give me", "read me", "read",
+                               "whats", "what is"}) {
+      if (consume_prefix(&text, prefix)) progressed = true;
+    }
+  }
+  consume_prefix(&text, "the");
+  if (text.empty()) return std::nullopt;
+
+  std::string first;
+  std::string rest;
+  const auto space = text.find(' ');
+  if (space == std::string::npos) {
+    first = text;
+  } else {
+    first = text.substr(0, space);
+    rest = trim(text.substr(space + 1));
+  }
+  if (first == "number") {
+    const auto next = rest.find(' ');
+    first = next == std::string::npos ? rest : rest.substr(0, next);
+    rest = next == std::string::npos ? std::string() : trim(rest.substr(next + 1));
+  }
+  int index = ordinal_index(first);
+  if (first == "that") index = 0;
+  if (index == -2) return std::nullopt;
+
+  std::string want;
+  if (rest == "one" || rest == "item" || rest.empty()) {
+    want = state.value("active", "");
+  } else if (rest == "headline" || rest == "headlines" || rest == "story" ||
+             rest == "stories") {
+    want = "news";
+  } else if (rest == "quote" || rest == "quotes" || rest == "stock" ||
+             rest == "stocks") {
+    want = "markets";
+  } else {
+    return std::nullopt;
+  }
+  if (want != "news" && want != "markets") return std::nullopt;
+  if (!state.contains(want) || !state[want].is_array() || state[want].empty()) {
+    return std::nullopt;
+  }
+  const auto& items = state[want];
+  const int count = static_cast<int>(items.size());
+  if (index < 0) index = count - 1;
+  const char* noun = want == "news" ? "headline" : "quote";
+  auto ordinal_word = [](int ordinal) -> const char* {
+    static const char* words[] = {"first", "second", "third", "fourth",
+                                  "fifth", "sixth", "seventh", "eighth"};
+    if (ordinal >= 0 && ordinal < 8) return words[ordinal];
+    return "next";
+  };
+  CardReference hit;
+  hit.list_kind = want;
+  if (index >= count) {
+    hit.line = std::string("There isn't a ") + ordinal_word(index) + " " + noun + ".";
+    return hit;
+  }
+  const auto& item = items[index];
+  hit.label = item.value("label", "");
+  if (hit.label.empty()) return std::nullopt;
+  const std::string which = first == "last" ? "last" : ordinal_word(index);
+  if (want == "news") {
+    hit.line = "The " + which + " headline is " + hit.label;
+    const std::string source = item.value("detail", "");
+    if (!source.empty()) hit.line += ", from " + source;
+    hit.line += ".";
+  } else {
+    hit.line = hit.label;
+    const std::string detail = item.value("detail", "");
+    if (!detail.empty()) hit.line += " is " + detail;
+    hit.line += ".";
+  }
+  return hit;
+}
+
 std::string context_line(std::string value) {
   for (char& c : value) {
     if (c == '\r' || c == '\n' || c == '\t') c = ' ';
@@ -670,6 +862,7 @@ std::int64_t TurnPipeline::ensure_conversation(const std::string& device_id, std
     return 0;
   }
   DeviceSession s;
+  if (auto existing = sessions_->get(device_id)) s = *existing;
   s.device_id = device_id;
   s.conversation_id = *id;
   s.updated_at = now_unix();
@@ -788,6 +981,10 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
 
   std::string routing_transcript = result.transcript;
   const auto prior_session = sessions_->get(device_id);
+  std::string carried_card = prior_session ? prior_session->last_card : "";
+  auto remember_surface = [&](const nlohmann::json& surface) {
+    carried_card = merge_card_state(carried_card, surface);
+  };
   if (prior_session && !prior_session->last_spoken.empty() &&
       is_repeat_request(result.transcript)) {
     routing_transcript = "echo " + prior_session->last_spoken;
@@ -853,6 +1050,49 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     return ok;
   };
 
+  if (prior_session && routing_transcript == result.transcript) {
+    if (auto card = resolve_card_reference(prior_session->last_card, result.transcript)) {
+      result.used_fast_path = true;
+      result.fast_path_kind = "card";
+      path_name = "fast";
+      pending_kind = "fast";
+      if (auto existing = sessions_->get(device_id)) {
+        result.conversation_id = existing->conversation_id;
+      }
+      if (!speak(card->line)) {
+        result.error = err.empty() ? "tts failed" : err;
+        return finish(result);
+      }
+      if (result.conversation_id <= 0) {
+        std::string conv_err;
+        result.conversation_id = ensure_conversation(device_id, &conv_err);
+        if (result.conversation_id <= 0) {
+          std::cerr << "intercom fast-path conversation: "
+                    << (conv_err.empty() ? "create failed" : conv_err) << std::endl;
+        }
+      }
+      result.ok = true;
+      if (result.conversation_id > 0) {
+        DeviceSession s;
+        s.device_id = device_id;
+        s.conversation_id = result.conversation_id;
+        s.last_turn_id = result.turn_id;
+        s.last_user = result.transcript;
+        s.last_spoken = card->line;
+        s.last_fast_path_kind = card->list_kind;
+        s.last_fast_path_request = card->label;
+        s.last_card = carried_card;
+        if (prior_session) {
+          s.pending_intent = prior_session->pending_intent;
+          s.pending_at = prior_session->pending_at;
+        }
+        s.updated_at = now_unix();
+        sessions_->upsert(s, &err);
+      }
+      return finish(result);
+    }
+  }
+
   if (config_.fast_path && is_spoken_briefing(routing_transcript)) {
     result.used_fast_path = true;
     result.fast_path_kind = "briefing";
@@ -895,6 +1135,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       if (line.empty()) return true;
       if (!speak(line)) return false;
       if (surface.is_object()) {
+        remember_surface(surface);
         sink.event("surface", surface_event_body(result.turn_id, surface).dump());
       }
       if (!joined_reply.empty()) joined_reply.push_back(' ');
@@ -951,6 +1192,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       s.last_spoken = joined_reply;
       s.last_fast_path_kind = "briefing";
       s.last_fast_path_request = routing_transcript;
+      s.last_card = carried_card;
       s.updated_at = now_unix();
       sessions_->upsert(s, &err);
     }
@@ -985,6 +1227,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
         return finish(result);
       }
       if (fp.surface.is_object()) {
+        remember_surface(fp.surface);
         sink.event("surface", surface_event_body(result.turn_id, fp.surface).dump());
       }
       if (!joined_reply.empty() && !fp.reply.empty()) joined_reply.push_back(' ');
@@ -1020,6 +1263,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       s.last_spoken = joined_reply;
       s.last_fast_path_kind = saved_kind;
       s.last_fast_path_request = saved_request;
+      s.last_card = carried_card;
       if (arm_timer) {
         s.pending_intent = "timer_duration";
         s.pending_at = now_unix();
@@ -1043,6 +1287,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       return finish(result);
     }
     if (fp->surface.is_object()) {
+      remember_surface(fp->surface);
       sink.event("surface", surface_event_body(result.turn_id, fp->surface).dump());
     }
     if (result.conversation_id <= 0) {
@@ -1065,6 +1310,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
         s.last_fast_path_kind = fp->kind;
         s.last_fast_path_request = routing_transcript;
       }
+      s.last_card = carried_card;
       if (auto intent = parse_home_intent(routing_transcript);
           intent && intent->kind == HomeIntentKind::Timer &&
           intent->timer_seconds <= 0) {
@@ -1111,6 +1357,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     if (!briefing_surface_future.valid() || handle->cancel.load()) return;
     auto surf = briefing_surface_future.get();
     if (surf.is_object()) {
+      remember_surface(surf);
       sink.event("surface", surface_event_body(result.turn_id, surf).dump());
     }
   };
@@ -1379,6 +1626,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   s.last_turn_id = result.turn_id;
   s.last_user = result.transcript;
   s.last_spoken = arb_state.full_content;
+  s.last_card = carried_card;
   s.updated_at = now_unix();
   sessions_->upsert(s, &err);
 

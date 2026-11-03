@@ -54,6 +54,7 @@ bool SessionStore::open(std::string* err) {
       "  last_spoken TEXT NOT NULL DEFAULT '',"
       "  last_fast_path_kind TEXT NOT NULL DEFAULT '',"
       "  last_fast_path_request TEXT NOT NULL DEFAULT '',"
+      "  last_card TEXT NOT NULL DEFAULT '',"
       "  pending_intent TEXT NOT NULL DEFAULT '',"
       "  pending_at INTEGER NOT NULL DEFAULT 0,"
       "  updated_at INTEGER NOT NULL"
@@ -77,6 +78,8 @@ bool SessionStore::open(std::string* err) {
            "ALTER TABLE device_sessions ADD COLUMN "
            "last_fast_path_request TEXT NOT NULL DEFAULT '';",
            "ALTER TABLE device_sessions ADD COLUMN "
+           "last_card TEXT NOT NULL DEFAULT '';",
+           "ALTER TABLE device_sessions ADD COLUMN "
            "pending_intent TEXT NOT NULL DEFAULT '';",
            "ALTER TABLE device_sessions ADD COLUMN "
            "pending_at INTEGER NOT NULL DEFAULT 0;",
@@ -99,8 +102,8 @@ std::optional<DeviceSession> SessionStore::get(const std::string& device_id) con
   sqlite3_stmt* stmt = nullptr;
   const char* sql =
       "SELECT device_id, conversation_id, last_turn_id, last_user, last_spoken, "
-      "last_fast_path_kind, last_fast_path_request, pending_intent, pending_at, updated_at "
-      "FROM device_sessions WHERE device_id = ?";
+      "last_fast_path_kind, last_fast_path_request, last_card, pending_intent, "
+      "pending_at, updated_at FROM device_sessions WHERE device_id = ?";
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     return std::nullopt;
   }
@@ -120,10 +123,12 @@ std::optional<DeviceSession> SessionStore::get(const std::string& device_id) con
     s.last_fast_path_kind = kind ? reinterpret_cast<const char*>(kind) : "";
     const unsigned char* request = sqlite3_column_text(stmt, 6);
     s.last_fast_path_request = request ? reinterpret_cast<const char*>(request) : "";
-    const unsigned char* pending = sqlite3_column_text(stmt, 7);
+    const unsigned char* card = sqlite3_column_text(stmt, 7);
+    s.last_card = card ? reinterpret_cast<const char*>(card) : "";
+    const unsigned char* pending = sqlite3_column_text(stmt, 8);
     s.pending_intent = pending ? reinterpret_cast<const char*>(pending) : "";
-    s.pending_at = sqlite3_column_int64(stmt, 8);
-    s.updated_at = sqlite3_column_int64(stmt, 9);
+    s.pending_at = sqlite3_column_int64(stmt, 9);
+    s.updated_at = sqlite3_column_int64(stmt, 10);
     out = std::move(s);
   }
   sqlite3_finalize(stmt);
@@ -136,8 +141,8 @@ std::vector<DeviceSession> SessionStore::list() const {
   sqlite3_stmt* stmt = nullptr;
   const char* sql =
       "SELECT device_id, conversation_id, last_turn_id, last_user, last_spoken, "
-      "last_fast_path_kind, last_fast_path_request, pending_intent, pending_at, updated_at "
-      "FROM device_sessions ORDER BY device_id";
+      "last_fast_path_kind, last_fast_path_request, last_card, pending_intent, "
+      "pending_at, updated_at FROM device_sessions ORDER BY device_id";
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     return out;
   }
@@ -155,10 +160,12 @@ std::vector<DeviceSession> SessionStore::list() const {
     s.last_fast_path_kind = kind ? reinterpret_cast<const char*>(kind) : "";
     const unsigned char* request = sqlite3_column_text(stmt, 6);
     s.last_fast_path_request = request ? reinterpret_cast<const char*>(request) : "";
-    const unsigned char* pending = sqlite3_column_text(stmt, 7);
+    const unsigned char* card = sqlite3_column_text(stmt, 7);
+    s.last_card = card ? reinterpret_cast<const char*>(card) : "";
+    const unsigned char* pending = sqlite3_column_text(stmt, 8);
     s.pending_intent = pending ? reinterpret_cast<const char*>(pending) : "";
-    s.pending_at = sqlite3_column_int64(stmt, 8);
-    s.updated_at = sqlite3_column_int64(stmt, 9);
+    s.pending_at = sqlite3_column_int64(stmt, 9);
+    s.updated_at = sqlite3_column_int64(stmt, 10);
     out.push_back(std::move(s));
   }
   sqlite3_finalize(stmt);
@@ -174,8 +181,8 @@ bool SessionStore::upsert(const DeviceSession& session, std::string* err) {
   const char* sql =
       "INSERT INTO device_sessions(device_id, conversation_id, last_turn_id, "
       "last_user, last_spoken, last_fast_path_kind, last_fast_path_request, "
-      "pending_intent, pending_at, updated_at) "
-      "VALUES(?,?,?,?,?,?,?,?,?,?) "
+      "last_card, pending_intent, pending_at, updated_at) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
       "ON CONFLICT(device_id) DO UPDATE SET "
       "conversation_id=excluded.conversation_id, "
       "last_turn_id=excluded.last_turn_id, "
@@ -183,6 +190,7 @@ bool SessionStore::upsert(const DeviceSession& session, std::string* err) {
       "last_spoken=excluded.last_spoken, "
       "last_fast_path_kind=excluded.last_fast_path_kind, "
       "last_fast_path_request=excluded.last_fast_path_request, "
+      "last_card=excluded.last_card, "
       "pending_intent=excluded.pending_intent, "
       "pending_at=excluded.pending_at, "
       "updated_at=excluded.updated_at";
@@ -200,9 +208,10 @@ bool SessionStore::upsert(const DeviceSession& session, std::string* err) {
       stmt, 6, session.last_fast_path_kind.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(
       stmt, 7, session.last_fast_path_request.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 8, session.pending_intent.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_int64(stmt, 9, session.pending_at);
-  sqlite3_bind_int64(stmt, 10, ts);
+  sqlite3_bind_text(stmt, 8, session.last_card.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 9, session.pending_intent.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(stmt, 10, session.pending_at);
+  sqlite3_bind_int64(stmt, 11, ts);
   const int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
   if (rc != SQLITE_DONE) {

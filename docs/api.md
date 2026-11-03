@@ -120,6 +120,13 @@ inherits the preceding light action, and short tails such as `the news` expand
 to their normal local request. A combined market or news request stays one
 lookup. If any clause is not deterministic, the whole utterance is left intact.
 
+After a news or markets card, a short pointer such as `the second one`,
+`read the first headline`, or `the last quote` speaks that item from the stored
+list. `headline` selects the latest news list and `quote` selects the latest
+markets list, including when a briefing showed both. A missing item gets a
+short local answer. The list is kept across later local answers such as the
+clock.
+
 ## `POST /v1/turns/:turn_id/cancel`
 
 Barge-in: stops TTS and cancels the Arbiter `request_id` when known.
@@ -128,7 +135,7 @@ Requires `Authorization` + `X-Device-Id`.
 
 ## `GET /v1/devices/:device_id/session`
 
-Debug: `{ device_id, conversation_id, last_turn_id, last_user, last_spoken, last_fast_path_kind, last_fast_path_request, pending_intent, pending_at, updated_at }`.
+Debug: `{ device_id, conversation_id, last_turn_id, last_user, last_spoken, last_fast_path_kind, last_fast_path_request, last_card, pending_intent, pending_at, updated_at }`.
 
 Intercom keeps the last user request and completed spoken line per device.
 Exact requests such as `say that again` can replay deterministic or Arbiter

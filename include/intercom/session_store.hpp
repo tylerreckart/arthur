@@ -17,6 +17,9 @@ struct DeviceSession {
   std::string last_spoken;
   std::string last_fast_path_kind;
   std::string last_fast_path_request;
+  // Compact news/markets lists from the latest cards, so "the second one"
+  // can be resolved without another fetch.
+  std::string last_card;
   std::string pending_intent;
   std::int64_t pending_at = 0;
   std::int64_t updated_at = 0;
