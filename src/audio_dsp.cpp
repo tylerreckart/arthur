@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <utility>
 
@@ -129,6 +130,118 @@ std::vector<std::uint8_t> SpeechDspProcessor::process(
     std::memcpy(output.data() + i, &value, sizeof(value));
   }
   return output;
+}
+
+UtteranceEndpoint::UtteranceEndpoint(UtteranceEndpointConfig config)
+    : config_(std::move(config)) {
+  const int rate = std::max(8000, config_.sample_rate);
+  config_.sample_rate = rate;
+  window_samples_ = std::max(1, rate / 50);
+  const auto samples_for = [&](int ms) {
+    return std::max(window_samples_, rate * std::max(0, ms) / 1000);
+  };
+  min_speech_samples_ = samples_for(config_.min_speech_ms);
+  trailing_samples_ = samples_for(config_.trailing_silence_ms);
+  max_samples_ = std::max(min_speech_samples_, samples_for(config_.max_utterance_ms));
+  if (config_.speech_rms < 0.0) config_.speech_rms = 0.0;
+}
+
+void UtteranceEndpoint::reset() {
+  pending_.clear();
+  pending_read_ = 0;
+  has_odd_byte_ = false;
+  odd_byte_ = 0;
+  speech_samples_ = 0;
+  silence_samples_ = 0;
+  utterance_samples_ = 0;
+  speech_confirmed_ = false;
+  onset_pending_ = false;
+  completed_ = false;
+}
+
+bool UtteranceEndpoint::take_speech_onset() {
+  if (!onset_pending_) return false;
+  onset_pending_ = false;
+  return true;
+}
+
+void UtteranceEndpoint::consider_window(double sum_sq, int count) {
+  if (count <= 0 || completed_) return;
+  const double rms = std::sqrt(sum_sq / static_cast<double>(count));
+  const bool speech = rms >= config_.speech_rms;
+  if (speech) {
+    speech_samples_ += count;
+    silence_samples_ = 0;
+    utterance_samples_ += count;
+    if (!speech_confirmed_ && speech_samples_ >= min_speech_samples_) {
+      speech_confirmed_ = true;
+      onset_pending_ = true;
+    }
+  } else if (speech_samples_ == 0) {
+    return;
+  } else {
+    silence_samples_ += count;
+    utterance_samples_ += count;
+    if (!speech_confirmed_ && silence_samples_ >= min_speech_samples_) {
+      speech_samples_ = 0;
+      silence_samples_ = 0;
+      utterance_samples_ = 0;
+      return;
+    }
+  }
+  if (speech_confirmed_ && (silence_samples_ >= trailing_samples_ ||
+                            utterance_samples_ >= max_samples_)) {
+    completed_ = true;
+  }
+}
+
+UtteranceEndpointEvent UtteranceEndpoint::push(const std::uint8_t* data,
+                                               std::size_t len) {
+  if (completed_ || !data || len == 0) return UtteranceEndpointEvent::None;
+  std::vector<std::uint8_t> bytes;
+  bytes.reserve(len + (has_odd_byte_ ? 1 : 0));
+  if (has_odd_byte_) {
+    bytes.push_back(odd_byte_);
+    has_odd_byte_ = false;
+  }
+  bytes.insert(bytes.end(), data, data + len);
+  if (bytes.size() % 2 != 0) {
+    odd_byte_ = bytes.back();
+    has_odd_byte_ = true;
+    bytes.pop_back();
+  }
+  for (std::size_t i = 0; i + 1 < bytes.size(); i += 2) {
+    std::int16_t sample = 0;
+    std::memcpy(&sample, bytes.data() + i, sizeof(sample));
+    pending_.push_back(sample);
+  }
+
+  bool completed_now = false;
+  while (pending_.size() - pending_read_ >=
+         static_cast<std::size_t>(window_samples_)) {
+    double sum_sq = 0.0;
+    for (int i = 0; i < window_samples_; ++i) {
+      const double x =
+          static_cast<double>(pending_[pending_read_ + static_cast<std::size_t>(i)]) /
+          32768.0;
+      sum_sq += x * x;
+    }
+    pending_read_ += static_cast<std::size_t>(window_samples_);
+    consider_window(sum_sq, window_samples_);
+    if (pending_read_ >= 4096 && pending_read_ * 2 > pending_.size()) {
+      pending_.erase(pending_.begin(),
+                     pending_.begin() + static_cast<std::ptrdiff_t>(pending_read_));
+      pending_read_ = 0;
+    }
+    if (completed_) {
+      completed_now = true;
+      pending_.clear();
+      pending_read_ = 0;
+      break;
+    }
+  }
+  return completed_now ? UtteranceEndpointEvent::Completed
+                       : UtteranceEndpointEvent::None;
 }
 
 }  // namespace intercom

@@ -270,6 +270,8 @@ int main() {
   auto top = intercom::news_from_rss(std::string_view{rss});
   CHECK(top.ok);
   CHECK(contains(top.spoken, "headlines"));
+  CHECK(contains(top.spoken, "The first is Fed holds rates, from Reuters"));
+  CHECK(contains(top.spoken, "The second is Markets rally into the close, sir."));
   CHECK(top.surface.title == "Top stories");
 
   auto empty_news = intercom::news_from_rss(std::string_view{"<rss></rss>"});
@@ -301,6 +303,9 @@ int main() {
   auto quotes = intercom::markets_from_yahoo_quote(std::string_view{yahoo});
   CHECK(quotes.ok);
   CHECK(contains(quotes.spoken, "sir"));
+  CHECK(contains(quotes.spoken, "Markets are mixed"));
+  CHECK(contains(quotes.spoken, "Apple is two hundred and thirty, up one percent"));
+  CHECK(contains(quotes.spoken, "The S and P is five thousand seven hundred and twelve, about flat"));
   CHECK(quotes.surface.kind == intercom::SurfaceKind::Markets);
   const auto mkt_wire = intercom::surface_to_json(quotes.surface);
   CHECK(mkt_wire.value("kind", "") == "markets");

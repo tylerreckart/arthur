@@ -13,7 +13,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -39,10 +41,12 @@ class DummyStt : public intercom::SttProvider {
  public:
   std::string transcribe(const std::vector<std::uint8_t>& pcm, int, int, std::string*) override {
     last_pcm = pcm;
+    calls.fetch_add(1);
     return pcm.empty() ? std::string() : std::string("status");
   }
   bool ready(std::string*) const override { return true; }
   std::vector<std::uint8_t> last_pcm;
+  std::atomic<int> calls{0};
 };
 
 class RecordingTts : public intercom::TtsProvider {
@@ -523,6 +527,173 @@ int main() {
     CHECK(accept_id == turn_id);
     CHECK(stt->last_pcm.size() == chunk_a.size() + chunk_b.size() + chunk_c.size());
     CHECK(std::string(stt->last_pcm.begin(), stt->last_pcm.end()) == chunk_a + chunk_b + chunk_c);
+
+    // Speech followed by trailing silence completes without {"type":"end"}.
+    // A later end must not run that audio again.
+    std::string utterance;
+    auto append_pcm = [&](int samples, bool voice) {
+      for (int i = 0; i < samples; ++i) {
+        const auto s = static_cast<std::int16_t>(
+            voice ? std::sin(2.0 * 3.14159265358979323846 * i / 48.0) * 9000.0 : 0.0);
+        utterance.push_back(static_cast<char>(s & 0xff));
+        utterance.push_back(static_cast<char>((s >> 8) & 0xff));
+      }
+    };
+    append_pcm(24000 * 400 / 1000, true);
+    append_pcm(24000 * 800 / 1000, false);
+    const int calls_before = stt->calls.load();
+    for (std::size_t off = 0; off < utterance.size(); off += 4096) {
+      intercom::WsFrame chunk;
+      chunk.opcode = intercom::WsOpcode::Binary;
+      chunk.payload = utterance.substr(off, 4096);
+      const std::string raw = intercom::encode_ws_frame(chunk, true);
+      CHECK(send_all(fd, raw.data(), raw.size()));
+    }
+
+    incoming.clear();
+    got_done = false;
+    got_heard = false;
+    int accepts = 0;
+    std::string endpoint_turn;
+    const auto endpoint_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+    while (std::chrono::steady_clock::now() < endpoint_deadline && !got_done) {
+      char buf[8192];
+      const ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+      if (n > 0) incoming.append(buf, static_cast<std::size_t>(n));
+      while (true) {
+        std::size_t used = 0;
+        auto frame = intercom::decode_ws_frame(incoming, &used);
+        if (!frame) break;
+        incoming.erase(0, used);
+        if (frame->opcode != intercom::WsOpcode::Text) continue;
+        try {
+          auto j = nlohmann::json::parse(frame->payload);
+          const auto type = j.value("type", "");
+          if (type == "accept") {
+            ++accepts;
+            endpoint_turn = j.value("turn_id", "");
+          }
+          if (type == "heard" && j.value("text", "") == "status") got_heard = true;
+          if (type == "done" && j.value("turn_id", "") == endpoint_turn) got_done = true;
+        } catch (...) {
+        }
+      }
+      if (!got_done) std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+    CHECK(got_done);
+    CHECK(got_heard);
+    CHECK(accepts == 1);
+    CHECK(stt->calls.load() == calls_before + 1);
+
+    intercom::WsFrame late_end;
+    late_end.opcode = intercom::WsOpcode::Text;
+    late_end.payload = R"({"type":"end"})";
+    const std::string late_raw = intercom::encode_ws_frame(late_end, true);
+    CHECK(send_all(fd, late_raw.data(), late_raw.size()));
+    const auto quiet_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
+    bool second_accept = false;
+    bool empty_error = false;
+    while (std::chrono::steady_clock::now() < quiet_deadline) {
+      char buf[4096];
+      const ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+      if (n > 0) incoming.append(buf, static_cast<std::size_t>(n));
+      while (true) {
+        std::size_t used = 0;
+        auto frame = intercom::decode_ws_frame(incoming, &used);
+        if (!frame) break;
+        incoming.erase(0, used);
+        if (frame->opcode != intercom::WsOpcode::Text) continue;
+        try {
+          auto j = nlohmann::json::parse(frame->payload);
+          const auto type = j.value("type", "");
+          if (type == "accept") second_accept = true;
+          if (type == "error" && j.value("error", "") == "empty pcm") empty_error = true;
+        } catch (...) {
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    CHECK(!second_accept);
+    CHECK(!empty_error);
+    CHECK(stt->calls.load() == calls_before + 1);
+
+    // Speech during an active turn cancels it and starts the next utterance.
+    arbiter->slow_mode.store(true);
+    intercom::WsFrame barge_text;
+    barge_text.opcode = intercom::WsOpcode::Text;
+    barge_text.payload = R"({"type":"text","text":"keep talking"})";
+    const std::string barge_raw = intercom::encode_ws_frame(barge_text, true);
+    CHECK(send_all(fd, barge_raw.data(), barge_raw.size()));
+    std::string slow_id;
+    const auto slow_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(1000);
+    while (std::chrono::steady_clock::now() < slow_deadline && slow_id.empty()) {
+      char buf[4096];
+      const ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+      if (n > 0) incoming.append(buf, static_cast<std::size_t>(n));
+      while (true) {
+        std::size_t used = 0;
+        auto frame = intercom::decode_ws_frame(incoming, &used);
+        if (!frame) break;
+        incoming.erase(0, used);
+        if (frame->opcode != intercom::WsOpcode::Text) continue;
+        try {
+          auto j = nlohmann::json::parse(frame->payload);
+          if (j.value("type", "") == "accept") slow_id = j.value("turn_id", "");
+        } catch (...) {
+        }
+      }
+      if (slow_id.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(!slow_id.empty());
+    for (std::size_t off = 0; off < utterance.size(); off += 4096) {
+      intercom::WsFrame chunk;
+      chunk.opcode = intercom::WsOpcode::Binary;
+      chunk.payload = utterance.substr(off, 4096);
+      const std::string raw = intercom::encode_ws_frame(chunk, true);
+      CHECK(send_all(fd, raw.data(), raw.size()));
+    }
+    bool slow_canceled = false;
+    bool barge_done = false;
+    std::string barge_id;
+    const auto barge_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+    while (std::chrono::steady_clock::now() < barge_deadline &&
+           (!slow_canceled || !barge_done)) {
+      char buf[8192];
+      const ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+      if (n > 0) incoming.append(buf, static_cast<std::size_t>(n));
+      while (true) {
+        std::size_t used = 0;
+        auto frame = intercom::decode_ws_frame(incoming, &used);
+        if (!frame) break;
+        incoming.erase(0, used);
+        if (frame->opcode != intercom::WsOpcode::Text) continue;
+        try {
+          auto j = nlohmann::json::parse(frame->payload);
+          const auto type = j.value("type", "");
+          const auto id = j.value("turn_id", "");
+          if (type == "accept" && id != slow_id) barge_id = id;
+          if (type == "done" && id == slow_id) {
+            CHECK(!j.value("ok", true));
+            CHECK(j.value("error", "") == "canceled");
+            slow_canceled = true;
+          }
+          if (type == "done" && !barge_id.empty() && id == barge_id) barge_done = true;
+        } catch (...) {
+        }
+      }
+      if (!slow_canceled || !barge_done) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+      }
+    }
+    CHECK(slow_canceled);
+    CHECK(barge_done);
+    CHECK(barge_id != slow_id);
+    CHECK(arbiter->cancel_seen.load());
+
     ::close(fd);
   }
 

@@ -53,6 +53,9 @@ final class AppModel {
   var micGranted = false
   var settingsOpen = false
   var holding = false
+  /// Tap-to-talk. Capture stays open until trailing silence or the server
+  /// accepts the utterance. Hold-to-talk still ends on release.
+  var handsFree = false
   var inputLevel = 0.0
   /// Live TTS energy (0…1) while Arthur is speaking. Drives the desk ripple.
   var speakLevel = 0.0
@@ -102,6 +105,7 @@ final class AppModel {
   private var reconnectAttempt = 0
   private var wantsSocket = false
   private var pcmBytes = 0
+  private var endpoint = UtteranceEndpoint()
   private var expectingReply = false
   private var typedThisTurn = false
   private var started = false
@@ -139,6 +143,9 @@ final class AppModel {
         self.pcmBytes += data.count
         if self.holding {
           self.inputLevel = min(1, max(level, self.inputLevel * 0.68))
+        }
+        if self.handsFree, self.endpoint.push(data) {
+          self.finishUtterance()
         }
       }
     }
@@ -295,10 +302,17 @@ final class AppModel {
   }
 
   func talkPressed() {
+    if handsFree {
+      finishUtterance()
+      return
+    }
     if !holding { pttDown(explicit: true) }
   }
 
   func talkReleased() {
+    // The key-up that follows a tap arms hands-free inside pttUp. A later
+    // key-up must not end that open listen.
+    if handsFree { return }
     if holding { pttUp() }
   }
 
@@ -324,6 +338,8 @@ final class AppModel {
     }
     do {
       pcmBytes = 0
+      handsFree = false
+      endpoint.reset()
       expectingReply = false
       typedThisTurn = false
       formingText = ""
@@ -345,23 +361,60 @@ final class AppModel {
 
   func pttUp() {
     guard holding else { return }
+    let elapsed = Date().timeIntervalSince(pttStarted ?? Date())
+    if handsFree {
+      finishUtterance()
+      return
+    }
+    // A short press starts hands-free listening. Holding through the
+    // threshold keeps the existing release-to-send path.
+    if elapsed < 0.28 {
+      handsFree = true
+      return
+    }
+    finishUtterance()
+  }
+
+  func finishUtterance() {
+    guard holding else { return }
+    let wasHandsFree = handsFree
     holding = false
+    handsFree = false
     pttFromKeyboard = false
     inputLevel = 0
     audio.stopCapture()
+    endpoint.reset()
     let elapsed = Date().timeIntervalSince(pttStarted ?? Date())
     pttStarted = nil
-    if elapsed < 0.35 || pcmBytes < 8000 {
+    let tooShort = wasHandsFree ? pcmBytes < 8000 : (elapsed < 0.35 || pcmBytes < 8000)
+    if tooShort {
       client.sendCancel()
       clearHearing()
       become(client.isConnected ? .idle : .disconnected)
-      errorText = "Too short — hold a little longer."
+      errorText = wasHandsFree ? "Too short." : "Too short — hold a little longer."
       return
     }
     expectingReply = true
     setWork(.findingWords)
     become(.thinking)
     client.sendEnd()
+  }
+
+  /// The server already started the turn from trailing silence. Stop the mic
+  /// without sending a second end.
+  private func stopCaptureForServer() {
+    holding = false
+    handsFree = false
+    pttFromKeyboard = false
+    inputLevel = 0
+    audio.stopCapture()
+    endpoint.reset()
+    pttStarted = nil
+    if !expectingReply {
+      expectingReply = true
+      setWork(.findingWords)
+      if phase == .listening { become(.thinking) }
+    }
   }
 
   func sendDraft() {
@@ -655,6 +708,7 @@ final class AppModel {
       turnId = id
       lastSurface = .desk
       if !id.isEmpty { lastPolledTurnId = id }
+      if holding { stopCaptureForServer() }
     case .pcm(let data):
       if expectingReply || phase == .speaking {
         become(.speaking)

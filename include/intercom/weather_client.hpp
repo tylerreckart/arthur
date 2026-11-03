@@ -9,6 +9,8 @@ namespace intercom {
 struct WeatherClientConfig {
   std::string geocode_base = "https://geocoding-api.open-meteo.com";
   std::string forecast_base = "https://api.open-meteo.com";
+  // Used by the spoken briefing when Home Assistant weather is unavailable.
+  std::string default_place;
   int timeout_ms = 2500;
 };
 

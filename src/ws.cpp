@@ -1,4 +1,5 @@
 #include "intercom/ws.hpp"
+#include "intercom/audio_dsp.hpp"
 #include "intercom/device_hub.hpp"
 #include "intercom/util.hpp"
 
@@ -539,6 +540,50 @@ void WsServer::handle_client(int fd) {
     // turn unwinds. Keep the device busy until that recording is submitted.
     set_busy(!pcm.empty());
   };
+  UtteranceEndpointConfig endpoint_cfg;
+  endpoint_cfg.sample_rate = deps_.config.sample_rate > 0 ? deps_.config.sample_rate : 24000;
+  UtteranceEndpoint endpoint(endpoint_cfg);
+  bool ignore_empty_end = false;
+  // Set only after the energy detector starts a turn. Silence after that cut
+  // is not a new utterance, and the matching end must not run the audio again.
+  bool suppress_tail = false;
+
+  auto retire_active = [&]() {
+    if (turn_future.valid() || !active_turn.empty()) {
+      if (!active_turn.empty()) {
+        std::string cancel_err;
+        deps_.pipeline->cancel_turn(active_turn, &cancel_err);
+      }
+      if (turn_future.valid()) {
+        retired_turns.push_back(RetiredTurn{active_turn, std::move(turn_future)});
+      }
+      active_turn.clear();
+    }
+  };
+  auto submit_pcm = [&](bool automatic) {
+    if (pcm.empty()) return;
+    retire_active();
+    ignore_empty_end = true;
+    suppress_tail = automatic;
+    endpoint.reset();
+    set_busy(true);
+    active_turn = make_turn_id();
+    deps_.pipeline->prepare_turn(active_turn);
+    send_text({{"type", "accept"}, {"turn_id", active_turn}});
+    auto turn_pcm = std::move(pcm);
+    pcm.clear();
+    const std::string turn_id = active_turn;
+    turn_future = std::async(std::launch::async,
+        [this, fd, hub, device_id, turn_id, turn_pcm = std::move(turn_pcm),
+         &direct_send_mu]() {
+          SocketAudioSink sink(fd, hub, device_id, &direct_send_mu);
+          auto result = deps_.pipeline->run_utterance(
+              device_id, turn_pcm, deps_.config.sample_rate,
+              deps_.config.channels, sink, turn_id);
+          if (result.turn_id.empty()) result.turn_id = turn_id;
+          return result;
+        });
+  };
   // Bytes read with the HTTP upgrade are already a websocket frame.
   bool buffered = !buf.empty();
   while (!stop_.load()) {
@@ -601,6 +646,24 @@ void WsServer::handle_client(int fd) {
       if (frame->opcode == WsOpcode::Binary) {
         if (!ptt_busy && pcm.empty() && active_turn.empty()) set_busy(true);
         pcm.insert(pcm.end(), frame->payload.begin(), frame->payload.end());
+        const auto decision = endpoint.push(
+            reinterpret_cast<const std::uint8_t*>(frame->payload.data()),
+            frame->payload.size());
+        // After an automatic cut, a silence tail (or a short blip) is not a
+        // new utterance. Drop it so a later end cannot run the clip again.
+        // Audio from an explicit end stays eligible; that flag is separate.
+        if (suppress_tail && !endpoint.hearing()) {
+          pcm.clear();
+          if (active_turn.empty()) set_busy(false);
+        } else if (suppress_tail && endpoint.speech_confirmed()) {
+          suppress_tail = false;
+        }
+        // Confirmed speech during playback cancels the active turn. The new
+        // utterance keeps buffering until trailing silence, the cap, or end.
+        if (endpoint.take_speech_onset() && !active_turn.empty()) {
+          retire_active();
+        }
+        if (decision == UtteranceEndpointEvent::Completed) submit_pcm(true);
         continue;
       }
       if (frame->opcode != WsOpcode::Text) continue;
@@ -627,24 +690,28 @@ void WsServer::handle_client(int fd) {
           send_text({{"type", "error"}, {"error", "missing text"}});
           continue;
         }
+        if (type == "end" && suppress_tail && !endpoint.hearing()) {
+          // The turn already started from trailing silence. This end, and any
+          // silence that arrived after the cut, must not start another one.
+          pcm.clear();
+          endpoint.reset();
+          suppress_tail = false;
+          ignore_empty_end = false;
+          if (active_turn.empty()) set_busy(false);
+          continue;
+        }
         if (type == "end" && pcm.empty()) {
+          if (ignore_empty_end) {
+            ignore_empty_end = false;
+            continue;
+          }
           send_text({{"type", "error"}, {"error", "empty pcm"}});
           continue;
         }
         // A new utterance is an implicit barge-in. Retire the cancelled worker
         // without blocking the socket reader; its terminal event keeps its own
         // turn_id and may arrive after the new accept.
-        if (turn_future.valid() || !active_turn.empty()) {
-          if (!active_turn.empty()) {
-            std::string cancel_err;
-            deps_.pipeline->cancel_turn(active_turn, &cancel_err);
-          }
-          if (turn_future.valid()) {
-            retired_turns.push_back(
-                RetiredTurn{active_turn, std::move(turn_future)});
-          }
-          active_turn.clear();
-        }
+        retire_active();
         set_busy(true);
         if (type == "text") {
           const std::string turn_id = make_turn_id();
@@ -658,22 +725,7 @@ void WsServer::handle_client(int fd) {
                     device_id, text, sink, turn_id, -1);
               });
         } else {
-          active_turn = make_turn_id();
-          deps_.pipeline->prepare_turn(active_turn);
-          send_text({{"type", "accept"}, {"turn_id", active_turn}});
-          auto turn_pcm = std::move(pcm);
-          pcm.clear();
-          const std::string turn_id = active_turn;
-          turn_future = std::async(std::launch::async,
-              [this, fd, hub, device_id, turn_id, turn_pcm = std::move(turn_pcm),
-               &direct_send_mu]() {
-                SocketAudioSink sink(fd, hub, device_id, &direct_send_mu);
-                auto result = deps_.pipeline->run_utterance(
-                    device_id, turn_pcm, deps_.config.sample_rate,
-                    deps_.config.channels, sink, turn_id);
-                if (result.turn_id.empty()) result.turn_id = turn_id;
-                return result;
-              });
+          submit_pcm(false);
         }
       }
     }

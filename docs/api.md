@@ -78,8 +78,9 @@ Fast-path phrases never call Arbiter:
 - Echo/repeat: `echo …`, `repeat that`, `say that again`
 - Home (only when `home.ha_base_url` and `home.ha_token` are set): timers, lights, volume, weather at home, next alarm. A timer with no duration answers `How long, sir?`; a standalone reply such as `five minutes` completes the pending timer for up to two minutes.
 - Place weather (`what's the weather in Tokyo`, `forecast for London`): Open-Meteo geocoding + forecast (no API key, no Home Assistant). Speaks a short line and emits a weather `surface`. Home weather without a place still uses HA when configured.
-- News (`what's in the news`, `news about Tesla`, `top headlines`): Google News RSS (or configured feeds). Speaks a short line and emits a news `surface`. No API key.
-- Markets (`how's the market`, `what's AAPL doing`, `bitcoin price`): Yahoo Finance public v7 quote JSON. Speaks a short line and emits a markets `surface`. No API key. Quote lookup failure falls through to Arthur for speech only.
+- News (`what's in the news`, `news about Tesla`, `top headlines`): Google News RSS (or configured feeds). Speaks the first three headlines and emits a news `surface`. No API key.
+- Markets (`how's the market`, `what's AAPL doing`, `bitcoin price`): Yahoo Finance public v7 quote JSON. Speaks a short snapshot and the first few quotes, and emits a markets `surface`. No API key. Quote lookup failure falls through to Arthur for speech only.
+- Briefing (`brief me`, `morning briefing`, `what's the briefing`): one local turn, in order, with the local time, home weather when Home Assistant is configured or `weather.default_place` when that place resolves, the top headlines, and the default market snapshot. Each section that returns data also emits its surface card. A section that fails is skipped with a short gap and does not sink the turn. This stays separate from `what's in the news`. Arbiter is not called when the clock line succeeds.
 
 Social turns always go through Arthur's constitution so their tone and history match substantive conversation. Home intents that match but have no Home Assistant config fall through to Arthur (place weather remains local). News and markets fast-path when Intercom is confident and the fetch succeeds; otherwise Arthur speaks and Intercom still attaches a card if it can fetch structured data for that turn.
 
@@ -95,7 +96,21 @@ Successful light and volume actions also keep a normalized local request so
 short action follow-ups remain deterministic. `turn it off`, `the hallway too`,
 `do that again`, and `undo that` resolve against the previous action without an
 Arbiter round trip. Failed Home Assistant calls are never retained as action
-context, so a failed command cannot later be repeated or reversed by accident.
+context, so a failed command cannot later be repeated, reversed, or repaired.
+
+A short correction can retarget that previous local turn without a general
+rewrite. After a light action, `no, the bedroom`, `I meant the hallway`, and
+`not the kitchen` replace the room and run the same operation again. After a
+clock, weather, news, or market answer, `I meant tomorrow` or `no, tomorrow`
+resubmits the prior request with that time scope. The corrected request stays
+on the fast path when it is still deterministic. Otherwise Arthur receives one
+private correction note — the prior request, the prior answer, and the
+corrected line — and is told never to quote that note. `not that one` and
+`the other one` switch to the other light only when exactly two lights are
+configured and the previous target is one of them, or reverse the previous
+volume step. When the alternative is ambiguous, the utterance is left intact
+and Arthur gets a short private note with the prior request and answer.
+Unrelated utterances are not rewritten.
 
 One utterance can also contain two or three deterministic clauses joined by
 `and`, `then`, or `and then`. Arthur performs each clause in order and speaks
@@ -105,6 +120,14 @@ inherits the preceding light action, and short tails such as `the news` expand
 to their normal local request. A combined market or news request stays one
 lookup. If any clause is not deterministic, the whole utterance is left intact.
 
+After a news or markets card, a short pointer such as `the second one`,
+`read the first headline`, or `the last quote` speaks that item from the stored
+list. The spoken news and market lines name the first three items, so the
+pointer matches what was just heard. `headline` selects the latest news list
+and `quote` selects the latest markets list, including when a briefing showed
+both. A missing item gets a short local answer. The list is kept across later
+local answers such as the clock.
+
 ## `POST /v1/turns/:turn_id/cancel`
 
 Barge-in: stops TTS and cancels the Arbiter `request_id` when known.
@@ -113,7 +136,7 @@ Requires `Authorization` + `X-Device-Id`.
 
 ## `GET /v1/devices/:device_id/session`
 
-Debug: `{ device_id, conversation_id, last_turn_id, last_user, last_spoken, last_fast_path_kind, last_fast_path_request, pending_intent, pending_at, updated_at }`.
+Debug: `{ device_id, conversation_id, last_turn_id, last_user, last_spoken, last_fast_path_kind, last_fast_path_request, last_card, pending_intent, pending_at, updated_at }`.
 
 Intercom keeps the last user request and completed spoken line per device.
 Exact requests such as `say that again` can replay deterministic or Arbiter
@@ -164,8 +187,8 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 
 | Client | Meaning |
 |--------|---------|
-| binary frames | PCM s16le appended while PTT is held |
-| `{"type":"end"}` | Run STT on the buffered PCM and speak the reply |
+| binary frames | PCM s16le appended while the mic is open |
+| `{"type":"end"}` | Run STT on any PCM not already finished, and speak the reply |
 | `{"type":"text","text":"…"}` | Skip STT |
 | `{"type":"cancel"}` | Cancel the current turn if one is active |
 
@@ -338,7 +361,16 @@ there is no durable disk queue.
 STT is still one-shot at `end` (Whisper is not streaming — there are no
 word-level partials while the mic is down). After Whisper, Intercom emits
 `heard` so a desk transcript can show the user line before Arthur answers.
-The gain of the socket is sending mic bytes while the button is down instead
+While PCM is arriving, Intercom runs a small energy detector on the 24 kHz
+mono stream. Speech starts the utterance. About 700 ms of trailing silence
+ends it, bursts under 300 ms are ignored, and an utterance is capped around
+30 seconds. The completed audio starts the turn immediately — the client does
+not have to send `end` first. A later `end` for that same audio is ignored, so
+it cannot run twice. `end` is still the way a hold-to-talk client finishes a
+clip that has no trailing silence. Speech that arrives during playback cancels
+the active turn and becomes the next utterance.
+
+The gain of the socket is sending mic bytes while the mic is open instead
 of waiting for HTTP to open. The Nano ESP32 firmware does this by default
 (`INTERCOM_WS_PORT`, `0` disables).
 

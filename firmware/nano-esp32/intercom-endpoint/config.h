@@ -35,6 +35,12 @@
 #define SAMPLE_RATE 24000
 #define MAX_RECORD_MS 8000
 #define MIN_RECORD_MS 400
+// A press shorter than this starts hands-free listening. Holding longer
+// keeps the release-to-send stream.
+#define HANDSFREE_TAP_MS 350
+#define ENDPOINT_SILENCE_MS 700
+#define ENDPOINT_MIN_SPEECH_MS 300
+#define HANDSFREE_MAX_MS 30000
 #define HEADER_TIMEOUT_MS 120000
 #define HTTP_TIMEOUT_MS 15000
 #define AUDIO_WAIT_MS HEADER_TIMEOUT_MS

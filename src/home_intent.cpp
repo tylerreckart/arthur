@@ -364,6 +364,14 @@ std::string spoken_number(int n) {
     }
     return s;
   }
+  if (n < 1000000) {
+    std::string s = spoken_number(n / 1000) + " thousand";
+    if (n % 1000) {
+      s += (n % 1000 < 100) ? " and " : " ";
+      s += spoken_number(n % 1000);
+    }
+    return s;
+  }
   std::ostringstream oss;
   oss << n;
   return oss.str();

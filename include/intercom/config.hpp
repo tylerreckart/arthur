@@ -2,6 +2,7 @@
 
 #include "intercom/briefing.hpp"
 #include "intercom/home.hpp"
+#include "intercom/weather_client.hpp"
 
 #include <string>
 #include <unordered_map>
@@ -103,6 +104,7 @@ struct Config {
   HomeConfig home;
   NewsConfig news;
   MarketsConfig markets;
+  WeatherClientConfig weather;
   WhisperConfig whisper;
   KokoroConfig kokoro;
   FillerConfig filler;

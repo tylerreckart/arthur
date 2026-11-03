@@ -269,9 +269,9 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
         button.imagePosition = .imageLeading
       }
       button.title = "Arthur"
-      button.toolTip = "Arthur — hold to talk, click for menu"
+      button.toolTip = "Arthur — tap or hold to talk, click for menu"
       button.setAccessibilityTitle("Arthur")
-      button.setAccessibilityHelp("Hold to talk, or click for the Arthur menu. Default shortcut is Option-Space.")
+      button.setAccessibilityHelp("Tap to talk hands-free, or hold to talk. Click for the Arthur menu. Default shortcut is Option-Space.")
       button.target = self
       button.action = #selector(statusButtonEvent(_:))
       button.sendAction(on: [.leftMouseDown, .leftMouseUp, .rightMouseUp])
@@ -421,6 +421,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     guard watching, let model else { return }
     withObservationTracking {
       _ = model.holding
+      _ = model.handsFree
       _ = model.inputLevel
       _ = model.soundOn
       _ = model.canTalk
@@ -442,11 +443,14 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
         image.isTemplate = true
         button.image = image
       }
-      button.toolTip = model.holding
-        ? "Arthur — listening, release to send"
-        : "Arthur — hold to talk, click for menu"
+      button.toolTip = model.handsFree
+        ? "Arthur — listening"
+        : (model.holding
+          ? "Arthur — listening, release to send"
+          : "Arthur — tap or hold to talk, click for menu")
     }
     holdView?.listening = model.holding
+    holdView?.handsFree = model.handsFree
     holdView?.enabled = model.canTalk || model.holding
     muteItem?.title = muteTitle
 
@@ -455,7 +459,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     }
     if model.holding && !mainKey {
       if hud == nil { hud = ListeningHUDController() }
-      hud?.show(level: model.inputLevel)
+      hud?.show(level: model.inputLevel, handsFree: model.handsFree)
     } else {
       hud?.hide()
     }
@@ -477,6 +481,9 @@ private final class HoldTalkMenuView: NSView {
     didSet { needsDisplay = true }
   }
   var listening = false {
+    didSet { needsDisplay = true }
+  }
+  var handsFree = false {
     didSet { needsDisplay = true }
   }
   var enabled = true {
@@ -517,7 +524,7 @@ private final class HoldTalkMenuView: NSView {
 
   override func draw(_ dirtyRect: NSRect) {
     let bounds = bounds.insetBy(dx: 6, dy: 2)
-    let title = listening ? "Listening…" : "Hold to Talk"
+    let title = listening ? "Listening…" : "Tap to Talk"
     let titleColor: NSColor
     if !enabled {
       titleColor = NSColor.tertiaryLabelColor
@@ -535,7 +542,7 @@ private final class HoldTalkMenuView: NSView {
       .foregroundColor: NSColor.secondaryLabelColor,
     ]
     let titleSize = (title as NSString).size(withAttributes: titleAttrs)
-    let hint = listening ? "Release to send" : shortcut
+    let hint = listening ? (handsFree ? "Pause when you're done" : "Release to send") : shortcut
     let hintSize = (hint as NSString).size(withAttributes: hintAttrs)
     let y = bounds.midY - titleSize.height / 2
     (title as NSString).draw(at: NSPoint(x: bounds.minX + 8, y: y), withAttributes: titleAttrs)
@@ -551,13 +558,13 @@ private final class ListeningHUDController {
   private var panel: NSPanel?
   private var hosting: NSHostingView<ListeningHUDView>?
 
-  func show(level: Double) {
-    let view = ListeningHUDView(level: level)
+  func show(level: Double, handsFree: Bool) {
+    let view = ListeningHUDView(level: level, handsFree: handsFree)
     if let hosting {
       hosting.rootView = view
     } else {
       let hosting = NSHostingView(rootView: view)
-      hosting.frame = NSRect(x: 0, y: 0, width: 228, height: 56)
+      hosting.frame = NSRect(x: 0, y: 0, width: 268, height: 56)
       let panel = NSPanel(
         contentRect: hosting.frame,
         styleMask: [.borderless, .nonactivatingPanel],
@@ -599,6 +606,7 @@ private final class ListeningHUDController {
 
 private struct ListeningHUDView: View {
   var level: Double
+  var handsFree: Bool
 
   var body: some View {
     HStack(spacing: 10) {
@@ -614,7 +622,7 @@ private struct ListeningHUDView: View {
         Text("Listening…")
           .font(.body.weight(.medium))
           .foregroundStyle(ArthurTheme.accent)
-        Text("Release to send")
+        Text(handsFree ? "Pause when you're done" : "Release to send")
           .font(.caption)
           .foregroundStyle(.secondary)
       }

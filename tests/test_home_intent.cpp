@@ -129,6 +129,9 @@ int main() {
   CHECK(intercom::spoken_duration(3600) == "one hour");
   CHECK(intercom::spoken_number(12) == "twelve");
   CHECK(intercom::spoken_number(21) == "twenty one");
+  CHECK(intercom::spoken_number(230) == "two hundred and thirty");
+  CHECK(intercom::spoken_number(5712) == "five thousand seven hundred and twelve");
+  CHECK(intercom::spoken_number(1001) == "one thousand and one");
 
   CHECK(std::string(intercom::home_intent_kind_name(intercom::HomeIntentKind::Timer)) ==
         "timer");

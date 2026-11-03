@@ -725,6 +725,23 @@ std::string split_source_from_title(std::string* title) {
   return source;
 }
 
+std::string change_phrase(double pct) {
+  const int rounded = static_cast<int>(std::lround(std::abs(pct)));
+  if (rounded == 0) return "about flat";
+  return std::string(pct > 0 ? "up " : "down ") + spoken_number(rounded) + " percent";
+}
+
+std::string finish_spoken_list(std::string intro, const std::vector<std::string>& clauses) {
+  if (clauses.empty()) return intro + ", sir.";
+  intro += ". ";
+  for (std::size_t i = 0; i < clauses.size(); ++i) {
+    if (i) intro.push_back(' ');
+    intro += clauses[i];
+    intro += (i + 1 == clauses.size()) ? ", sir." : ".";
+  }
+  return intro;
+}
+
 std::string spoken_instrument_name(std::string_view symbol, std::string_view name) {
   if (symbol == "^GSPC") return "The S and P";
   if (symbol == "^DJI") return "The Dow";
@@ -821,11 +838,28 @@ NewsExtract news_from_rss(std::string_view rss_xml, std::string_view topic, int 
   surface.payload = std::move(payload);
   surface.sources.push_back(SurfaceSource{"Google News", "https://news.google.com/"});
 
-  if (!topic_s.empty()) {
-    out.spoken = "Here's the latest on " + topic_s + ", sir.";
-  } else {
-    out.spoken = "Here are the top headlines, sir.";
+  static const char* kOrdinals[] = {"first", "second", "third"};
+  std::vector<std::string> clauses;
+  for (const auto& row : items) {
+    if (clauses.size() >= 3) break;
+    if (!row.is_object()) continue;
+    std::string title = row.value("title", "");
+    std::string source = row.value("source", "");
+    if (!source.empty()) {
+      const std::string suffix = " - " + source;
+      if (title.size() > suffix.size() &&
+          title.compare(title.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        title = trim(title.substr(0, title.size() - suffix.size()));
+      }
+    }
+    if (title.empty()) continue;
+    std::string clause = std::string("The ") + kOrdinals[clauses.size()] + " is " + title;
+    if (!source.empty()) clause += ", from " + source;
+    clauses.push_back(std::move(clause));
   }
+  const std::string intro =
+      topic_s.empty() ? "Here are the top headlines" : "Here's the latest on " + topic_s;
+  out.spoken = finish_spoken_list(intro, clauses);
   out.surface = std::move(surface);
   out.ok = true;
   return out;
@@ -931,7 +965,28 @@ MarketsExtract markets_from_yahoo_quote(const nlohmann::json& quote) {
   if (instruments.size() == 1 && lead_has_price) {
     out.spoken = lead_name + " is at " + spoken_number(round_nearest(lead_price)) + ", sir.";
   } else {
-    out.spoken = market_summary + ", sir.";
+    std::vector<std::string> clauses;
+    for (const auto& inst : instruments) {
+      if (clauses.size() >= 3) break;
+      if (!inst.is_object()) continue;
+      const std::string symbol = inst.value("symbol", "");
+      const std::string name = inst.value("name", "");
+      std::string clause = spoken_instrument_name(symbol, name);
+      if (clause.empty()) continue;
+      bool detailed = false;
+      if (inst.contains("price") && inst["price"].is_number()) {
+        clause += " is " + spoken_number(static_cast<int>(std::lround(inst["price"].get<double>())));
+        detailed = true;
+      }
+      if (inst.contains("change_pct") && inst["change_pct"].is_number()) {
+        clause += detailed ? ", " : " is ";
+        clause += change_phrase(inst["change_pct"].get<double>());
+        detailed = true;
+      }
+      if (!detailed) continue;
+      clauses.push_back(std::move(clause));
+    }
+    out.spoken = finish_spoken_list(market_summary, clauses);
   }
   out.surface = std::move(surface);
   out.ok = true;
