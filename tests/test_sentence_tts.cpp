@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -197,6 +198,7 @@ int main() {
     CHECK(texts_e.size() >= 1);
     if (!texts_e.empty()) {
       CHECK(texts_e[0].find("one two three four five six seven") != std::string::npos);
+      CHECK(texts_e[0].back() == ',');
     }
     std::filesystem::remove(db_e);
   }
@@ -234,6 +236,8 @@ int main() {
     cfg.filler.enabled = true;
     cfg.filler.instant_ack_ms = 700;
     cfg.filler.tool_ack_ms = 20;
+    cfg.filler.followup_silence_ms = 40;
+    cfg.filler.max_followups = 1;
     cfg.early_flush_words = 0;
     auto filler = std::make_shared<intercom::FillerClient>(cfg.filler);
     intercom::TurnPipeline pipe(cfg, stt_f, tts_f, arb_f, sessions_f, filler);
@@ -241,10 +245,11 @@ int main() {
     const auto r = pipe.run_text_utterance("dev-f", "look this up please", sink_f);
     CHECK(r.ok);
     const auto texts_f = tts_f->snapshot();
-    CHECK(texts_f.size() >= 2);
-    if (texts_f.size() >= 2) {
+    CHECK(texts_f.size() >= 3);
+    if (texts_f.size() >= 3) {
       CHECK(texts_f[0] == "Of course.");
-      CHECK(texts_f[1].find("Here you go") != std::string::npos);
+      CHECK(texts_f[1] == "Still with you.");
+      CHECK(texts_f[2].find("Here you go") != std::string::npos);
     }
     std::filesystem::remove(db_f);
   }
@@ -301,13 +306,15 @@ int main() {
   }
 
   CHECK(intercom::FillerClient::tool_ack("web_search") == "Of course.");
-  CHECK(intercom::FillerClient::tool_ack("mem_read") == "Yes, sir.");
+  CHECK(intercom::FillerClient::tool_ack("mem_read") == "All right.");
   CHECK(intercom::FillerClient::tool_ack("exec") == "Certainly.");
+  CHECK(intercom::FillerClient::progress_ack() == "Still with you.");
 
   const auto local = intercom::FillerClient::instant_ack_phrases();
   CHECK(!local.empty());
   for (const auto& p : local) {
     CHECK(p != "Right.");
+    CHECK(p.find("sir") == std::string::npos);
     CHECK(p.find("see") == std::string::npos);
     CHECK(p.find("look") == std::string::npos);
     CHECK(p.find("check") == std::string::npos);
@@ -356,6 +363,52 @@ int main() {
     CHECK(sess.has_value());
     if (sess) CHECK(sess->conversation_id == 42);
     std::filesystem::remove(db_w);
+  }
+
+  {
+    class SlowStt : public intercom::SttProvider {
+     public:
+      std::string transcribe(const std::vector<std::uint8_t>&, int, int,
+                             std::string*) override {
+        entered.store(true);
+        while (!release.load()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return "transcribed";
+      }
+      bool ready(std::string*) const override { return true; }
+      std::atomic<bool> entered{false};
+      std::atomic<bool> release{false};
+    };
+
+    auto tts_c = std::make_shared<RecordingTts>();
+    auto arbiter_c = std::make_shared<StreamingArbiter>(tts_c);
+    auto stt_c = std::make_shared<SlowStt>();
+    const auto db_c = std::filesystem::temp_directory_path() / "intercom_stt_cancel.db";
+    std::filesystem::remove(db_c);
+    auto sessions_c = std::make_shared<intercom::SessionStore>(db_c.string());
+    CHECK(sessions_c->open(&err));
+    intercom::Config cfg_c;
+    cfg_c.fast_path = false;
+    cfg_c.filler.enabled = false;
+    intercom::TurnPipeline pipe_c(cfg_c, stt_c, tts_c, arbiter_c, sessions_c, nullptr);
+    CollectingSink sink_c;
+    auto turn = std::async(std::launch::async, [&]() {
+      return pipe_c.run_utterance(
+          "dev-c", std::vector<std::uint8_t>{1, 2}, 24000, 1, sink_c, "stt-cancel");
+    });
+    for (int i = 0; i < 100 && !stt_c->entered.load(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(stt_c->entered.load());
+    std::string cancel_err;
+    CHECK(pipe_c.cancel_turn("stt-cancel", &cancel_err));
+    stt_c->release.store(true);
+    const auto canceled = turn.get();
+    CHECK(!canceled.ok);
+    CHECK(canceled.error == "canceled");
+    CHECK(tts_c->count() == 0);
+    std::filesystem::remove(db_c);
   }
 
   if (g_fails != 0) {

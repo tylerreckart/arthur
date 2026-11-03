@@ -14,7 +14,9 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <future>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 
 namespace intercom {
@@ -202,12 +204,17 @@ bool read_http_upgrade(int fd, std::string* request, std::string* rest) {
 
 class SocketAudioSink : public AudioSink {
  public:
-  SocketAudioSink(int fd, DeviceHub* hub, std::string device_id)
-      : fd_(fd), hub_(hub), device_id_(std::move(device_id)) {}
+  SocketAudioSink(int fd, DeviceHub* hub, std::string device_id,
+                  std::mutex* direct_send_mu)
+      : fd_(fd),
+        hub_(hub),
+        device_id_(std::move(device_id)),
+        direct_send_mu_(direct_send_mu) {}
   bool write(const std::uint8_t* data, std::size_t len) override {
     if (hub_) {
       return hub_->send_binary(device_id_, data, len);
     }
+    std::lock_guard<std::mutex> lk(*direct_send_mu_);
     return send_frame(fd_, WsOpcode::Binary,
                       std::string_view(reinterpret_cast<const char*>(data), len));
   }
@@ -237,6 +244,7 @@ class SocketAudioSink : public AudioSink {
       hub_->send_json(device_id_, j);
       return;
     }
+    std::lock_guard<std::mutex> lk(*direct_send_mu_);
     send_json(fd_, j);
   }
 
@@ -244,6 +252,7 @@ class SocketAudioSink : public AudioSink {
   int fd_;
   DeviceHub* hub_;
   std::string device_id_;
+  std::mutex* direct_send_mu_;
 };
 
 }  // namespace
@@ -448,14 +457,17 @@ void WsServer::handle_client(int fd) {
   } fd_guard{fd};
 
   auto* hub = deps_.hub.get();
+  std::mutex direct_send_mu;
   auto send_text = [&](const nlohmann::json& j) {
     if (hub) return hub->send_json(device_id, j);
+    std::lock_guard<std::mutex> lk(direct_send_mu);
     return send_json(fd, j);
   };
   auto send_op = [&](WsOpcode op, std::string_view payload) {
     if (hub) {
       return hub->send_opcode(device_id, static_cast<std::uint8_t>(op), payload);
     }
+    std::lock_guard<std::mutex> lk(direct_send_mu);
     return send_frame(fd, op, payload);
   };
 
@@ -479,6 +491,7 @@ void WsServer::handle_client(int fd) {
 
   std::vector<std::uint8_t> pcm;
   std::string active_turn;
+  std::future<TurnResult> turn_future;
   bool ptt_busy = false;
   auto set_busy = [&](bool busy) {
     if (!hub) return;
@@ -489,9 +502,31 @@ void WsServer::handle_client(int fd) {
   auto last_rx = clock::now();
   auto ping_sent = clock::time_point{};
   bool awaiting_pong = false;
+  auto finish_turn_if_ready = [&]() {
+    if (!turn_future.valid() ||
+        turn_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+      return;
+    }
+    TurnResult result = turn_future.get();
+    send_text({{"type", "turn"},
+               {"turn_id", result.turn_id},
+               {"transcript", result.transcript},
+               {"conversation_id", result.conversation_id},
+               {"ok", result.ok},
+               {"fast_path", result.used_fast_path}});
+    send_text({{"type", "done"},
+               {"ok", result.ok},
+               {"error", result.error},
+               {"turn_id", result.turn_id}});
+    active_turn.clear();
+    // A barge-in may already be streaming the next PTT while the cancelled
+    // turn unwinds. Keep the device busy until that recording is submitted.
+    set_busy(!pcm.empty());
+  };
   // Bytes read with the HTTP upgrade are already a websocket frame.
   bool buffered = !buf.empty();
   while (!stop_.load()) {
+    finish_turn_if_ready();
     if (!buffered) {
       pollfd pfd{};
       pfd.fd = fd;
@@ -527,12 +562,18 @@ void WsServer::handle_client(int fd) {
       auto frame = decode_ws_frame(buf, &used);
       if (!frame) break;
       buf.erase(0, used);
+      finish_turn_if_ready();
 
       last_rx = clock::now();
       awaiting_pong = false;
 
       if (frame->opcode == WsOpcode::Close) {
         send_op(WsOpcode::Close, {});
+        if (!active_turn.empty()) {
+          std::string err;
+          deps_.pipeline->cancel_turn(active_turn, &err);
+        }
+        if (turn_future.valid()) turn_future.wait();
         return;
       }
       if (frame->opcode == WsOpcode::Ping) {
@@ -563,9 +604,11 @@ void WsServer::handle_client(int fd) {
         continue;
       }
       if (type == "end" || type == "text") {
+        if (turn_future.valid() || !active_turn.empty()) {
+          send_text({{"type", "error"}, {"error", "turn already active"}});
+          continue;
+        }
         set_busy(true);
-        SocketAudioSink sink(fd, hub, device_id);
-        TurnResult result;
         if (type == "text") {
           const std::string text = j.value("text", "");
           if (text.empty()) {
@@ -575,8 +618,14 @@ void WsServer::handle_client(int fd) {
           }
           const std::string turn_id = make_turn_id();
           active_turn = turn_id;
+          deps_.pipeline->prepare_turn(turn_id);
           send_text({{"type", "accept"}, {"turn_id", turn_id}});
-          result = deps_.pipeline->run_text_utterance(device_id, text, sink, turn_id, -1);
+          turn_future = std::async(std::launch::async,
+              [this, fd, hub, device_id, turn_id, text, &direct_send_mu]() {
+                SocketAudioSink sink(fd, hub, device_id, &direct_send_mu);
+                return deps_.pipeline->run_text_utterance(
+                    device_id, text, sink, turn_id, -1);
+              });
         } else {
           if (pcm.empty()) {
             send_text({{"type", "error"}, {"error", "empty pcm"}});
@@ -584,27 +633,30 @@ void WsServer::handle_client(int fd) {
             continue;
           }
           active_turn = make_turn_id();
+          deps_.pipeline->prepare_turn(active_turn);
           send_text({{"type", "accept"}, {"turn_id", active_turn}});
-          result = deps_.pipeline->run_utterance(device_id, pcm, deps_.config.sample_rate,
-                                                 deps_.config.channels, sink, active_turn);
-          if (result.turn_id.empty()) result.turn_id = active_turn;
+          auto turn_pcm = std::move(pcm);
+          pcm.clear();
+          const std::string turn_id = active_turn;
+          turn_future = std::async(std::launch::async,
+              [this, fd, hub, device_id, turn_id, turn_pcm = std::move(turn_pcm),
+               &direct_send_mu]() {
+                SocketAudioSink sink(fd, hub, device_id, &direct_send_mu);
+                auto result = deps_.pipeline->run_utterance(
+                    device_id, turn_pcm, deps_.config.sample_rate,
+                    deps_.config.channels, sink, turn_id);
+                if (result.turn_id.empty()) result.turn_id = turn_id;
+                return result;
+              });
         }
-        pcm.clear();
-        active_turn.clear();
-        send_text({{"type", "turn"},
-                   {"turn_id", result.turn_id},
-                   {"transcript", result.transcript},
-                   {"conversation_id", result.conversation_id},
-                   {"ok", result.ok},
-                   {"fast_path", result.used_fast_path}});
-        send_text({{"type", "done"},
-                   {"ok", result.ok},
-                   {"error", result.error},
-                   {"turn_id", result.turn_id}});
-        set_busy(false);
       }
     }
   }
+  if (!active_turn.empty()) {
+    std::string err;
+    deps_.pipeline->cancel_turn(active_turn, &err);
+  }
+  if (turn_future.valid()) turn_future.wait();
 }
 
 }  // namespace intercom

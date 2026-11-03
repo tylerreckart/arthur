@@ -315,7 +315,7 @@ final class AppModel {
     if !explicit && quietTextMode { return }
     if !explicit && hasDraft { return }
     if phase == .speaking || phase == .thinking {
-      client.sendCancel()
+      sendTurnCancel()
       audio.interruptPlayback()
     }
     guard micGranted else {
@@ -368,7 +368,7 @@ final class AppModel {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { return }
     if phase == .speaking || phase == .thinking {
-      client.sendCancel()
+      sendTurnCancel()
       audio.interruptPlayback()
     }
     guard canSend else { return }
@@ -421,7 +421,7 @@ final class AppModel {
 
   func cancelTurn() {
     guard canCancel else { return }
-    client.sendCancel()
+    sendTurnCancel()
     audio.interruptPlayback()
     expectingReply = false
     typedThisTurn = false
@@ -431,6 +431,16 @@ final class AppModel {
     clearHearing()
     setWork(.none)
     become(client.isConnected ? .idle : .disconnected)
+  }
+
+  private func sendTurnCancel() {
+    client.sendCancel(
+      turnId: turnId,
+      host: config.host,
+      httpPort: config.httpPort,
+      token: config.deviceToken,
+      deviceId: config.deviceId
+    )
   }
 
   func prefillDraft(_ text: String) {

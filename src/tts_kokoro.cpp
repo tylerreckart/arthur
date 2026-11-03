@@ -265,6 +265,7 @@ bool KokoroTts::emit_pcm(const std::vector<std::uint8_t>& pcm,
 
 bool KokoroTts::synthesize(const std::string& text, PcmChunkFn on_chunk, std::string* err) {
   if (text.empty()) return true;
+  std::lock_guard<std::mutex> utterance_lk(synthesize_mu_);
   pending_delivery_ = classify_speech_delivery(text);
   pending_speed_ = std::clamp(
       cfg_.speed * delivery_speed_multiplier(pending_delivery_), 0.5, 2.0);
@@ -337,6 +338,11 @@ bool KokoroTts::synthesize_http_stream(const std::string& text,
   int response_status = 0;
   SpeechDspProcessor processor(
       cfg_.dsp, target_sample_rate_, delivery_gain_db(pending_delivery_));
+  // Hold the final few milliseconds so the streaming path can shape the
+  // trailing edge exactly like buffered synthesis instead of ending abruptly.
+  const std::size_t fade_bytes =
+      static_cast<std::size_t>(target_sample_rate_) * 14 / 1000 * 2;
+  std::vector<std::uint8_t> stream_tail;
   req.response_handler = [&](const httplib::Response& response) {
     response_status = response.status;
     return true;
@@ -348,10 +354,16 @@ bool KokoroTts::synthesize_http_stream(const std::string& text,
     delivered_audio = true;
     const auto processed = processor.process(
         reinterpret_cast<const std::uint8_t*>(data), len);
-    if (on_chunk && !processed.empty() &&
-        !on_chunk(processed.data(), processed.size())) {
-      sink_aborted = true;
-      return false;
+    stream_tail.insert(stream_tail.end(), processed.begin(), processed.end());
+    if (stream_tail.size() > fade_bytes) {
+      std::size_t emit_bytes = stream_tail.size() - fade_bytes;
+      emit_bytes -= emit_bytes % 2;
+      if (emit_bytes > 0 && on_chunk &&
+          !on_chunk(stream_tail.data(), emit_bytes)) {
+        sink_aborted = true;
+        return false;
+      }
+      stream_tail.erase(stream_tail.begin(), stream_tail.begin() + emit_bytes);
     }
     return true;
   };
@@ -383,8 +395,14 @@ bool KokoroTts::synthesize_http_stream(const std::string& text,
     return false;
   }
 
+  fade_s16le_mono_edges(&stream_tail, target_sample_rate_, 0, 14);
+  if (!stream_tail.empty() && on_chunk &&
+      !on_chunk(stream_tail.data(), stream_tail.size())) {
+    if (err) *err = "tts sink aborted";
+    return false;
+  }
   const auto tail =
-      silence_s16le_mono(target_sample_rate_, speech_pause_ms(text));
+      silence_s16le_mono(target_sample_rate_, pending_pause_ms_);
   return emit_chunks(tail, on_chunk, err);
 }
 

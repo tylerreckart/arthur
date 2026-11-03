@@ -36,7 +36,7 @@ struct SpeechDspConfig {
 struct KokoroConfig {
   std::string binary = "kokoro-tts";
   // Single Kokoro name, legacy `left+right:weight`, or N-way `name:w+name:w`.
-  std::string voice = "af_nova:0.6+af_nicole:0.3+af_heart:0.1";
+  std::string voice = "bm_lewis";
   double speed = 0.96;
   std::string model;
   std::string voices;
@@ -55,14 +55,14 @@ struct FillerConfig {
   std::string model = "deepseek/deepseek-v4-flash";
   // Speak a cached local backchannel this many ms after the turn starts
   // (0 = disabled). High enough that a fast Arbiter reply skips filler.
-  int instant_ack_ms = 700;
+  int instant_ack_ms = 1100;
   // After a tool_call, speak a cached tool ack this many ms later if no
   // local ack has been spoken yet (0 = immediately).
-  int tool_ack_ms = 250;
+  int tool_ack_ms = 350;
   // Earliest ms to speak an LLM phrase when instant ack is off.
   int min_silence_ms = 1100;
   int followup_silence_ms = 8000;
-  int max_followups = 0;
+  int max_followups = 1;
   int timeout_ms = 2500;
   int max_tokens = 16;
   double temperature = 0.6;
@@ -85,7 +85,7 @@ struct Config {
   // same connection. HTTP PTT on listen_port is unchanged.
   int ws_listen_port = 8093;
   // Start Kokoro after this many streaming words, even without .?! (0 = off).
-  int early_flush_words = 7;
+  int early_flush_words = 0;
   std::string device_token;
   std::unordered_map<std::string, std::string> devices;  // device_id -> token
   std::string arbiter_base_url = "http://127.0.0.1:8080";
@@ -96,7 +96,7 @@ struct Config {
   std::string agent_def_path;
   std::string agent_def_json;
   std::string session_db = "~/.intercom/sessions.db";
-  int sample_rate = 16000;
+  int sample_rate = 24000;
   int channels = 1;
   bool fast_path = true;
   bool warm_prefix = true;

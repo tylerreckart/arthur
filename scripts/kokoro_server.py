@@ -25,7 +25,7 @@ import numpy as np
 
 ENGINE = None
 LOCK = threading.Lock()
-DEFAULT_VOICE = "af_nova:0.6+af_nicole:0.3+af_heart:0.1"
+DEFAULT_VOICE = "bm_lewis"
 VOICE = DEFAULT_VOICE
 VOICE_STYLE = DEFAULT_VOICE
 SPEED = 0.96

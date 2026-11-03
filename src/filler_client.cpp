@@ -101,12 +101,13 @@ std::string cap_words(std::string s, std::size_t max_words) {
 std::string build_system_prompt(FillerStage stage) {
   if (stage == FillerStage::FollowUp) {
     return "Arthur, a British voice on a home intercom. The user is still waiting. "
-           "Acknowledge, 1-3 words, like 'yes' or 'still with you'. "
+           "Give one quiet progress cue, 1-3 words, like 'still with you'. "
            "Do not put them on hold. Do not say you are looking or thinking. "
            "Output only the phrase.";
   }
   return "Arthur, a British voice on a home intercom. The user just asked something. "
-         "Acknowledge that you heard them, 1-3 words, like 'yes, sir' or 'of course'. "
+         "Acknowledge only if the silence has become awkward, 1-3 words, "
+         "like 'of course' or 'all right'. Do not use 'sir'. "
          "Do not put them on hold. Do not narrate thinking, looking, or working. "
          "Output only the phrase.";
 }
@@ -123,10 +124,10 @@ std::string build_user_prompt(const std::string& transcript,
 
 std::string fallback_phrase(FillerStage stage) {
   static const char* kInitial[] = {
-      "Yes, sir.",
       "Of course.",
-      "Very good.",
       "Certainly.",
+      "All right.",
+      "Understood.",
   };
   static const char* kFollowUp[] = {
       "Yes.",
@@ -148,11 +149,10 @@ FillerClient::FillerClient(FillerConfig config) : config_(std::move(config)) {}
 
 std::vector<std::string> FillerClient::instant_ack_phrases() {
   return {
-      "Yes, sir.",
       "Of course.",
-      "Very good.",
-      "Right away.",
       "Certainly.",
+      "All right.",
+      "Understood.",
   };
 }
 
@@ -164,6 +164,7 @@ std::vector<std::string> FillerClient::cached_ack_phrases() {
       out.push_back(phrase);
     }
   }
+  out.push_back(progress_ack());
   return out;
 }
 
@@ -185,13 +186,17 @@ std::string FillerClient::tool_ack(std::string_view tool) {
     return "Of course.";
   }
   if (tool.find("schedule") != std::string_view::npos) {
-    return "Very good.";
+    return "Of course.";
   }
   if (tool.find("read") != std::string_view::npos ||
       tool.find("list") != std::string_view::npos) {
-    return "Yes, sir.";
+    return "All right.";
   }
   return "Certainly.";
+}
+
+std::string FillerClient::progress_ack() {
+  return "Still with you.";
 }
 
 std::string FillerClient::generate(const std::string& transcript,

@@ -83,7 +83,8 @@ int main(int argc, char** argv) {
       std::cout << "intercom filler enabled (model=" << config.filler.model << ")"
                 << std::endl;
     } else {
-      std::cerr << "intercom filler configured but no api_key — silence fillers disabled"
+      std::cerr << "intercom filler configured without api_key — using cached "
+                   "acknowledgements only"
                 << std::endl;
     }
   }

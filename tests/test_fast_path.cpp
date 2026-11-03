@@ -40,50 +40,15 @@ int main() {
   CHECK(!on.try_handle("what's the weather").has_value());
   CHECK(!on.try_handle("good morning, what's the weather").has_value());
 
-  auto morning = on.try_handle("good morning");
-  CHECK(morning.has_value());
-  if (morning) {
-    CHECK(contains(morning->reply, "sir"));
-    CHECK(contains(morning->reply, "orning"));
-    CHECK(morning->reply.find('?') != std::string::npos);
-    CHECK(!contains(morning->reply, "Arthur here"));
-  }
-
-  auto punct = on.try_handle("Good morning, Arthur.");
-  CHECK(punct.has_value());
-  if (punct) {
-    CHECK(contains(punct->reply, "sir"));
-    CHECK(punct->reply.find('?') != std::string::npos);
-  }
-
-  auto hi = on.try_handle("hey");
-  CHECK(hi.has_value());
-  if (hi) {
-    CHECK(contains(hi->reply, "sir"));
-    CHECK(hi->reply.find('?') != std::string::npos);
-    CHECK(!contains(hi->reply, "Arthur here"));
-  }
-
-  auto how = on.try_handle("how are you");
-  CHECK(how.has_value());
-  if (how) {
-    CHECK(contains(how->reply, "sir"));
-    CHECK(how->reply.find('?') != std::string::npos);
-  }
-
-  auto night = on.try_handle("good night");
-  CHECK(night.has_value());
-  if (night) {
-    CHECK(contains(night->reply, "sir"));
-    CHECK(night->reply.find('?') == std::string::npos);
-  }
-
-  auto status = on.try_handle("are you there");
-  CHECK(status.has_value());
-  if (status) {
-    CHECK(contains(status->reply, "sir"));
-    CHECK(!contains(status->reply, "Speech bridge"));
-  }
+  // Social turns use Arbiter's constitution so greetings and courtesies share
+  // one persona and remain part of the conversation history.
+  CHECK(!on.try_handle("good morning").has_value());
+  CHECK(!on.try_handle("Good morning, Arthur.").has_value());
+  CHECK(!on.try_handle("hey").has_value());
+  CHECK(!on.try_handle("how are you").has_value());
+  CHECK(!on.try_handle("good night").has_value());
+  CHECK(!on.try_handle("thanks").has_value());
+  CHECK(!on.try_handle("are you there").has_value());
 
   auto echo = on.try_handle("echo hello there");
   CHECK(echo.has_value());
@@ -291,8 +256,7 @@ int main() {
           tesla_news->surface["payload"].value("topic", "") == "tesla");
   }
   auto social = news_fp.try_handle("hello");
-  CHECK(social.has_value());
-  if (social) CHECK(social->kind == "social");
+  CHECK(!social.has_value());
   CHECK(!news_fp.try_handle("what's the weather").has_value());
 
   intercom::FastPath mkt_fp(true, intercom::HomeConfig{}, nullptr, nullptr, nullptr,

@@ -12,7 +12,7 @@
   "channels": 1,
   "fast_path": true,
   "ws_listen_port": 8093,
-  "early_flush_words": 7,
+  "early_flush_words": 0,
   "warm_prefix": true,
   "home": {
     "ha_base_url": "",
@@ -50,7 +50,7 @@
   },
   "kokoro": {
     "binary": "~/.intercom/venv-kokoro/bin/kokoro-tts",
-    "voice": "af_nova:0.6+af_nicole:0.3+af_heart:0.1",
+    "voice": "bm_lewis",
     "voice_syntax": "name | left+right:0-1 | name:w+name:w (ratios/percentages auto-normalized)",
     "speed": 0.96,
     "model": "~/.intercom/models/kokoro/kokoro-v1.0.onnx",
@@ -87,11 +87,11 @@
     "api_base_url": "https://openrouter.ai/api/v1",
     "api_key": "",
     "model": "deepseek/deepseek-v4-flash",
-    "instant_ack_ms": 700,
-    "tool_ack_ms": 250,
+    "instant_ack_ms": 1100,
+    "tool_ack_ms": 350,
     "min_silence_ms": 1100,
     "followup_silence_ms": 8000,
-    "max_followups": 0,
+    "max_followups": 1,
     "timeout_ms": 2500,
     "max_tokens": 16,
     "temperature": 0.6

@@ -65,12 +65,23 @@ class DummyArbiter : public intercom::ArbiterClient {
     return 1;
   }
   bool send_message(std::int64_t, const std::string&, const std::string&,
-                    intercom::ArbiterStreamCallbacks cbs, std::atomic<bool>*,
+                    intercom::ArbiterStreamCallbacks cbs, std::atomic<bool>* cancel,
                     std::string*) const override {
+    if (cbs.on_request_id) cbs.on_request_id("req-test");
+    if (slow_mode.exchange(false)) {
+      for (int i = 0; i < 200 && !(cancel && cancel->load()); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      cancel_seen.store(cancel && cancel->load());
+      if (cbs.on_done) cbs.on_done(false, "", "canceled");
+      return true;
+    }
     if (cbs.on_done) cbs.on_done(true, "ok", "");
     return true;
   }
   bool cancel_request(const std::string&, std::string*) const override { return true; }
+  mutable std::atomic<bool> slow_mode{false};
+  mutable std::atomic<bool> cancel_seen{false};
 };
 
 bool send_all(int fd, const void* data, std::size_t len) {
@@ -242,7 +253,57 @@ int main() {
     CHECK(got_binary);
     CHECK(got_done);
     CHECK(got_heard);
-    CHECK(tts->last.find("sir") != std::string::npos);
+    CHECK(tts->last == "ok.");
+
+    // The socket must keep reading control frames while a turn is running.
+    arbiter->slow_mode.store(true);
+    intercom::WsFrame slow;
+    slow.opcode = intercom::WsOpcode::Text;
+    slow.payload = R"({"type":"text","text":"slow request"})";
+    const std::string slow_raw = intercom::encode_ws_frame(slow, true);
+    CHECK(send_all(fd, slow_raw.data(), slow_raw.size()));
+
+    incoming.clear();
+    bool slow_accepted = false;
+    bool slow_done = false;
+    const auto cancel_started = std::chrono::steady_clock::now();
+    const auto cancel_deadline = cancel_started + std::chrono::milliseconds(1500);
+    while (std::chrono::steady_clock::now() < cancel_deadline && !slow_done) {
+      char buf[4096];
+      const ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+      if (n > 0) incoming.append(buf, static_cast<std::size_t>(n));
+      while (true) {
+        std::size_t used = 0;
+        auto frame = intercom::decode_ws_frame(incoming, &used);
+        if (!frame) break;
+        incoming.erase(0, used);
+        if (frame->opcode != intercom::WsOpcode::Text) continue;
+        try {
+          auto j = nlohmann::json::parse(frame->payload);
+          const auto type = j.value("type", "");
+          if (type == "accept" && !slow_accepted) {
+            slow_accepted = true;
+            intercom::WsFrame cancel;
+            cancel.opcode = intercom::WsOpcode::Text;
+            cancel.payload = R"({"type":"cancel"})";
+            const std::string cancel_raw = intercom::encode_ws_frame(cancel, true);
+            CHECK(send_all(fd, cancel_raw.data(), cancel_raw.size()));
+          }
+          if (type == "done" && slow_accepted) {
+            CHECK(!j.value("ok", true));
+            CHECK(j.value("error", "") == "canceled");
+            slow_done = true;
+          }
+        } catch (...) {
+        }
+      }
+      if (!slow_done) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(slow_accepted);
+    CHECK(slow_done);
+    CHECK(arbiter->cancel_seen.load());
+    CHECK(std::chrono::steady_clock::now() - cancel_started <
+          std::chrono::milliseconds(1000));
 
     CHECK(hub->online("speaker-1"));
     CHECK(hub->speak("speaker-1", "Time to leave, sir.", "schedule", 42));

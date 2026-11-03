@@ -21,7 +21,7 @@ Input ─┐
                                               text + SSE
 ```
 
-Hold talk, speak, release. The device streams 24 kHz mono s16le while the button is down, then sends `{"type":"end"}`. Intercom runs Whisper on the clip, then either answers locally (greetings, time, a few home commands) or sends the transcript to Arbiter. Kokoro starts speaking as sentences arrive; the same socket plays the PCM back. Idle sockets also take unsolicited speak-back — a scheduled reminder, spoken without another press.
+Hold talk, speak, release. The device streams 24 kHz mono s16le while the button is down, then sends `{"type":"end"}`. Intercom runs Whisper on the clip, then either answers deterministic requests locally (time and configured home or briefing commands) or sends the transcript to Arbiter. Kokoro starts speaking as sentences arrive; the same socket plays the PCM back. Idle sockets also take unsolicited speak-back — a scheduled reminder, spoken without another press.
 
 Intercom maps each `X-Device-Id` to one Arbiter conversation in SQLite (`session_db`). In the Mac app, pick the hallway device so the desk and the wall button share that memory.
 
@@ -97,7 +97,7 @@ Optional `home` block: when `ha_base_url` and `ha_token` are set, hallway phrase
 
 ### Voice
 
-Shipped `kokoro.voice` is `af_nova:0.6+af_nicole:0.3+af_heart:0.1` (language from the heaviest name prefix — `af_` → `en-us`). A single Kokoro name (`bm_lewis`) or a `+`-separated blend both work; weights are optional and normalized. Existing local `intercom.json` files are not overwritten — change `kokoro.voice` there if you want the new default. Blend syntax and speech DSP live in [`docs/api.md`](docs/api.md).
+Shipped `kokoro.voice` is `bm_lewis`, matching Arthur's understated British persona. A single Kokoro name or a `+`-separated blend both work; weights are optional and normalized, and the language follows the heaviest name prefix. Existing local `intercom.json` files are not overwritten — change `kokoro.voice` there to adopt the new default. Blend syntax and speech DSP live in [`docs/api.md`](docs/api.md).
 
 ## Docs
 
