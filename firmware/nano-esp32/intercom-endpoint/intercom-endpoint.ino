@@ -1167,12 +1167,21 @@ static PlayResult playWsLoop(IntercomWs::Kind pendingKind, size_t pendingPlen) {
       Serial.printf("ws: accept turn=%s\n", gTurnId.c_str());
     } else if (type == "turn") {
       const String id = jsonField(text, "turn_id");
+      if (id.length() && gTurnId.length() && id != gTurnId) {
+        Serial.printf("ws: ignoring retired turn=%s\n", id.c_str());
+        continue;
+      }
       if (id.length()) gTurnId = id;
       const String tr = jsonField(text, "transcript");
       Serial.printf("ws: turn=%s\n", gTurnId.c_str());
       if (jsonField(text, "fast_path") == "true") Serial.println("fast-path: 1");
       if (tr.length()) Serial.printf("transcript: %s\n", tr.c_str());
     } else if (type == "done") {
+      const String id = jsonField(text, "turn_id");
+      if (id.length() && gTurnId.length() && id != gTurnId) {
+        Serial.printf("ws: ignoring retired done=%s\n", id.c_str());
+        continue;
+      }
       const String err = jsonField(text, "error");
       if (err.length()) Serial.printf("ws: done error=%s\n", err.c_str());
       gotDone = true;

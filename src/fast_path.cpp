@@ -96,9 +96,6 @@ std::optional<FastPathResult> FastPath::try_handle(const std::string& transcript
   const std::string t = fold_phatic(transcript);
 
   if (auto intent = parse_home_intent(transcript)) {
-    if (intent->kind == HomeIntentKind::Timer && intent->timer_seconds <= 0) {
-      return FastPathResult{"How long, sir?", home_intent_kind_name(intent->kind)};
-    }
     if (intent->kind == HomeIntentKind::Weather && !intent->place.empty()) {
       if (!weather_client_) return std::nullopt;
       std::string err;
@@ -113,11 +110,18 @@ std::optional<FastPathResult> FastPath::try_handle(const std::string& transcript
     }
     const bool ha_ready = home_client_ && home_client_->configured();
     if (!ha_ready) return std::nullopt;
+    if (intent->kind == HomeIntentKind::Timer && intent->timer_seconds <= 0) {
+      if (home_.timer_entity.empty()) return std::nullopt;
+      return FastPathResult{"How long, sir?", home_intent_kind_name(intent->kind)};
+    }
     std::string err;
     HomeAction action = home_client_->run(*intent, &err);
     if (action.reply.empty()) {
       std::cerr << "intercom home: " << (err.empty() ? "failed" : err) << std::endl;
-      return FastPathResult{"I couldn't do that, sir.", home_intent_kind_name(intent->kind)};
+      FastPathResult failed{
+          "I couldn't do that, sir.", home_intent_kind_name(intent->kind)};
+      failed.context_valid = false;
+      return failed;
     }
     FastPathResult result{std::move(action.reply), home_intent_kind_name(intent->kind)};
     if (action.surface.is_object()) {

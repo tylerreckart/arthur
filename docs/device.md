@@ -34,7 +34,9 @@ while the button is down:
    with the transcript, then reply PCM as binary frames, then `turn` / `done`.
 4. Play binary frames to the I2S amp as they arrive.
 5. On barge-in: stop I2S, `{"type":"cancel"}` on the socket, and
-   `POST /v1/turns/{turn_id}/cancel`.
+   `POST /v1/turns/{turn_id}/cancel`. Start the next PTT immediately; its
+   `end` preempts any cancelled worker that is still unwinding, and receives a
+   new `turn_id`.
 6. If the WS handshake or a mid-hold send fails, fall back to
    `POST /v1/utterance` with the full clip (same as before).
 

@@ -94,7 +94,7 @@ int unit_seconds(std::string_view w) {
   return 0;
 }
 
-int parse_duration_seconds(std::string_view t) {
+int parse_duration_seconds_impl(std::string_view t) {
   if (has_word(t, "half") && has_any(t, {"hour", "hours"})) return 1800;
   if (has_word(t, "quarter") && has_any(t, {"hour", "hours"})) return 900;
 
@@ -250,6 +250,10 @@ bool wants_toggle(std::string_view t) {
 
 }  // namespace
 
+int parse_duration_seconds(std::string_view transcript) {
+  return parse_duration_seconds_impl(fold_phatic(transcript));
+}
+
 std::string extract_weather_place(std::string_view transcript) {
   const std::string t = fold_phatic(transcript);
   if (t.empty() || !looks_like_weather(t)) return {};
@@ -291,7 +295,7 @@ std::optional<HomeIntent> parse_home_intent(std::string_view transcript) {
   if (looks_like_timer(t)) {
     HomeIntent in;
     in.kind = HomeIntentKind::Timer;
-    in.timer_seconds = parse_duration_seconds(t);
+    in.timer_seconds = parse_duration_seconds_impl(t);
     return in;
   }
 

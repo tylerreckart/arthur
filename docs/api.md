@@ -46,7 +46,7 @@ Body: raw mono PCM **s16le** (default 24 kHz).
 | `X-Device-Id` | Echo |
 | `X-Conversation-Id` | Present when a prior session exists |
 | `X-Fast-Path` | `1` when the turn skipped Arbiter |
-| `X-Fast-Path-Kind` | `social`, `clock`, `echo`, `timer`, `light_on`, `light_off`, `light_toggle`, `volume_up`, `volume_down`, `weather`, `alarm`, `news`, or `markets` |
+| `X-Fast-Path-Kind` | `clock`, `echo`, `timer`, `light_on`, `light_off`, `light_toggle`, `volume_up`, `volume_down`, `weather`, `alarm`, `news`, or `markets` |
 | `X-Intercom-Error` | Error detail when present |
 
 Errors before streaming are JSON (`401`, `400`, `502`).
@@ -75,13 +75,35 @@ Same as utterance but skips STT — for bring-your-own transcript / bridge tests
 Fast-path phrases never call Arbiter:
 
 - Clock: `what time is it`, `what's the date` (local clock, not tools)
-- Echo: `echo …`
-- Home (only when `home.ha_base_url` and `home.ha_token` are set): timers, lights, volume, weather at home, next alarm. A timer with no duration answers `How long, sir?` even without Home Assistant.
+- Echo/repeat: `echo …`, `repeat that`, `say that again`
+- Home (only when `home.ha_base_url` and `home.ha_token` are set): timers, lights, volume, weather at home, next alarm. A timer with no duration answers `How long, sir?`; a standalone reply such as `five minutes` completes the pending timer for up to two minutes.
 - Place weather (`what's the weather in Tokyo`, `forecast for London`): Open-Meteo geocoding + forecast (no API key, no Home Assistant). Speaks a short line and emits a weather `surface`. Home weather without a place still uses HA when configured.
 - News (`what's in the news`, `news about Tesla`, `top headlines`): Google News RSS (or configured feeds). Speaks a short line and emits a news `surface`. No API key.
 - Markets (`how's the market`, `what's AAPL doing`, `bitcoin price`): Yahoo Finance public v7 quote JSON. Speaks a short line and emits a markets `surface`. No API key. Quote lookup failure falls through to Arthur for speech only.
 
-Social turns always go through Arthur's constitution so their tone and history match substantive conversation. Home intents that match but have no Home Assistant config fall through to Arthur (except the bare timer prompt and place weather). News and markets fast-path when Intercom is confident and the fetch succeeds; otherwise Arthur speaks and Intercom still attaches a card if it can fetch structured data for that turn.
+Social turns always go through Arthur's constitution so their tone and history match substantive conversation. Home intents that match but have no Home Assistant config fall through to Arthur (place weather remains local). News and markets fast-path when Intercom is confident and the fetch succeeds; otherwise Arthur speaks and Intercom still attaches a card if it can fetch structured data for that turn.
+
+When a short contextual follow-up follows a local clock, home, weather, news, or
+market answer, Intercom sends Arthur one bounded turn of private continuity
+metadata: the prior request, local answer, and fast-path kind. This lets turns
+such as `what about tomorrow?` continue naturally even though the previous turn
+did not run through Arbiter. The bridge is deliberately limited to clear,
+short follow-ups; unrelated requests are sent unchanged. Arthur's constitution
+instructs him to use this metadata silently and never quote it aloud.
+
+Successful light and volume actions also keep a normalized local request so
+short action follow-ups remain deterministic. `turn it off`, `the hallway too`,
+`do that again`, and `undo that` resolve against the previous action without an
+Arbiter round trip. Failed Home Assistant calls are never retained as action
+context, so a failed command cannot later be repeated or reversed by accident.
+
+One utterance can also contain two or three deterministic clauses joined by
+`and`, `then`, or `and then`. Arthur performs each clause in order and speaks
+each result, so `what time is it and the date` or
+`turn off the kitchen lights and the hallway` stays local. A bare later target
+inherits the preceding light action, and short tails such as `the news` expand
+to their normal local request. A combined market or news request stays one
+lookup. If any clause is not deterministic, the whole utterance is left intact.
 
 ## `POST /v1/turns/:turn_id/cancel`
 
@@ -91,7 +113,14 @@ Requires `Authorization` + `X-Device-Id`.
 
 ## `GET /v1/devices/:device_id/session`
 
-Debug: `{ device_id, conversation_id, last_turn_id, updated_at }`.
+Debug: `{ device_id, conversation_id, last_turn_id, last_user, last_spoken, last_fast_path_kind, last_fast_path_request, pending_intent, pending_at, updated_at }`.
+
+Intercom keeps the last user request and completed spoken line per device.
+Exact requests such as `say that again` can replay deterministic or Arbiter
+answers without another model run; the fast-path kind supports the one-turn
+continuity bridge described above, and the normalized fast-path request supports
+local action chaining. This is device session context, separate from Arthur's
+durable `/mem` facts.
 
 ## Arbiter mapping
 
@@ -158,7 +187,10 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 Turn execution runs independently of the socket reader, so `cancel`, ping, and
 close frames remain responsive during STT, Arbiter work, and TTS. The turn is
 registered before one-shot STT begins; clients may cancel as soon as they
-receive `accept`.
+receive `accept`. A new `text` or buffered-PCM `end` while a turn is still
+unwinding implicitly cancels and retires the old turn, then immediately emits a
+new `accept`. Terminal events remain keyed by `turn_id`, so the cancelled
+turn's `done` may arrive after the replacement turn has been accepted.
 
 ### `surface` (desk cards)
 

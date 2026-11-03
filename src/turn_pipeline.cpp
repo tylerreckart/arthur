@@ -63,6 +63,302 @@ std::size_t early_flush_words(const Config& config) {
              : 0;
 }
 
+bool is_repeat_request(std::string_view transcript) {
+  const std::string t = fold_phatic(transcript);
+  return t == "repeat that" || t == "say that again" ||
+         t == "could you repeat that" || t == "what did you say";
+}
+
+bool is_contextual_followup(std::string_view transcript) {
+  const std::string t = fold_phatic(transcript);
+  if (t.empty() || t.size() > 120) return false;
+  if (t == "tomorrow" || t == "today" || t == "tonight" ||
+      t == "why" || t == "when" || t == "where" ||
+      t == "which one" || t == "how much" || t == "how many" ||
+      t == "tell me more") {
+    return true;
+  }
+  for (const char* prefix : {
+           "what about ", "how about ", "and ", "does that ", "is that ",
+           "will it ", "which ", "why ", "when ", "where ", "more about ",
+       }) {
+    if (t.rfind(prefix, 0) == 0) return true;
+  }
+  return false;
+}
+
+bool bridges_fast_path_kind(std::string_view kind) {
+  return kind == "clock" || kind == "timer" ||
+         kind == "light_on" || kind == "light_off" ||
+         kind == "light_toggle" || kind == "volume_up" ||
+         kind == "volume_down" || kind == "weather" ||
+         kind == "alarm" || kind == "news" || kind == "markets";
+}
+
+bool is_action_repeat(std::string_view t) {
+  return t == "again" || t == "do that again" || t == "same again" ||
+         t == "one more time";
+}
+
+bool is_action_undo(std::string_view t) {
+  return t == "undo that" || t == "put it back" || t == "reverse that";
+}
+
+bool is_light_kind(std::string_view kind) {
+  return kind == "light_on" || kind == "light_off" || kind == "light_toggle";
+}
+
+std::string light_request(std::string_view kind, std::string_view room) {
+  std::string out;
+  if (kind == "light_off") {
+    out = "turn off ";
+  } else if (kind == "light_toggle") {
+    out = "toggle ";
+  } else {
+    out = "turn on ";
+  }
+  if (!room.empty()) {
+    out += room;
+    out += " ";
+  }
+  out += "lights";
+  return out;
+}
+
+std::optional<std::string> resolve_local_action_followup(
+    const DeviceSession& prior, std::string_view current) {
+  const std::string t = fold_phatic(current);
+  if (t.empty() || t.size() > 80) return std::nullopt;
+
+  const std::string previous_request =
+      prior.last_fast_path_request.empty() ? prior.last_user
+                                          : prior.last_fast_path_request;
+  if (previous_request.empty()) return std::nullopt;
+
+  if (is_action_repeat(t) &&
+      (is_light_kind(prior.last_fast_path_kind) ||
+       prior.last_fast_path_kind == "volume_up" ||
+       prior.last_fast_path_kind == "volume_down")) {
+    return previous_request;
+  }
+
+  if (prior.last_fast_path_kind == "volume_up" && is_action_undo(t)) {
+    return "turn the volume down";
+  }
+  if (prior.last_fast_path_kind == "volume_down" && is_action_undo(t)) {
+    return "turn the volume up";
+  }
+  if (!is_light_kind(prior.last_fast_path_kind)) return std::nullopt;
+
+  std::string room;
+  if (auto previous = parse_home_intent(previous_request)) {
+    room = previous->room;
+  }
+
+  if (is_action_undo(t)) {
+    if (prior.last_fast_path_kind == "light_on") {
+      return light_request("light_off", room);
+    }
+    if (prior.last_fast_path_kind == "light_off") {
+      return light_request("light_on", room);
+    }
+    return light_request("light_toggle", room);
+  }
+
+  for (const auto& [phrase, kind] :
+       std::initializer_list<std::pair<std::string_view, std::string_view>>{
+           {"turn it on", "light_on"},
+           {"switch it on", "light_on"},
+           {"put it on", "light_on"},
+           {"turn it off", "light_off"},
+           {"switch it off", "light_off"},
+           {"put it off", "light_off"},
+           {"toggle it", "light_toggle"},
+       }) {
+    if (t == phrase) return light_request(kind, room);
+  }
+
+  std::string room_followup;
+  if (t.rfind("and ", 0) == 0) {
+    room_followup = trim(t.substr(4));
+  } else if (t.size() > 4 && t.substr(t.size() - 4) == " too") {
+    room_followup = trim(t.substr(0, t.size() - 4));
+  }
+  if (room_followup.empty()) return std::nullopt;
+
+  const std::string candidate =
+      light_request(prior.last_fast_path_kind, room_followup);
+  const auto parsed = parse_home_intent(candidate);
+  if (!parsed || parsed->room.empty()) return std::nullopt;
+  return candidate;
+}
+
+bool has_token(std::string_view text, std::string_view word) {
+  std::size_t pos = 0;
+  while (pos <= text.size()) {
+    const auto found = text.find(word, pos);
+    if (found == std::string_view::npos) return false;
+    const bool left = found == 0 ||
+                      !std::isalnum(static_cast<unsigned char>(text[found - 1]));
+    const bool right = found + word.size() == text.size() ||
+                       !std::isalnum(static_cast<unsigned char>(
+                           text[found + word.size()]));
+    if (left && right) return true;
+    pos = found + 1;
+  }
+  return false;
+}
+
+bool has_explicit_light_polarity(std::string_view text) {
+  for (const char* word :
+       {"on", "off", "toggle", "enable", "disable", "kill", "dark"}) {
+    if (has_token(text, word)) return true;
+  }
+  return false;
+}
+
+std::string expand_clause_shorthand(std::string clause) {
+  if (clause == "the time" || clause == "time") return "what time is it";
+  if (clause == "the date" || clause == "date") return "whats the date";
+  if (clause == "the weather" || clause == "weather") return "whats the weather";
+  if (clause == "the forecast" || clause == "forecast") return "whats the forecast";
+  if (clause == "the news" || clause == "news") return "whats in the news";
+  if (clause == "the headlines" || clause == "headlines") return "top headlines";
+  if (clause == "the market" || clause == "the markets" || clause == "markets") {
+    return "hows the market";
+  }
+  return clause;
+}
+
+std::string inherit_light_target(const std::string& clause,
+                                 const std::string& previous) {
+  if (previous.empty() || has_explicit_light_polarity(clause)) return clause;
+  const auto prev = parse_home_intent(previous);
+  if (!prev || !is_light_kind(home_intent_kind_name(prev->kind))) return clause;
+  if (auto own = parse_home_intent(clause);
+      own && own->kind != HomeIntentKind::LightOn &&
+      own->kind != HomeIntentKind::LightOff &&
+      own->kind != HomeIntentKind::LightToggle) {
+    return clause;
+  }
+
+  std::string probe = clause;
+  if (clause.find("light") == std::string::npos &&
+      clause.find("lamp") == std::string::npos) {
+    probe = "turn on " + clause + " lights";
+  }
+  const auto probed = parse_home_intent(probe);
+  if (!probed || probed->room.empty() ||
+      clause.find(probed->room) == std::string::npos) {
+    return clause;
+  }
+  return light_request(home_intent_kind_name(prev->kind), probed->room);
+}
+
+std::vector<std::string> split_compound(std::string_view folded) {
+  const std::string_view delimiters[] = {" and then ", " then ", " and "};
+  std::vector<std::string> parts;
+  std::string current;
+  std::size_t i = 0;
+  while (i < folded.size()) {
+    const std::string_view rest = folded.substr(i);
+    std::string_view delimiter;
+    for (const auto candidate : delimiters) {
+      if (rest.rfind(candidate, 0) == 0) {
+        delimiter = candidate;
+        break;
+      }
+    }
+    if (!delimiter.empty()) {
+      parts.push_back(trim(current));
+      current.clear();
+      i += delimiter.size();
+      continue;
+    }
+    current.push_back(folded[i]);
+    ++i;
+  }
+  parts.push_back(trim(current));
+  if (parts.size() < 2 || parts.size() > 3) return {};
+  for (const auto& part : parts) {
+    if (part.empty()) return {};
+  }
+  return parts;
+}
+
+bool is_deterministic_clause(const Config& config, const std::string& clause) {
+  const std::string raw = to_lower(trim(clause));
+  if (raw.rfind("echo ", 0) == 0 && !trim(raw.substr(5)).empty()) return true;
+  if (is_clock_query(clause)) return true;
+  if (auto intent = parse_home_intent(clause)) {
+    if (intent->kind == HomeIntentKind::Weather && !intent->place.empty()) return true;
+    if (!config.home.configured()) return false;
+    if (intent->kind == HomeIntentKind::Timer && intent->timer_seconds <= 0 &&
+        config.home.timer_entity.empty()) {
+      return false;
+    }
+    return true;
+  }
+  if (auto briefing = parse_briefing_intent(clause)) {
+    return briefing->confidence == BriefingConfidence::High;
+  }
+  return false;
+}
+
+std::vector<std::string> local_compound_clauses(const Config& config,
+                                                std::string_view transcript) {
+  if (!config.fast_path) return {};
+  const auto parts = split_compound(fold_phatic(transcript));
+  if (parts.empty()) return {};
+
+  std::vector<std::string> resolved;
+  std::string previous;
+  bool all_same_briefing = true;
+  std::optional<BriefingKind> briefing_kind;
+  for (const auto& part : parts) {
+    const std::string clause =
+        inherit_light_target(expand_clause_shorthand(part), previous);
+    if (!is_deterministic_clause(config, clause)) return {};
+    if (auto briefing = parse_briefing_intent(clause);
+        briefing && briefing->confidence == BriefingConfidence::High) {
+      if (!briefing_kind) {
+        briefing_kind = briefing->kind;
+      } else if (*briefing_kind != briefing->kind) {
+        all_same_briefing = false;
+      }
+    } else {
+      all_same_briefing = false;
+    }
+    resolved.push_back(clause);
+    previous = clause;
+  }
+  // "bitcoin and ethereum" is one market request, not two lookups.
+  if (all_same_briefing) return {};
+  return resolved;
+}
+
+std::string context_line(std::string value) {
+  for (char& c : value) {
+    if (c == '\r' || c == '\n' || c == '\t') c = ' ';
+  }
+  value = trim(value);
+  constexpr std::size_t kContextCap = 500;
+  if (value.size() > kContextCap) {
+    value.resize(kContextCap);
+    value += "…";
+  }
+  return value;
+}
+
+std::string with_fast_path_context(const DeviceSession& prior,
+                                   std::string_view current) {
+  return "[VOICE CONTEXT — private continuity metadata; never quote this block aloud]\n"
+         "Previous local turn kind: " + context_line(prior.last_fast_path_kind) + "\n"
+         "Previous user request: " + context_line(prior.last_user) + "\n"
+         "Arthur's previous spoken answer: " + context_line(prior.last_spoken) + "\n"
+         "[CURRENT USER REQUEST]\n" + std::string(current);
+}
+
 }  // namespace
 
 TurnPipeline::TurnPipeline(Config config,
@@ -279,6 +575,28 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     sink.event("heard", transcript);
   }
 
+  std::string routing_transcript = result.transcript;
+  const auto prior_session = sessions_->get(device_id);
+  if (prior_session && !prior_session->last_spoken.empty() &&
+      is_repeat_request(result.transcript)) {
+    routing_transcript = "echo " + prior_session->last_spoken;
+  } else if (prior_session &&
+      prior_session->pending_intent == "timer_duration" &&
+      prior_session->pending_at > 0 &&
+      now_unix() - prior_session->pending_at <= 120 &&
+      !parse_home_intent(result.transcript).has_value()) {
+    const int seconds = parse_duration_seconds(result.transcript);
+    if (seconds > 0) {
+      routing_transcript = "set a timer for " + spoken_duration(seconds);
+    }
+  } else if (prior_session && config_.home.configured() &&
+             !parse_home_intent(result.transcript).has_value()) {
+    if (auto resolved =
+            resolve_local_action_followup(*prior_session, result.transcript)) {
+      routing_transcript = *resolved;
+    }
+  }
+
   std::string err;
   auto speak = [&](const std::string& text, bool continuation = false) -> bool {
     // A latency flush is not a sentence boundary. Preserve continuation
@@ -316,7 +634,80 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     return ok;
   };
 
-  if (auto fp = fast_path_.try_handle(result.transcript)) {
+  if (const auto clauses = local_compound_clauses(config_, routing_transcript);
+      clauses.size() >= 2) {
+    result.used_fast_path = true;
+    path_name = "fast";
+    pending_kind = "fast";
+    if (auto existing = sessions_->get(device_id)) {
+      result.conversation_id = existing->conversation_id;
+    }
+    std::string joined_reply;
+    std::string joined_kind;
+    std::string saved_kind;
+    std::string saved_request;
+    bool arm_timer = false;
+    for (const auto& clause : clauses) {
+      if (handle->cancel.load()) {
+        result.error = "canceled";
+        return finish(result);
+      }
+      auto handled = fast_path_.try_handle(clause);
+      FastPathResult fp = handled
+                              ? *handled
+                              : FastPathResult{"I couldn't do that, sir.", "failed"};
+      if (!handled) fp.context_valid = false;
+      if (!speak(fp.reply)) {
+        result.error = err.empty() ? "tts failed" : err;
+        return finish(result);
+      }
+      if (fp.surface.is_object()) {
+        sink.event("surface", surface_event_body(result.turn_id, fp.surface).dump());
+      }
+      if (!joined_reply.empty() && !fp.reply.empty()) joined_reply.push_back(' ');
+      joined_reply += fp.reply;
+      if (!joined_kind.empty()) joined_kind.push_back('+');
+      joined_kind += fp.kind;
+      if (fp.context_valid) {
+        saved_kind = fp.kind;
+        saved_request = clause;
+      }
+      if (auto intent = parse_home_intent(clause);
+          intent && intent->kind == HomeIntentKind::Timer &&
+          intent->timer_seconds <= 0) {
+        arm_timer = true;
+      }
+    }
+    result.fast_path_kind = joined_kind;
+    if (result.conversation_id <= 0) {
+      std::string conv_err;
+      result.conversation_id = ensure_conversation(device_id, &conv_err);
+      if (result.conversation_id <= 0) {
+        std::cerr << "intercom fast-path conversation: "
+                  << (conv_err.empty() ? "create failed" : conv_err) << std::endl;
+      }
+    }
+    result.ok = true;
+    if (result.conversation_id > 0) {
+      DeviceSession s;
+      s.device_id = device_id;
+      s.conversation_id = result.conversation_id;
+      s.last_turn_id = result.turn_id;
+      s.last_user = result.transcript;
+      s.last_spoken = joined_reply;
+      s.last_fast_path_kind = saved_kind;
+      s.last_fast_path_request = saved_request;
+      if (arm_timer) {
+        s.pending_intent = "timer_duration";
+        s.pending_at = now_unix();
+      }
+      s.updated_at = now_unix();
+      sessions_->upsert(s, &err);
+    }
+    return finish(result);
+  }
+
+  if (auto fp = fast_path_.try_handle(routing_transcript)) {
     result.used_fast_path = true;
     result.fast_path_kind = fp->kind;
     path_name = "fast";
@@ -331,16 +722,43 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     if (fp->surface.is_object()) {
       sink.event("surface", surface_event_body(result.turn_id, fp->surface).dump());
     }
+    if (result.conversation_id <= 0) {
+      std::string conv_err;
+      result.conversation_id = ensure_conversation(device_id, &conv_err);
+      if (result.conversation_id <= 0) {
+        std::cerr << "intercom fast-path conversation: "
+                  << (conv_err.empty() ? "create failed" : conv_err) << std::endl;
+      }
+    }
     result.ok = true;
     if (result.conversation_id > 0) {
       DeviceSession s;
       s.device_id = device_id;
       s.conversation_id = result.conversation_id;
       s.last_turn_id = result.turn_id;
+      s.last_user = result.transcript;
+      s.last_spoken = fp->reply;
+      if (fp->context_valid) {
+        s.last_fast_path_kind = fp->kind;
+        s.last_fast_path_request = routing_transcript;
+      }
+      if (auto intent = parse_home_intent(routing_transcript);
+          intent && intent->kind == HomeIntentKind::Timer &&
+          intent->timer_seconds <= 0) {
+        s.pending_intent = "timer_duration";
+        s.pending_at = now_unix();
+      }
       s.updated_at = now_unix();
       sessions_->upsert(s, &err);
     }
     return finish(result);
+  }
+
+  std::string arbiter_message = routing_transcript;
+  if (prior_session && bridges_fast_path_kind(prior_session->last_fast_path_kind) &&
+      !prior_session->last_user.empty() && !prior_session->last_spoken.empty() &&
+      is_contextual_followup(result.transcript)) {
+    arbiter_message = with_fast_path_context(*prior_session, result.transcript);
   }
 
   // Medium-confidence (or high-confidence fetch miss) news/markets: let
@@ -454,7 +872,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   auto arbiter_future = std::async(std::launch::async, [&]() {
     std::string stream_err;
     const bool streamed = arbiter_->send_message(
-        conv, result.transcript, result.turn_id, cbs, &handle->cancel, &stream_err);
+        conv, arbiter_message, result.turn_id, cbs, &handle->cancel, &stream_err);
     arb_state.streamed = streamed;
     arb_state.stream_err = std::move(stream_err);
     arb_state.done.store(true);
@@ -629,6 +1047,8 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   s.device_id = device_id;
   s.conversation_id = conv;
   s.last_turn_id = result.turn_id;
+  s.last_user = result.transcript;
+  s.last_spoken = arb_state.full_content;
   s.updated_at = now_unix();
   sessions_->upsert(s, &err);
 

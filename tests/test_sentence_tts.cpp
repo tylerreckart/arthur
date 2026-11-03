@@ -6,6 +6,8 @@
 #include "intercom/turn_pipeline.hpp"
 #include "intercom/warm.hpp"
 
+#include <sqlite3.h>
+
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -145,8 +147,275 @@ int main() {
     CHECK(texts[0] == "Hello.");
     CHECK(texts[1] == "How are you?");
   }
+  const auto spoken_session = sessions->get("dev-1");
+  CHECK(spoken_session.has_value());
+  if (spoken_session) {
+    CHECK(spoken_session->last_spoken == "Hello. How are you?");
+  }
 
   std::filesystem::remove(db_path);
+
+  {
+    auto tts_fp = std::make_shared<RecordingTts>();
+    auto arbiter_fp = std::make_shared<StreamingArbiter>(tts_fp);
+    auto stt_fp = std::make_shared<DummyStt>();
+    const auto db_fp =
+        std::filesystem::temp_directory_path() / "intercom_fast_conversation.db";
+    std::filesystem::remove(db_fp);
+    auto sessions_fp = std::make_shared<intercom::SessionStore>(db_fp.string());
+    CHECK(sessions_fp->open(&err));
+    intercom::Config cfg_fp;
+    cfg_fp.fast_path = true;
+    cfg_fp.filler.enabled = false;
+    intercom::TurnPipeline pipe_fp(
+        cfg_fp, stt_fp, tts_fp, arbiter_fp, sessions_fp, nullptr);
+    CollectingSink sink_fp;
+    const auto fast =
+        pipe_fp.run_text_utterance("dev-fast", "echo hello", sink_fp);
+    CHECK(fast.ok);
+    CHECK(fast.used_fast_path);
+    CHECK(fast.conversation_id == 42);
+    const auto fast_session = sessions_fp->get("dev-fast");
+    CHECK(fast_session.has_value());
+    if (fast_session) {
+      CHECK(fast_session->conversation_id == 42);
+      CHECK(fast_session->last_turn_id == fast.turn_id);
+      CHECK(fast_session->last_user == "echo hello");
+      CHECK(fast_session->last_spoken == "hello");
+      CHECK(fast_session->last_fast_path_kind == "echo");
+      CHECK(fast_session->last_fast_path_request == "echo hello");
+    }
+    const auto repeated = pipe_fp.run_text_utterance(
+        "dev-fast", "say that again", sink_fp);
+    CHECK(repeated.ok);
+    CHECK(repeated.used_fast_path);
+    CHECK(repeated.fast_path_kind == "echo");
+    const auto repeated_text = tts_fp->snapshot();
+    CHECK(repeated_text.size() == 2);
+    if (repeated_text.size() == 2) {
+      CHECK(repeated_text[0] == "hello.");
+      CHECK(repeated_text[1] == "hello.");
+    }
+    CHECK(arbiter_fp->last_message.empty());
+
+    const auto clock = pipe_fp.run_text_utterance(
+        "dev-context", "what time is it", sink_fp);
+    CHECK(clock.ok);
+    CHECK(clock.used_fast_path);
+    const auto clock_session = sessions_fp->get("dev-context");
+    CHECK(clock_session.has_value());
+    const auto followup = pipe_fp.run_text_utterance(
+        "dev-context", "what about tomorrow?", sink_fp);
+    CHECK(followup.ok);
+    CHECK(!followup.used_fast_path);
+    CHECK(arbiter_fp->last_message.find("VOICE CONTEXT") != std::string::npos);
+    CHECK(arbiter_fp->last_message.find(
+              "Previous user request: what time is it") != std::string::npos);
+    if (clock_session) {
+      CHECK(arbiter_fp->last_message.find(clock_session->last_spoken) !=
+            std::string::npos);
+    }
+    CHECK(arbiter_fp->last_message.find(
+              "[CURRENT USER REQUEST]\nwhat about tomorrow?") !=
+          std::string::npos);
+
+    const auto separate_clock = pipe_fp.run_text_utterance(
+        "dev-no-context", "what time is it", sink_fp);
+    CHECK(separate_clock.ok);
+    CHECK(separate_clock.used_fast_path);
+    const auto unrelated = pipe_fp.run_text_utterance(
+        "dev-no-context", "tell me a joke", sink_fp);
+    CHECK(unrelated.ok);
+    CHECK(!unrelated.used_fast_path);
+    CHECK(arbiter_fp->last_message == "tell me a joke");
+    std::filesystem::remove(db_fp);
+  }
+
+  {
+    auto tts_actions = std::make_shared<RecordingTts>();
+    auto arbiter_actions = std::make_shared<StreamingArbiter>(tts_actions);
+    auto stt_actions = std::make_shared<DummyStt>();
+    const auto db_actions =
+        std::filesystem::temp_directory_path() / "intercom_action_followups.db";
+    std::filesystem::remove(db_actions);
+    auto sessions_actions =
+        std::make_shared<intercom::SessionStore>(db_actions.string());
+    CHECK(sessions_actions->open(&err));
+    intercom::Config cfg_actions;
+    cfg_actions.fast_path = true;
+    cfg_actions.filler.enabled = false;
+    cfg_actions.home.ha_base_url = "http://127.0.0.1:9";
+    cfg_actions.home.ha_token = "test";
+    cfg_actions.home.lights["kitchen"] = "light.kitchen";
+    cfg_actions.home.lights["hallway"] = "light.hallway";
+    cfg_actions.home.media_player = "media_player.kitchen";
+    intercom::TurnPipeline pipe_actions(
+        cfg_actions, stt_actions, tts_actions, arbiter_actions,
+        sessions_actions, nullptr);
+    CollectingSink sink_actions;
+
+    auto seed_action = [&](const std::string& device, const std::string& kind,
+                           const std::string& request) {
+      intercom::DeviceSession seeded;
+      seeded.device_id = device;
+      seeded.conversation_id = 42;
+      seeded.last_user = request;
+      seeded.last_spoken = "Done.";
+      seeded.last_fast_path_kind = kind;
+      seeded.last_fast_path_request = request;
+      CHECK(sessions_actions->upsert(seeded, &err));
+    };
+
+    seed_action("dev-pronoun", "light_on", "turn on kitchen lights");
+    const auto pronoun = pipe_actions.run_text_utterance(
+        "dev-pronoun", "turn it off", sink_actions);
+    CHECK(pronoun.ok);
+    CHECK(pronoun.used_fast_path);
+    CHECK(pronoun.fast_path_kind == "light_off");
+    const auto failed_action = sessions_actions->get("dev-pronoun");
+    CHECK(failed_action.has_value());
+    if (failed_action) {
+      CHECK(failed_action->last_fast_path_kind.empty());
+      CHECK(failed_action->last_fast_path_request.empty());
+    }
+
+    seed_action("dev-chain", "light_on", "turn on kitchen lights");
+    const auto chained = pipe_actions.run_text_utterance(
+        "dev-chain", "and the hallway", sink_actions);
+    CHECK(chained.ok);
+    CHECK(chained.used_fast_path);
+    CHECK(chained.fast_path_kind == "light_on");
+
+    seed_action("dev-undo", "light_on", "turn on kitchen lights");
+    const auto undone = pipe_actions.run_text_utterance(
+        "dev-undo", "undo that", sink_actions);
+    CHECK(undone.ok);
+    CHECK(undone.used_fast_path);
+    CHECK(undone.fast_path_kind == "light_off");
+
+    seed_action("dev-again", "volume_up", "turn the volume up");
+    const auto again = pipe_actions.run_text_utterance(
+        "dev-again", "do that again", sink_actions);
+    CHECK(again.ok);
+    CHECK(again.used_fast_path);
+    CHECK(again.fast_path_kind == "volume_up");
+
+    CHECK(arbiter_actions->last_message.empty());
+
+    const auto compound_lights = pipe_actions.run_text_utterance(
+        "dev-compound-lights",
+        "turn off the kitchen lights and the hallway", sink_actions);
+    CHECK(compound_lights.ok);
+    CHECK(compound_lights.used_fast_path);
+    CHECK(compound_lights.fast_path_kind == "light_off+light_off");
+    std::filesystem::remove(db_actions);
+  }
+
+  {
+    auto tts_compound = std::make_shared<RecordingTts>();
+    auto arbiter_compound = std::make_shared<StreamingArbiter>(tts_compound);
+    auto stt_compound = std::make_shared<DummyStt>();
+    const auto db_compound =
+        std::filesystem::temp_directory_path() / "intercom_compound_turns.db";
+    std::filesystem::remove(db_compound);
+    auto sessions_compound =
+        std::make_shared<intercom::SessionStore>(db_compound.string());
+    CHECK(sessions_compound->open(&err));
+    intercom::Config cfg_compound;
+    cfg_compound.fast_path = true;
+    cfg_compound.filler.enabled = false;
+    cfg_compound.markets.quote_base = "http://127.0.0.1:9";
+    cfg_compound.markets.timeout_ms = 400;
+    intercom::TurnPipeline pipe_compound(
+        cfg_compound, stt_compound, tts_compound, arbiter_compound,
+        sessions_compound, nullptr);
+    CollectingSink sink_compound;
+
+    const auto spoken = pipe_compound.run_text_utterance(
+        "dev-compound", "what time is it and echo hello", sink_compound);
+    CHECK(spoken.ok);
+    CHECK(spoken.used_fast_path);
+    CHECK(spoken.fast_path_kind == "clock+echo");
+    const auto spoken_text = tts_compound->snapshot();
+    CHECK(spoken_text.size() == 2);
+    if (spoken_text.size() == 2) CHECK(spoken_text[1] == "hello.");
+    const auto spoken_session = sessions_compound->get("dev-compound");
+    CHECK(spoken_session.has_value());
+    if (spoken_session) {
+      CHECK(spoken_session->last_user == "what time is it and echo hello");
+      CHECK(spoken_session->last_fast_path_kind == "echo");
+      CHECK(spoken_session->last_fast_path_request == "echo hello");
+      CHECK(spoken_session->last_spoken.find("hello") != std::string::npos);
+    }
+
+    const auto shorthand = pipe_compound.run_text_utterance(
+        "dev-shorthand", "what time is it and the date", sink_compound);
+    CHECK(shorthand.ok);
+    CHECK(shorthand.used_fast_path);
+    CHECK(shorthand.fast_path_kind == "clock+clock");
+
+    const auto mixed = pipe_compound.run_text_utterance(
+        "dev-mixed", "tell me a joke and what time is it", sink_compound);
+    CHECK(mixed.ok);
+    CHECK(!mixed.used_fast_path);
+    CHECK(arbiter_compound->last_message ==
+          "tell me a joke and what time is it");
+
+    const auto quotes = pipe_compound.run_text_utterance(
+        "dev-quotes", "what's bitcoin and ethereum doing", sink_compound);
+    CHECK(quotes.ok);
+    CHECK(!quotes.used_fast_path);
+    CHECK(arbiter_compound->last_message ==
+          "what's bitcoin and ethereum doing");
+
+    const auto too_many = pipe_compound.run_text_utterance(
+        "dev-too-many", "what time is it and echo one and echo two and echo three",
+        sink_compound);
+    CHECK(too_many.ok);
+    CHECK(!too_many.used_fast_path);
+    CHECK(arbiter_compound->last_message.find("echo three") != std::string::npos);
+    std::filesystem::remove(db_compound);
+  }
+
+  {
+    auto tts_clarify = std::make_shared<RecordingTts>();
+    auto arbiter_clarify = std::make_shared<StreamingArbiter>(tts_clarify);
+    auto stt_clarify = std::make_shared<DummyStt>();
+    const auto db_clarify =
+        std::filesystem::temp_directory_path() / "intercom_timer_clarify.db";
+    std::filesystem::remove(db_clarify);
+    auto sessions_clarify =
+        std::make_shared<intercom::SessionStore>(db_clarify.string());
+    CHECK(sessions_clarify->open(&err));
+    intercom::Config cfg_clarify;
+    cfg_clarify.fast_path = true;
+    cfg_clarify.filler.enabled = false;
+    cfg_clarify.home.ha_base_url = "http://127.0.0.1:9";
+    cfg_clarify.home.ha_token = "test";
+    cfg_clarify.home.timer_entity = "timer.kitchen";
+    intercom::TurnPipeline pipe_clarify(
+        cfg_clarify, stt_clarify, tts_clarify, arbiter_clarify,
+        sessions_clarify, nullptr);
+    CollectingSink sink_clarify;
+    const auto prompt = pipe_clarify.run_text_utterance(
+        "dev-clarify", "set a timer", sink_clarify);
+    CHECK(prompt.ok);
+    CHECK(prompt.used_fast_path);
+    auto pending = sessions_clarify->get("dev-clarify");
+    CHECK(pending.has_value());
+    if (pending) CHECK(pending->pending_intent == "timer_duration");
+
+    const auto completed = pipe_clarify.run_text_utterance(
+        "dev-clarify", "five minutes", sink_clarify);
+    CHECK(completed.ok);
+    CHECK(completed.used_fast_path);
+    CHECK(completed.fast_path_kind == "timer");
+    pending = sessions_clarify->get("dev-clarify");
+    CHECK(pending.has_value());
+    if (pending) CHECK(pending->pending_intent.empty());
+    CHECK(arbiter_clarify->last_message.empty());
+    std::filesystem::remove(db_clarify);
+  }
 
   {
     class EarlyArbiter : public intercom::ArbiterClient {
@@ -409,6 +678,48 @@ int main() {
     CHECK(canceled.error == "canceled");
     CHECK(tts_c->count() == 0);
     std::filesystem::remove(db_c);
+  }
+
+  {
+    const auto db_migrate =
+        std::filesystem::temp_directory_path() / "intercom_session_migrate.db";
+    std::filesystem::remove(db_migrate);
+    sqlite3* raw = nullptr;
+    CHECK(sqlite3_open(db_migrate.c_str(), &raw) == SQLITE_OK);
+    const char* legacy_sql =
+        "CREATE TABLE device_sessions ("
+        "device_id TEXT PRIMARY KEY NOT NULL,"
+        "conversation_id INTEGER NOT NULL,"
+        "last_turn_id TEXT NOT NULL DEFAULT '',"
+        "updated_at INTEGER NOT NULL);";
+    CHECK(sqlite3_exec(raw, legacy_sql, nullptr, nullptr, nullptr) == SQLITE_OK);
+    sqlite3_close(raw);
+
+    intercom::SessionStore migrated(db_migrate.string());
+    CHECK(migrated.open(&err));
+    intercom::DeviceSession session;
+    session.device_id = "legacy-device";
+    session.conversation_id = 77;
+    session.last_turn_id = "turn-77";
+    session.last_user = "turn on the kitchen light";
+    session.last_spoken = "The kitchen light is on.";
+    session.last_fast_path_kind = "light_on";
+    session.last_fast_path_request = "turn on the kitchen light";
+    session.pending_intent = "timer_duration";
+    session.pending_at = 123;
+    CHECK(migrated.upsert(session, &err));
+    const auto restored = migrated.get("legacy-device");
+    CHECK(restored.has_value());
+    if (restored) {
+      CHECK(restored->last_user == session.last_user);
+      CHECK(restored->last_spoken == session.last_spoken);
+      CHECK(restored->last_fast_path_kind == session.last_fast_path_kind);
+      CHECK(restored->last_fast_path_request ==
+            session.last_fast_path_request);
+      CHECK(restored->pending_intent == session.pending_intent);
+      CHECK(restored->pending_at == session.pending_at);
+    }
+    std::filesystem::remove(db_migrate);
   }
 
   if (g_fails != 0) {

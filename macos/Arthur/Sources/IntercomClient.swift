@@ -4,7 +4,7 @@ enum IntercomEvent {
   case ready(sampleRate: Int, deviceId: String)
   case accept(turnId: String)
   case pcm(Data)
-  case turn(transcript: String, conversationId: Int64, ok: Bool, fastPath: Bool)
+  case turn(turnId: String, transcript: String, conversationId: Int64, ok: Bool, fastPath: Bool)
   case done(ok: Bool, error: String, turnId: String)
   case speak(kind: String, runId: String, text: String)
   case heard(String)
@@ -235,6 +235,7 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
       emit(.accept(turnId: json["turn_id"] as? String ?? ""))
     case "turn":
       emit(.turn(
+        turnId: json["turn_id"] as? String ?? "",
         transcript: json["transcript"] as? String ?? "",
         conversationId: int64Value(json["conversation_id"]),
         ok: json["ok"] as? Bool ?? true,

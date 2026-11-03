@@ -666,7 +666,8 @@ final class AppModel {
       if !text.isEmpty {
         commitVoiceTranscript(text)
       }
-    case .turn(let transcript, let conv, let ok, _):
+    case .turn(let eventTurnId, let transcript, let conv, let ok, _):
+      guard eventTurnId.isEmpty || eventTurnId == turnId else { return }
       if !transcript.isEmpty {
         commitVoiceTranscript(transcript)
       } else {
@@ -675,7 +676,8 @@ final class AppModel {
       typedThisTurn = false
       if conv > 0 { conversationId = conv }
       if !ok { errorText = "That turn did not finish cleanly." }
-    case .done(let ok, let err, _):
+    case .done(let ok, let err, let eventTurnId):
+      guard eventTurnId.isEmpty || eventTurnId == turnId else { return }
       expectingReply = false
       typedThisTurn = false
       formingText = ""

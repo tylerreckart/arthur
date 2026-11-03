@@ -305,6 +305,104 @@ int main() {
     CHECK(std::chrono::steady_clock::now() - cancel_started <
           std::chrono::milliseconds(1000));
 
+    // A new PTT may finish before the cancelled worker has unwound. `end`
+    // must preempt the old turn instead of rejecting the buffered utterance.
+    arbiter->cancel_seen.store(false);
+    arbiter->slow_mode.store(true);
+    intercom::WsFrame preempted;
+    preempted.opcode = intercom::WsOpcode::Text;
+    preempted.payload = R"({"type":"text","text":"preempt me"})";
+    const std::string preempted_raw = intercom::encode_ws_frame(preempted, true);
+    CHECK(send_all(fd, preempted_raw.data(), preempted_raw.size()));
+
+    incoming.clear();
+    std::string old_turn_id;
+    const auto old_accept_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(1000);
+    while (std::chrono::steady_clock::now() < old_accept_deadline &&
+           old_turn_id.empty()) {
+      char buf[4096];
+      const ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+      if (n > 0) incoming.append(buf, static_cast<std::size_t>(n));
+      while (true) {
+        std::size_t used = 0;
+        auto frame = intercom::decode_ws_frame(incoming, &used);
+        if (!frame) break;
+        incoming.erase(0, used);
+        if (frame->opcode != intercom::WsOpcode::Text) continue;
+        try {
+          auto j = nlohmann::json::parse(frame->payload);
+          if (j.value("type", "") == "accept") {
+            old_turn_id = j.value("turn_id", "");
+          }
+        } catch (...) {
+        }
+      }
+      if (old_turn_id.empty()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    CHECK(!old_turn_id.empty());
+
+    intercom::WsFrame next_pcm;
+    next_pcm.opcode = intercom::WsOpcode::Binary;
+    next_pcm.payload = std::string(16, 'N');
+    const std::string next_pcm_raw = intercom::encode_ws_frame(next_pcm, true);
+    CHECK(send_all(fd, next_pcm_raw.data(), next_pcm_raw.size()));
+    intercom::WsFrame next_end;
+    next_end.opcode = intercom::WsOpcode::Text;
+    next_end.payload = R"({"type":"end"})";
+    const std::string next_end_raw = intercom::encode_ws_frame(next_end, true);
+    CHECK(send_all(fd, next_end_raw.data(), next_end_raw.size()));
+
+    bool old_done = false;
+    bool next_done = false;
+    bool next_heard = false;
+    std::string next_turn_id;
+    const auto preempt_deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+    while (std::chrono::steady_clock::now() < preempt_deadline &&
+           (!old_done || !next_done)) {
+      char buf[4096];
+      const ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+      if (n > 0) incoming.append(buf, static_cast<std::size_t>(n));
+      while (true) {
+        std::size_t used = 0;
+        auto frame = intercom::decode_ws_frame(incoming, &used);
+        if (!frame) break;
+        incoming.erase(0, used);
+        if (frame->opcode != intercom::WsOpcode::Text) continue;
+        try {
+          auto j = nlohmann::json::parse(frame->payload);
+          const auto type = j.value("type", "");
+          const auto id = j.value("turn_id", "");
+          if (type == "accept" && id != old_turn_id) next_turn_id = id;
+          if (type == "heard" && j.value("text", "") == "status") {
+            next_heard = true;
+          }
+          if (type == "done" && id == old_turn_id) {
+            CHECK(!j.value("ok", true));
+            CHECK(j.value("error", "") == "canceled");
+            old_done = true;
+          }
+          if (type == "done" && !next_turn_id.empty() && id == next_turn_id) {
+            CHECK(j.value("ok", false));
+            next_done = true;
+          }
+        } catch (...) {
+        }
+      }
+      if (!old_done || !next_done) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    CHECK(!next_turn_id.empty());
+    CHECK(next_turn_id != old_turn_id);
+    CHECK(old_done);
+    CHECK(next_done);
+    CHECK(next_heard);
+    CHECK(arbiter->cancel_seen.load());
+
     CHECK(hub->online("speaker-1"));
     CHECK(hub->speak("speaker-1", "Time to leave, sir.", "schedule", 42));
 
