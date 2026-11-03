@@ -74,7 +74,6 @@ Same as utterance but skips STT — for bring-your-own transcript / bridge tests
 
 Fast-path phrases never call Arbiter:
 
-- Social: `hello` / `good morning` and other greetings, thanks, `status`
 - Clock: `what time is it`, `what's the date` (local clock, not tools)
 - Echo: `echo …`
 - Home (only when `home.ha_base_url` and `home.ha_token` are set): timers, lights, volume, weather at home, next alarm. A timer with no duration answers `How long, sir?` even without Home Assistant.
@@ -82,7 +81,7 @@ Fast-path phrases never call Arbiter:
 - News (`what's in the news`, `news about Tesla`, `top headlines`): Google News RSS (or configured feeds). Speaks a short line and emits a news `surface`. No API key.
 - Markets (`how's the market`, `what's AAPL doing`, `bitcoin price`): Yahoo Finance public v7 quote JSON. Speaks a short line and emits a markets `surface`. No API key. Quote lookup failure falls through to Arthur for speech only.
 
-Social turns greet back and invite a follow-up. Home intents that match but have no Home Assistant config fall through to Arthur (except the bare timer prompt and place weather). News and markets fast-path when Intercom is confident and the fetch succeeds; otherwise Arthur speaks and Intercom still attaches a card if it can fetch structured data for that turn.
+Social turns always go through Arthur's constitution so their tone and history match substantive conversation. Home intents that match but have no Home Assistant config fall through to Arthur (except the bare timer prompt and place weather). News and markets fast-path when Intercom is confident and the fetch succeeds; otherwise Arthur speaks and Intercom still attaches a card if it can fetch structured data for that turn.
 
 ## `POST /v1/turns/:turn_id/cancel`
 
@@ -110,17 +109,21 @@ Debug: `{ device_id, conversation_id, last_turn_id, updated_at }`.
 Default agent: **Arthur** (`config/arthur.agent.json`).
 
 Reply PCM can start before the SSE `done` event. Intercom synthesizes each
-completed sentence as depth-0 text deltas arrive, and also starts Kokoro after
-about seven words (`early_flush_words`) even when the first sentence has no
-period yet. Remaining text is flushed after `done`; already-spoken sentences
-are not repeated.
+completed sentence as depth-0 text deltas arrive. `early_flush_words` can force
+a lower-latency mid-clause start, but defaults to `0` so Kokoro receives a
+complete thought and preserves natural prosody. Forced fragments are marked as
+continuations rather than full stops. Remaining text is flushed after `done`;
+already-spoken sentences are not repeated.
 
 Related short sentences received together are synthesized as one phrase so
 prosody carries across them. PCM is faded once at the bridge and followed by
 punctuation-aware pauses (short after commas, longer after questions). A cached
-local ack (`Yes, sir.`, `Of course.`, `Very good.`, …) can play after `filler.instant_ack_ms` if
-Arbiter has not started answering. A tool call speaks a matching cached ack
-after `filler.tool_ack_ms` (default 250 ms) when nothing has been said yet.
+local ack (`Of course.`, `Certainly.`, `All right.`, …) can play after
+`filler.instant_ack_ms` (default 1100 ms) if Arbiter has not started answering.
+A tool call speaks a matching cached ack
+after `filler.tool_ack_ms` (default 350 ms) when nothing has been said yet.
+If tool work remains silent for eight more seconds, the default single
+follow-up says `Still with you.`; `max_followups` can disable or extend this.
 
 ## `WS /v1/stream`
 
@@ -149,8 +152,13 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 | `{"type":"status","phase"}` | `thinking` while waiting on Arbiter (desk clients) |
 | `{"type":"working","tool"}` | Master tool started; value is the tool name |
 | `{"type":"said","text"}` | Sentence about to be spoken (same text Kokoro hears) |
-| `{"type":"forming","text"}` | Tail of the answer as tokens arrive (~12 Hz, desk presence) |
+| `{"type":"forming","text"}` | Unspoken answer prefix as tokens arrive (~12 Hz, desk presence) |
 | `{"type":"surface","turn_id","surface"}` | Versioned desk card for this turn. Voice-only devices ignore it. |
+
+Turn execution runs independently of the socket reader, so `cancel`, ping, and
+close frames remain responsive during STT, Arbiter work, and TTS. The turn is
+registered before one-shot STT begins; clients may cancel as soon as they
+receive `accept`.
 
 ### `surface` (desk cards)
 
@@ -312,9 +320,9 @@ are slightly warmer and more measured; tool-wait asides are quieter and briefer;
 warnings are firmer and leave a little more space. The adjustments are subtle
 speed, gain, and pause changes on top of the selected Kokoro voice.
 
-The default `kokoro.voice` is `af_nova:0.6+af_nicole:0.3+af_heart:0.1`
-(language `en-us` from `af_nova`). A single name such as `bm_lewis` is still
-valid. `left+right:weight` is still the two-way form (weight is the
+The default `kokoro.voice` is `bm_lewis` (language `en-gb`), matching Arthur's
+British persona. Other single names and weighted blends remain valid.
+`left+right:weight` is still the two-way form (weight is the
 fraction of the right voice). N-way mixes use `name:weight+name:weight`;
 omitted weights are equal, and raw ratios such as `3:1:1` are normalized to
 sum to 1. Language is taken from the heaviest component’s name prefix.

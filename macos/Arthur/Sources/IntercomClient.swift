@@ -99,6 +99,28 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
 
   func sendEnd() { sendJSON(["type": "end"]) }
   func sendCancel() { sendJSON(["type": "cancel"]) }
+  func sendCancel(
+    turnId: String,
+    host: String,
+    httpPort: Int,
+    token: String,
+    deviceId: String
+  ) {
+    sendCancel()
+    guard !turnId.isEmpty else { return }
+    var components = URLComponents()
+    components.scheme = "http"
+    components.host = host
+    components.port = httpPort
+    components.path = "/v1/turns/\(turnId)/cancel"
+    guard let url = components.url else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    request.setValue(deviceId, forHTTPHeaderField: "X-Device-Id")
+    request.timeoutInterval = 2
+    URLSession.shared.dataTask(with: request).resume()
+  }
   func sendText(_ text: String) { sendJSON(["type": "text", "text": text]) }
 
   private func send(_ message: URLSessionWebSocketTask.Message, failure: String) {

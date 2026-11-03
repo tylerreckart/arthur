@@ -106,6 +106,15 @@ std::optional<DeviceSession> TurnPipeline::session_for(const std::string& device
   return sessions_->get(device_id);
 }
 
+void TurnPipeline::prepare_turn(const std::string& turn_id) {
+  if (turn_id.empty()) return;
+  std::lock_guard<std::mutex> lk(turns_mu_);
+  if (turns_.find(turn_id) != turns_.end()) return;
+  auto handle = std::make_shared<TurnHandle>();
+  handle->turn_id = turn_id;
+  turns_.emplace(turn_id, std::move(handle));
+}
+
 void TurnPipeline::warm_prefix() {
   if (!config_.warm_prefix) return;
 
@@ -185,6 +194,12 @@ TurnResult TurnPipeline::run_utterance(const std::string& device_id,
                                        int channels,
                                        AudioSink& sink,
                                        std::string turn_id) {
+  if (turn_id.empty()) turn_id = make_turn_id();
+  // Register before one-shot STT so an accepted turn can be cancelled while
+  // Whisper is still transcribing it.
+  prepare_turn(turn_id);
+  auto handle = find_turn(turn_id);
+
   std::string err;
   const auto stt_t0 = std::chrono::steady_clock::now();
   const std::string transcript = stt_->transcribe(pcm, sample_rate, channels, &err);
@@ -192,11 +207,12 @@ TurnResult TurnPipeline::run_utterance(const std::string& device_id,
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - stt_t0)
           .count());
-  if (turn_id.empty()) turn_id = make_turn_id();
   if (transcript.empty()) {
     TurnResult result;
     result.turn_id = std::move(turn_id);
-    result.error = err.empty() ? "stt failed" : err;
+    result.error = handle->cancel.load() ? "canceled"
+                                         : (err.empty() ? "stt failed" : err);
+    unregister_turn(result.turn_id);
     std::cerr << "intercom latency turn=" << result.turn_id << " stt_ms=" << stt_ms
               << " error=" << result.error << std::endl;
     return result;
@@ -212,14 +228,14 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   TurnResult result;
   result.turn_id = turn_id.empty() ? make_turn_id() : std::move(turn_id);
   result.transcript = transcript;
-  if (!transcript.empty()) {
-    // Desk clients need the user line before Arbiter / TTS so voice turns
-    // cluster like typed ones. Whisper is still one-shot at `end`.
-    sink.event("heard", transcript);
+  // run_utterance registers before STT. Text-only transports arrive here
+  // directly and need their handle created now.
+  auto handle = find_turn(result.turn_id);
+  if (!handle) {
+    handle = std::make_shared<TurnHandle>();
+    handle->turn_id = result.turn_id;
+    register_turn(handle);
   }
-  auto handle = std::make_shared<TurnHandle>();
-  handle->turn_id = result.turn_id;
-  register_turn(handle);
 
   const auto turn_start = std::chrono::steady_clock::now();
   int ttfa_ms = -1;
@@ -257,10 +273,27 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     result.error = "canceled";
     return finish(result);
   }
+  if (!transcript.empty()) {
+    // Desk clients need the user line before Arbiter / TTS so voice turns
+    // cluster like typed ones. Whisper is still one-shot at `end`.
+    sink.event("heard", transcript);
+  }
 
   std::string err;
-  auto speak = [&](const std::string& text) -> bool {
-    const std::string spoken = to_speakable(text);
+  auto speak = [&](const std::string& text, bool continuation = false) -> bool {
+    // A latency flush is not a sentence boundary. Preserve continuation
+    // prosody instead of letting to_speakable() turn the fragment into a
+    // complete sentence with a full stop.
+    std::string delivery_text = text;
+    if (continuation) {
+      delivery_text = trim(delivery_text);
+      if (!delivery_text.empty() &&
+          delivery_text.back() != ',' && delivery_text.back() != ';' &&
+          delivery_text.back() != ':') {
+        delivery_text.push_back(',');
+      }
+    }
+    const std::string spoken = to_speakable(delivery_text);
     if (spoken.empty()) return true;
     sink.event("said", spoken);
     const auto t0 = std::chrono::steady_clock::now();
@@ -449,7 +482,9 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       if (non_space_count(raw) < 3) continue;
       if (first_sentence_ms < 0) first_sentence_ms = elapsed_now();
       pending_kind = "answer";
-      if (!speak(raw)) return false;
+      const bool complete_sentence =
+          !raw.empty() && (raw.back() == '.' || raw.back() == '!' || raw.back() == '?');
+      if (!speak(raw, !final_flush && !complete_sentence)) return false;
       if (first_answer_ms < 0) first_answer_ms = elapsed_now();
       arb_state.started_answer.store(true);
     }
@@ -536,12 +571,13 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       }
     }
 
-    if (!hold_llm_fillers && filler_enabled && !arb_state.saw_tool.load() && next_followup_at &&
+    if (!hold_llm_fillers && filler_enabled && next_followup_at &&
         followups_spoken < config_.filler.max_followups &&
         std::chrono::steady_clock::now() >= *next_followup_at) {
       next_followup_at.reset();
       if (!followup_future.valid()) {
         followup_future = std::async(std::launch::async, [&, transcript]() {
+          if (!filler_->enabled()) return FillerClient::progress_ack();
           std::string filler_err;
           return filler_->generate(transcript, FillerStage::FollowUp, spoken_filler,
                                   &handle->cancel, &filler_err);
@@ -554,7 +590,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       ++followups_spoken;
       const std::string followup = followup_future.get();
       followup_future = {};
-      if (!followup.empty() && followup != spoken_filler && !arb_state.saw_tool.load()) {
+      if (!followup.empty() && followup != spoken_filler) {
         if (!maybe_speak_filler(followup)) {
           result.error = err.empty() ? "tts failed" : err;
           handle->cancel.store(true);

@@ -81,6 +81,8 @@ class TurnPipeline {
                                 std::string turn_id = {},
                                 int stt_ms = -1);
 
+  // Make an accepted transport turn cancellable before its worker starts.
+  void prepare_turn(const std::string& turn_id);
   bool cancel_turn(const std::string& turn_id, std::string* err);
 
   std::optional<DeviceSession> session_for(const std::string& device_id) const;

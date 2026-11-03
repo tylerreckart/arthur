@@ -29,6 +29,8 @@ class FillerClient {
   static std::vector<std::string> cached_ack_phrases();
   // Cached tool-wait phrase chosen from the tool name.
   static std::string tool_ack(std::string_view tool);
+  // Conservative local cue for a genuinely long tool wait.
+  static std::string progress_ack();
 
   // Returns empty on failure, disabled, or cancel.
   std::string generate(const std::string& transcript,

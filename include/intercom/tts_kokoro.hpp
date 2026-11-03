@@ -44,6 +44,9 @@ class KokoroTts : public TtsProvider {
   int target_sample_rate_;
   std::string server_url_;
   std::unique_ptr<ManagedServer> child_;
+  // Delivery state is per utterance; keep it stable until that utterance has
+  // finished even when speak-back and an interactive turn overlap.
+  std::mutex synthesize_mu_;
   mutable std::mutex mu_;
   int pending_pause_ms_ = 200;
   double pending_speed_ = 0.96;

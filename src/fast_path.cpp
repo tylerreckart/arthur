@@ -5,9 +5,7 @@
 #include "intercom/util.hpp"
 
 #include <iostream>
-#include <random>
 #include <string_view>
-#include <vector>
 
 namespace intercom {
 namespace {
@@ -17,39 +15,6 @@ bool eq(std::string_view a, std::initializer_list<const char*> opts) {
     if (a == o) return true;
   }
   return false;
-}
-
-std::string pick(std::initializer_list<const char*> phrases) {
-  static thread_local std::mt19937 rng{std::random_device{}()};
-  static thread_local std::string last;
-  std::vector<const char*> opts(phrases);
-  if (opts.empty()) return {};
-  std::uniform_int_distribution<std::size_t> dist(0, opts.size() - 1);
-  std::size_t i = dist(rng);
-  if (opts.size() > 1 && opts[i] == last) i = (i + 1) % opts.size();
-  last = opts[i];
-  return last;
-}
-
-int local_hour() { return local_now().tm_hour; }
-
-std::string hello_by_hour() {
-  const int h = local_hour();
-  if (h < 5 || h >= 22) {
-    return pick({"Good evening, sir. What can I do for you?",
-                 "Evening, sir. How can I help?"});
-  }
-  if (h < 12) {
-    return pick({"Good morning, sir. What can I do for you?",
-                 "Morning, sir. How can I help?",
-                 "Good morning, sir. What's on your mind?"});
-  }
-  if (h < 17) {
-    return pick({"Good afternoon, sir. What can I do for you?",
-                 "Afternoon, sir. How can I help?"});
-  }
-  return pick({"Good evening, sir. What can I do for you?",
-               "Evening, sir. How can I help?"});
 }
 
 bool social_folded(std::string_view t) {
@@ -123,53 +88,12 @@ std::optional<FastPathResult> FastPath::try_handle(const std::string& transcript
     return FastPathResult{spoken_time_now(), "clock"};
   }
 
-  const std::string t = fold_phatic(transcript);
-  if (t.empty()) {
-    return FastPathResult{hello_by_hour(), "social"};
-  }
+  // Social turns belong to the same constitutional voice as the rest of the
+  // conversation. Hard-coded greetings and courtesies created a second,
+  // more scripted persona and were invisible to Arbiter's history.
+  if (is_social_turn(transcript)) return std::nullopt;
 
-  if (eq(t, {"good morning", "morning"})) {
-    return FastPathResult{pick({"Good morning, sir. What can I do for you?",
-                                "Morning, sir. How can I help?",
-                                "Good morning, sir. What's on your mind?"}),
-                          "social"};
-  }
-  if (eq(t, {"good afternoon", "afternoon"})) {
-    return FastPathResult{pick({"Good afternoon, sir. What can I do for you?",
-                                "Afternoon, sir. How can I help?"}),
-                          "social"};
-  }
-  if (eq(t, {"good evening", "evening"})) {
-    return FastPathResult{pick({"Good evening, sir. What can I do for you?",
-                                "Evening, sir. How can I help?"}),
-                          "social"};
-  }
-  if (eq(t, {"good night", "goodnight"})) {
-    return FastPathResult{pick({"Good night, sir.", "Sleep well, sir."}), "social"};
-  }
-  if (eq(t, {"goodbye", "bye", "see you", "farewell"})) {
-    return FastPathResult{pick({"Goodbye, sir.", "Until later, sir."}), "social"};
-  }
-  if (eq(t, {"hello", "hi", "hey", "ping", "hello there", "hi there", "hey there"})) {
-    return FastPathResult{hello_by_hour(), "social"};
-  }
-  if (eq(t, {"how are you", "how are you doing", "hows it going", "how is it going",
-             "you alright", "you all right"})) {
-    return FastPathResult{pick({"Very well, sir, thank you. What can I do for you?",
-                                "I'm well, sir. How can I help?",
-                                "All good, sir. What do you need?"}),
-                          "social"};
-  }
-  if (eq(t, {"thanks", "thank you", "cheers", "ta"})) {
-    return FastPathResult{pick({"You're welcome, sir. Anything else?",
-                                "Glad to, sir. What else can I do?"}),
-                          "social"};
-  }
-  if (eq(t, {"status", "are you there", "you there", "you around"})) {
-    return FastPathResult{pick({"Right here, sir. What do you need?",
-                                "I'm here, sir. How can I help?"}),
-                          "social"};
-  }
+  const std::string t = fold_phatic(transcript);
 
   if (auto intent = parse_home_intent(transcript)) {
     if (intent->kind == HomeIntentKind::Timer && intent->timer_seconds <= 0) {
