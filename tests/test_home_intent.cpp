@@ -43,6 +43,9 @@ int main() {
     CHECK(bare->kind == intercom::HomeIntentKind::Timer);
     CHECK(bare->timer_seconds == 0);
   }
+  CHECK(intercom::parse_duration_seconds("five minutes") == 300);
+  CHECK(intercom::parse_duration_seconds("half an hour") == 1800);
+  CHECK(intercom::parse_duration_seconds("sometime later") == 0);
 
   auto kitchen = intercom::parse_home_intent("turn on the kitchen lights");
   CHECK(kitchen.has_value());

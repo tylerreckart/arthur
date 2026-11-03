@@ -201,6 +201,9 @@ void run_http_server(ServerDeps deps) {
                 {"device_id", session->device_id},
                 {"conversation_id", session->conversation_id},
                 {"last_turn_id", session->last_turn_id},
+                {"last_spoken", session->last_spoken},
+                {"pending_intent", session->pending_intent},
+                {"pending_at", session->pending_at},
                 {"updated_at", session->updated_at},
             };
             res.set_content(j.dump(2), "application/json");

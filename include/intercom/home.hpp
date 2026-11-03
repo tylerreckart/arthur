@@ -45,6 +45,10 @@ const char* home_intent_kind_name(HomeIntentKind kind);
 // Keyword router for hallway commands. Does not call Home Assistant.
 std::optional<HomeIntent> parse_home_intent(std::string_view transcript);
 
+// Parse a standalone duration such as "five minutes" or "half an hour".
+// Returns zero when no complete duration is present.
+int parse_duration_seconds(std::string_view transcript);
+
 // Place after "in" / "for" / "at" on a weather utterance. Empty when the
 // tail is a time-of-day or unit, not a city ("in the morning").
 std::string extract_weather_place(std::string_view transcript);

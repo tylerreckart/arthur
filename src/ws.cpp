@@ -492,6 +492,11 @@ void WsServer::handle_client(int fd) {
   std::vector<std::uint8_t> pcm;
   std::string active_turn;
   std::future<TurnResult> turn_future;
+  struct RetiredTurn {
+    std::string turn_id;
+    std::future<TurnResult> future;
+  };
+  std::vector<RetiredTurn> retired_turns;
   bool ptt_busy = false;
   auto set_busy = [&](bool busy) {
     if (!hub) return;
@@ -502,12 +507,7 @@ void WsServer::handle_client(int fd) {
   auto last_rx = clock::now();
   auto ping_sent = clock::time_point{};
   bool awaiting_pong = false;
-  auto finish_turn_if_ready = [&]() {
-    if (!turn_future.valid() ||
-        turn_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
-      return;
-    }
-    TurnResult result = turn_future.get();
+  auto emit_turn_result = [&](const TurnResult& result) {
     send_text({{"type", "turn"},
                {"turn_id", result.turn_id},
                {"transcript", result.transcript},
@@ -518,6 +518,22 @@ void WsServer::handle_client(int fd) {
                {"ok", result.ok},
                {"error", result.error},
                {"turn_id", result.turn_id}});
+  };
+  auto finish_turn_if_ready = [&]() {
+    for (auto it = retired_turns.begin(); it != retired_turns.end();) {
+      if (it->future.wait_for(std::chrono::milliseconds(0)) ==
+          std::future_status::ready) {
+        emit_turn_result(it->future.get());
+        it = retired_turns.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    if (!turn_future.valid() ||
+        turn_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+      return;
+    }
+    emit_turn_result(turn_future.get());
     active_turn.clear();
     // A barge-in may already be streaming the next PTT while the cancelled
     // turn unwinds. Keep the device busy until that recording is submitted.
@@ -574,6 +590,7 @@ void WsServer::handle_client(int fd) {
           deps_.pipeline->cancel_turn(active_turn, &err);
         }
         if (turn_future.valid()) turn_future.wait();
+        for (auto& retired : retired_turns) retired.future.wait();
         return;
       }
       if (frame->opcode == WsOpcode::Ping) {
@@ -604,18 +621,32 @@ void WsServer::handle_client(int fd) {
         continue;
       }
       if (type == "end" || type == "text") {
-        if (turn_future.valid() || !active_turn.empty()) {
-          send_text({{"type", "error"}, {"error", "turn already active"}});
+        const std::string text =
+            type == "text" ? j.value("text", "") : std::string();
+        if (type == "text" && text.empty()) {
+          send_text({{"type", "error"}, {"error", "missing text"}});
           continue;
+        }
+        if (type == "end" && pcm.empty()) {
+          send_text({{"type", "error"}, {"error", "empty pcm"}});
+          continue;
+        }
+        // A new utterance is an implicit barge-in. Retire the cancelled worker
+        // without blocking the socket reader; its terminal event keeps its own
+        // turn_id and may arrive after the new accept.
+        if (turn_future.valid() || !active_turn.empty()) {
+          if (!active_turn.empty()) {
+            std::string cancel_err;
+            deps_.pipeline->cancel_turn(active_turn, &cancel_err);
+          }
+          if (turn_future.valid()) {
+            retired_turns.push_back(
+                RetiredTurn{active_turn, std::move(turn_future)});
+          }
+          active_turn.clear();
         }
         set_busy(true);
         if (type == "text") {
-          const std::string text = j.value("text", "");
-          if (text.empty()) {
-            send_text({{"type", "error"}, {"error", "missing text"}});
-            set_busy(false);
-            continue;
-          }
           const std::string turn_id = make_turn_id();
           active_turn = turn_id;
           deps_.pipeline->prepare_turn(turn_id);
@@ -627,11 +658,6 @@ void WsServer::handle_client(int fd) {
                     device_id, text, sink, turn_id, -1);
               });
         } else {
-          if (pcm.empty()) {
-            send_text({{"type", "error"}, {"error", "empty pcm"}});
-            set_busy(false);
-            continue;
-          }
           active_turn = make_turn_id();
           deps_.pipeline->prepare_turn(active_turn);
           send_text({{"type", "accept"}, {"turn_id", active_turn}});
@@ -657,6 +683,7 @@ void WsServer::handle_client(int fd) {
     deps_.pipeline->cancel_turn(active_turn, &err);
   }
   if (turn_future.valid()) turn_future.wait();
+  for (auto& retired : retired_turns) retired.future.wait();
 }
 
 }  // namespace intercom

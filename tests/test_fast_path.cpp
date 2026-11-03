@@ -68,11 +68,7 @@ int main() {
   }
 
   auto how_long = on.try_handle("set a timer");
-  CHECK(how_long.has_value());
-  if (how_long) {
-    CHECK(how_long->reply == "How long, sir?");
-    CHECK(how_long->kind == "timer");
-  }
+  CHECK(!how_long.has_value());
   CHECK(!on.try_handle("set a timer for 5 minutes").has_value());
   CHECK(!on.try_handle("turn on the kitchen lights").has_value());
 
@@ -129,7 +125,15 @@ int main() {
     }
   };
 
-  intercom::FastPath ha(true, intercom::HomeConfig{}, std::make_shared<FakeHome>());
+  intercom::HomeConfig home_cfg;
+  home_cfg.timer_entity = "timer.kitchen";
+  intercom::FastPath ha(true, home_cfg, std::make_shared<FakeHome>());
+  auto bare_timer = ha.try_handle("set a timer");
+  CHECK(bare_timer.has_value());
+  if (bare_timer) {
+    CHECK(bare_timer->reply == "How long, sir?");
+    CHECK(bare_timer->kind == "timer");
+  }
   auto timed = ha.try_handle("set a timer for 5 minutes");
   CHECK(timed.has_value());
   if (timed) {

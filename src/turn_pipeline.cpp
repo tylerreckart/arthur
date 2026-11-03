@@ -63,6 +63,12 @@ std::size_t early_flush_words(const Config& config) {
              : 0;
 }
 
+bool is_repeat_request(std::string_view transcript) {
+  const std::string t = fold_phatic(transcript);
+  return t == "repeat that" || t == "say that again" ||
+         t == "could you repeat that" || t == "what did you say";
+}
+
 }  // namespace
 
 TurnPipeline::TurnPipeline(Config config,
@@ -279,6 +285,22 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     sink.event("heard", transcript);
   }
 
+  std::string routing_transcript = result.transcript;
+  const auto prior_session = sessions_->get(device_id);
+  if (prior_session && !prior_session->last_spoken.empty() &&
+      is_repeat_request(result.transcript)) {
+    routing_transcript = "echo " + prior_session->last_spoken;
+  } else if (prior_session &&
+      prior_session->pending_intent == "timer_duration" &&
+      prior_session->pending_at > 0 &&
+      now_unix() - prior_session->pending_at <= 120 &&
+      !parse_home_intent(result.transcript).has_value()) {
+    const int seconds = parse_duration_seconds(result.transcript);
+    if (seconds > 0) {
+      routing_transcript = "set a timer for " + spoken_duration(seconds);
+    }
+  }
+
   std::string err;
   auto speak = [&](const std::string& text, bool continuation = false) -> bool {
     // A latency flush is not a sentence boundary. Preserve continuation
@@ -316,7 +338,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     return ok;
   };
 
-  if (auto fp = fast_path_.try_handle(result.transcript)) {
+  if (auto fp = fast_path_.try_handle(routing_transcript)) {
     result.used_fast_path = true;
     result.fast_path_kind = fp->kind;
     path_name = "fast";
@@ -331,12 +353,27 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     if (fp->surface.is_object()) {
       sink.event("surface", surface_event_body(result.turn_id, fp->surface).dump());
     }
+    if (result.conversation_id <= 0) {
+      std::string conv_err;
+      result.conversation_id = ensure_conversation(device_id, &conv_err);
+      if (result.conversation_id <= 0) {
+        std::cerr << "intercom fast-path conversation: "
+                  << (conv_err.empty() ? "create failed" : conv_err) << std::endl;
+      }
+    }
     result.ok = true;
     if (result.conversation_id > 0) {
       DeviceSession s;
       s.device_id = device_id;
       s.conversation_id = result.conversation_id;
       s.last_turn_id = result.turn_id;
+      s.last_spoken = fp->reply;
+      if (auto intent = parse_home_intent(routing_transcript);
+          intent && intent->kind == HomeIntentKind::Timer &&
+          intent->timer_seconds <= 0) {
+        s.pending_intent = "timer_duration";
+        s.pending_at = now_unix();
+      }
       s.updated_at = now_unix();
       sessions_->upsert(s, &err);
     }
@@ -454,7 +491,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   auto arbiter_future = std::async(std::launch::async, [&]() {
     std::string stream_err;
     const bool streamed = arbiter_->send_message(
-        conv, result.transcript, result.turn_id, cbs, &handle->cancel, &stream_err);
+        conv, routing_transcript, result.turn_id, cbs, &handle->cancel, &stream_err);
     arb_state.streamed = streamed;
     arb_state.stream_err = std::move(stream_err);
     arb_state.done.store(true);
@@ -629,6 +666,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   s.device_id = device_id;
   s.conversation_id = conv;
   s.last_turn_id = result.turn_id;
+  s.last_spoken = arb_state.full_content;
   s.updated_at = now_unix();
   sessions_->upsert(s, &err);
 
