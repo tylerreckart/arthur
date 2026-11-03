@@ -130,6 +130,7 @@ add_executable(test_speech_dsp
 target_include_directories(test_speech_dsp PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+target_link_libraries(test_speech_dsp PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME test_speech_dsp COMMAND test_speech_dsp)
 
 add_executable(test_fast_path
@@ -246,6 +247,7 @@ add_test(NAME test_sentence_tts COMMAND test_sentence_tts)
 add_executable(test_ws_stream
   tests/test_ws_stream.cpp
   src/ws.cpp
+  src/audio_dsp.cpp
   src/config.cpp
   src/turn_pipeline.cpp
   src/speakable.cpp
@@ -292,6 +294,7 @@ add_executable(test_speakback
   src/speakable.cpp
   src/clock.cpp
   src/ws.cpp
+  src/audio_dsp.cpp
   src/config.cpp
   src/turn_pipeline.cpp
   src/fast_path.cpp

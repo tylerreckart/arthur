@@ -99,6 +99,49 @@ int main() {
   CHECK(intercom::delivery_gain_db(intercom::SpeechDelivery::Subdued) < 0.0);
   CHECK(intercom::delivery_gain_db(intercom::SpeechDelivery::Firm) > 0.0);
 
+  constexpr int kRate = 24000;
+  auto burst = [](int ms, int amplitude) {
+    const std::size_t n = static_cast<std::size_t>(kRate) * static_cast<std::size_t>(ms) / 1000;
+    return pcm(n, [amplitude](std::size_t i) {
+      if (amplitude == 0) return static_cast<std::int16_t>(0);
+      return static_cast<std::int16_t>(
+          std::sin(2.0 * 3.14159265358979323846 * static_cast<double>(i) / 48.0) *
+          amplitude);
+    });
+  };
+
+  intercom::UtteranceEndpoint silence;
+  CHECK(silence.push(burst(1000, 0)) == intercom::UtteranceEndpointEvent::None);
+  CHECK(!silence.speech_confirmed());
+
+  intercom::UtteranceEndpoint blip;
+  const auto blip_pcm = burst(200, 9000);
+  const auto blip_gap = burst(1000, 0);
+  CHECK(blip.push(blip_pcm) == intercom::UtteranceEndpointEvent::None);
+  CHECK(blip.push(blip_gap) == intercom::UtteranceEndpointEvent::None);
+  CHECK(!blip.speech_confirmed());
+
+  intercom::UtteranceEndpoint spoken;
+  CHECK(spoken.push(burst(400, 9000)) == intercom::UtteranceEndpointEvent::None);
+  CHECK(spoken.speech_confirmed());
+  CHECK(spoken.take_speech_onset());
+  CHECK(!spoken.take_speech_onset());
+  CHECK(spoken.push(burst(800, 0)) == intercom::UtteranceEndpointEvent::Completed);
+
+  intercom::UtteranceEndpoint capped;
+  const auto long_speech = burst(30100, 9000);
+  bool capped_done = false;
+  for (std::size_t offset = 0; offset < long_speech.size(); offset += 960) {
+    const std::size_t n = std::min<std::size_t>(960, long_speech.size() - offset);
+    if (capped.push(long_speech.data() + offset, n) ==
+        intercom::UtteranceEndpointEvent::Completed) {
+      capped_done = true;
+      break;
+    }
+  }
+  CHECK(capped_done);
+  CHECK(capped.speech_confirmed());
+
   if (g_fails != 0) {
     std::cerr << g_fails << " failure(s)\n";
     return 1;

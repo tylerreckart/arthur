@@ -179,8 +179,8 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 
 | Client | Meaning |
 |--------|---------|
-| binary frames | PCM s16le appended while PTT is held |
-| `{"type":"end"}` | Run STT on the buffered PCM and speak the reply |
+| binary frames | PCM s16le appended while the mic is open |
+| `{"type":"end"}` | Run STT on any PCM not already finished, and speak the reply |
 | `{"type":"text","text":"…"}` | Skip STT |
 | `{"type":"cancel"}` | Cancel the current turn if one is active |
 
@@ -353,7 +353,16 @@ there is no durable disk queue.
 STT is still one-shot at `end` (Whisper is not streaming — there are no
 word-level partials while the mic is down). After Whisper, Intercom emits
 `heard` so a desk transcript can show the user line before Arthur answers.
-The gain of the socket is sending mic bytes while the button is down instead
+While PCM is arriving, Intercom runs a small energy detector on the 24 kHz
+mono stream. Speech starts the utterance. About 700 ms of trailing silence
+ends it, bursts under 300 ms are ignored, and an utterance is capped around
+30 seconds. The completed audio starts the turn immediately — the client does
+not have to send `end` first. A later `end` for that same audio is ignored, so
+it cannot run twice. `end` is still the way a hold-to-talk client finishes a
+clip that has no trailing silence. Speech that arrives during playback cancels
+the active turn and becomes the next utterance.
+
+The gain of the socket is sending mic bytes while the mic is open instead
 of waiting for HTTP to open. The Nano ESP32 firmware does this by default
 (`INTERCOM_WS_PORT`, `0` disables).
 

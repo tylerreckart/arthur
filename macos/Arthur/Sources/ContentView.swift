@@ -370,12 +370,12 @@ struct ContentView: View {
     case .connecting:
       return "Reaching intercom…"
     case .listening:
-      return "Release to send"
+      return model.handsFree ? "Pause when you're done" : "Release to send"
     default:
       if model.quietTextMode {
         return "Type below — Space won’t talk"
       }
-      return "Hold Talk or \(model.pttHotkey.display), or type below"
+      return "Tap Talk or \(model.pttHotkey.display), or hold to talk"
     }
   }
 
@@ -383,7 +383,7 @@ struct ContentView: View {
     if model.quietTextMode {
       return "Quiet text on · \(model.pttHotkey.display) still talks · ⌘L to type"
     }
-    return "Hold Talk or \(model.pttHotkey.display) to speak · ⌘L to type"
+    return "Tap Talk or \(model.pttHotkey.display) to speak · hold to talk · ⌘L to type"
   }
 
   @ViewBuilder
@@ -647,9 +647,13 @@ private struct ComposerBar: View {
         active: model.holding || model.phase == .speaking,
         action: {}
       )
-      .help(model.holding ? "Release to send" : "Hold to talk · \(model.pttHotkey.display) also talks")
-      .accessibilityLabel(model.holding ? "Release" : "Talk")
-      .accessibilityHint("Hold to talk. \(model.pttHotkey.display) also starts push-to-talk.")
+      .help(model.handsFree
+        ? "Pause when you're done"
+        : (model.holding
+          ? "Release to send"
+          : "Tap to talk · hold to talk · \(model.pttHotkey.display)"))
+      .accessibilityLabel(model.handsFree ? "Listening" : (model.holding ? "Release" : "Talk"))
+      .accessibilityHint("Tap to talk hands-free, or hold to talk. \(model.pttHotkey.display) does the same.")
       .simultaneousGesture(
         DragGesture(minimumDistance: 0)
           .onChanged { _ in
@@ -675,7 +679,7 @@ private struct ComposerBar: View {
         Text("Listening")
           .font(.body.weight(.medium))
           .foregroundStyle(ArthurTheme.accent)
-        Text("Release to send")
+        Text(model.handsFree ? "Pause when you're done" : "Release to send")
           .font(.caption)
           .foregroundStyle(.secondary)
       }
@@ -683,7 +687,7 @@ private struct ComposerBar: View {
     }
     .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
     .accessibilityElement(children: .combine)
-    .accessibilityLabel("Listening, release to send")
+    .accessibilityLabel(model.handsFree ? "Listening" : "Listening, release to send")
   }
 }
 

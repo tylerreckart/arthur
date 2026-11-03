@@ -19,26 +19,40 @@ Content-Type: `audio/L16; rate=24000; channels=1`
 4. Same device keeps memory/history across boots of the MCU.
 5. On Intercom start, `warm_prefix` (default on) creates those conversations if needed and sends `PREFIX WARM` so the LLM KV cache is hot before the first PTT.
 
-## Push-to-talk flow
+## Push-to-talk and hands-free
 
 Firmware (`firmware/nano-esp32/intercom-endpoint`, tag `intercom-lan-v8`) streams
-while the button is down:
+24 kHz mono s16le. Holding the button still streams until release. A short
+press toggles hands-free listening: trailing silence, a second press, or the
+server endpoint finishes the utterance.
 
 1. On boot (and after drops), open `ws://<host>:8093/v1/stream` with the device
    bearer and `X-Device-Id`. Keep the socket; ping every 20s while idle, and
    drain inbound frames so scheduled speak-back can play without another PTT.
-2. User holds PTT → I2S capture into PSRAM **and** binary WS frames every
-   ~1024 samples (~43 ms at 24 kHz).
-3. On release, send `{"type":"end"}`. Intercom replies `{"type":"accept","turn_id"}`
-   immediately, then Whisper on the buffered clip, then `{"type":"heard","text"}`
-   with the transcript, then reply PCM as binary frames, then `turn` / `done`.
-4. Play binary frames to the I2S amp as they arrive.
-5. On barge-in: stop I2S, `{"type":"cancel"}` on the socket, and
-   `POST /v1/turns/{turn_id}/cancel`. Start the next PTT immediately; its
+2. User holds PTT past about 350 ms → I2S capture into PSRAM **and** binary WS
+   frames every ~1024 samples (~43 ms at 24 kHz). On release, send
+   `{"type":"end"}`.
+3. A shorter press stays in capture after the button comes up. About 700 ms of
+   trailing silence, a second press, or an inbound `accept` (the server already
+   heard the end of speech) finishes the clip. Silence and a second press send
+   `end`. A server `accept` does not send another `end`, so the same audio is
+   not run twice. Hands-free capture is capped around 30 s and needs the PSRAM
+   buffer.
+4. Intercom replies `{"type":"accept","turn_id"}` when the turn starts, then
+   Whisper on the buffered clip, then `{"type":"heard","text"}` with the
+   transcript, then reply PCM as binary frames, then `turn` / `done`.
+5. Play binary frames to the I2S amp as they arrive.
+6. On barge-in: stop I2S, `{"type":"cancel"}` on the socket, and
+   `POST /v1/turns/{turn_id}/cancel`. Start the next capture immediately; its
    `end` preempts any cancelled worker that is still unwinding, and receives a
-   new `turn_id`.
-6. If the WS handshake or a mid-hold send fails, fall back to
+   new `turn_id`. Inbound speech during playback also cancels the active turn
+   on the server.
+7. If the WS handshake or a mid-capture send fails, fall back to
    `POST /v1/utterance` with the full clip (same as before).
+
+The Mac app uses the same split. Tap Talk, or tap the shortcut, and Arthur
+listens until he hears trailing silence or the server accepts the utterance.
+Hold Talk, or hold the shortcut, and release still sends.
 
 Set `INTERCOM_WS_PORT` to `0` in `config.h` to force HTTP only. Serial `say` /
 `ping` stay on HTTP. Serial `ws` prints the socket state and reconnects.
@@ -74,10 +88,15 @@ ffplay -f s16le -ar 24000 -ac 1 reply.pcm
 `INTERCOM_WS_PORT` on the MCU (default `8093`, `0` disables the client).
 
 1. Upgrade with the same device bearer and `X-Device-Id` as HTTP.
-2. While PTT is held, send binary frames of mono s16le PCM (24 kHz).
-3. On release, send `{"type":"end"}`. Intercom ACKs with `accept` + `turn_id`,
-   runs Whisper on the buffered audio, emits `heard` with the transcript, and
-   streams reply PCM back as binary frames.
+2. While the mic is open, send binary frames of mono s16le PCM (24 kHz).
+   Hold-to-talk keeps the mic open until release. Hands-free keeps it open
+   until trailing silence or the server endpoint.
+3. On a hold release, or when local trailing silence ends a hands-free clip,
+   send `{"type":"end"}`. Intercom may already have started the turn when it
+   heard about 700 ms of silence; that later `end` does not run the audio
+   again. Intercom ACKs with `accept` + `turn_id`, runs Whisper on the
+   buffered audio, emits `heard` with the transcript, and streams reply PCM
+   back as binary frames.
 4. `{"type":"text","text":"status"}` skips STT (same as `/v1/utterance/text`).
 5. HTTP PTT on `:8090` remains the fallback and the serial `say` path.
 

@@ -26,8 +26,10 @@ struct HttpHeaders {
 
 // Thin PCM endpoint for Intercom (docs/device.md):
 // hold PTT -> stream 24 kHz s16le on ws://host:8093/v1/stream while held ->
-// play binary reply frames. Idle sockets also drain unsolicited speak-back
-// (scheduled reminders). HTTP POST /v1/utterance is the fallback.
+// play binary reply frames. A short press toggles hands-free listening and
+// ends on trailing silence or the server endpoint. Idle sockets also drain
+// unsolicited speak-back (scheduled reminders). HTTP POST /v1/utterance is
+// the fallback.
 // Serial (idle): tone | health | ping | ws
 
 #define I2S_PORT I2S_NUM_0
@@ -42,6 +44,9 @@ static String gDeviceId;
 static int16_t *gPcm = nullptr;
 static size_t gMaxSamples = 0;
 static String gTurnId;
+static bool gServerEndedCapture = false;
+static IntercomWs::Kind gStashKind = IntercomWs::Kind::Timeout;
+static size_t gStashPlen = 0;
 static IntercomWs gWs;
 static uint32_t gWsPingMs = 0;
 
@@ -131,7 +136,7 @@ static void dieBlink() {
 }
 
 static bool allocCapture() {
-  gMaxSamples = (size_t)SAMPLE_RATE * (MAX_RECORD_MS / 1000);
+  gMaxSamples = (size_t)SAMPLE_RATE * (HANDSFREE_MAX_MS / 1000);
   const size_t bytes = gMaxSamples * sizeof(int16_t);
   gPcm = (int16_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!gPcm) {
@@ -547,9 +552,60 @@ static void flushRecordStream(RecordStream *stream, size_t samples) {
   stream->sent = samples;
 }
 
+static bool pollCaptureEndpoint() {
+  if (!gWs.connected() || !gWs.readable()) return false;
+  size_t plen = 0;
+  const IntercomWs::Kind k = gWs.recvHeader(&plen, 1);
+  if (k == IntercomWs::Kind::Timeout) return false;
+  if (k == IntercomWs::Kind::Ping) {
+    uint8_t buf[64];
+    const size_t n = min(plen, sizeof(buf));
+    if (n && !gWs.recvPayload(buf, n, HTTP_TIMEOUT_MS)) return false;
+    gWs.discardPayload(HTTP_TIMEOUT_MS);
+    gWs.sendPong(buf, n);
+    return false;
+  }
+  if (k == IntercomWs::Kind::Pong) {
+    gWs.discardPayload(HTTP_TIMEOUT_MS);
+    return false;
+  }
+  if (k == IntercomWs::Kind::Error || k == IntercomWs::Kind::Close) {
+    gWs.close();
+    return false;
+  }
+  if (k == IntercomWs::Kind::Binary) {
+    gStashKind = k;
+    gStashPlen = plen;
+    gServerEndedCapture = true;
+    return true;
+  }
+  if (k != IntercomWs::Kind::Text) {
+    gWs.discardPayload(HTTP_TIMEOUT_MS);
+    return false;
+  }
+  char text[768];
+  const size_t n = min(plen, sizeof(text) - 1);
+  if (n && !gWs.recvPayload(reinterpret_cast<uint8_t *>(text), n, HTTP_TIMEOUT_MS)) {
+    return false;
+  }
+  text[n] = 0;
+  gWs.discardPayload(HTTP_TIMEOUT_MS);
+  const String type = jsonField(text, "type");
+  if (type == "accept") {
+    const String id = jsonField(text, "turn_id");
+    if (id.length()) gTurnId = id;
+    Serial.printf("ws: endpoint turn=%s\n", gTurnId.c_str());
+    gStashKind = IntercomWs::Kind::Timeout;
+    gStashPlen = 0;
+    gServerEndedCapture = true;
+    return true;
+  }
+  return false;
+}
+
 static size_t recordPtt(RecordStream *stream) {
-  Serial.println(stream ? "ptt: streaming (hold, then release)"
-                        : "ptt: recording (hold, then release)");
+  Serial.println(stream ? "ptt: streaming"
+                        : "ptt: recording");
   ampMute(true);
   digitalWrite(LED_BUILTIN, HIGH);
   if (!startMic()) {
@@ -571,11 +627,71 @@ static size_t recordPtt(RecordStream *stream) {
   int rawWords = 0;
   uint32_t peakRaw = 0;
   bool dumped = false;
+  enum class ListenMode { Undecided, Hold, HandsFree };
+  ListenMode mode = ListenMode::Undecided;
+  bool released = false;
+  uint32_t handsFreeSince = 0;
+  uint32_t speechMs = 0;
+  uint32_t silenceMs = 0;
+  bool speechOk = false;
+  uint64_t winAcc = 0;
+  int winN = 0;
+  gServerEndedCapture = false;
+  gStashKind = IntercomWs::Kind::Timeout;
+  gStashPlen = 0;
+
+  auto noteEnergy = [&](int16_t sample) {
+    winAcc += (int32_t)sample * (int32_t)sample;
+    winN++;
+    if (winN < SAMPLE_RATE / 50) return;
+    const uint64_t mean = winAcc / (uint64_t)winN;
+    const bool hot = mean >= 430000ULL;
+    if (hot) {
+      speechMs += 20;
+      silenceMs = 0;
+      if (speechMs >= ENDPOINT_MIN_SPEECH_MS) speechOk = true;
+    } else if (speechMs > 0) {
+      silenceMs += 20;
+      if (!speechOk && silenceMs >= ENDPOINT_MIN_SPEECH_MS) {
+        speechMs = 0;
+        silenceMs = 0;
+      }
+    }
+    winAcc = 0;
+    winN = 0;
+  };
 
   while (samples < gMaxSamples) {
     const uint32_t elapsed = millis() - t0;
-    if (elapsed >= MIN_RECORD_MS && !pttHeld()) break;
-    if (elapsed >= MAX_RECORD_MS) break;
+    const bool held = pttHeld();
+    if (mode == ListenMode::Undecided) {
+      if (!held) {
+        mode = ListenMode::HandsFree;
+        released = true;
+        handsFreeSince = millis();
+        Serial.println("ptt: hands-free");
+      } else if (elapsed >= HANDSFREE_TAP_MS) {
+        mode = ListenMode::Hold;
+      }
+    } else if (mode == ListenMode::Hold) {
+      if (elapsed >= MIN_RECORD_MS && !held) break;
+      if (elapsed >= MAX_RECORD_MS) break;
+    } else {
+      if (!held) released = true;
+      if (released && held && millis() - handsFreeSince > 200) {
+        Serial.println("ptt: hands-free stop");
+        break;
+      }
+      if (speechOk && silenceMs >= ENDPOINT_SILENCE_MS) {
+        Serial.println("ptt: trailing silence");
+        break;
+      }
+      if (elapsed >= HANDSFREE_MAX_MS) break;
+      if (stream && stream->ok && pollCaptureEndpoint()) {
+        Serial.println("ptt: server endpoint");
+        break;
+      }
+    }
 
     size_t bytesRead = 0;
     if (i2s_read(I2S_PORT, raw, sizeof(raw), &bytesRead, pdMS_TO_TICKS(50)) !=
@@ -590,13 +706,18 @@ static size_t recordPtt(RecordStream *stream) {
                     (unsigned)raw[1], (unsigned)raw[2], (unsigned)raw[3]);
       dumped = true;
     }
+    const size_t voicedFrom = samples;
     samples = appendMicI2s(raw, bytesRead, samples, &acc, &zeroRaw, &rawWords,
                            &peakRaw);
+    if (mode != ListenMode::Hold) {
+      for (size_t i = voicedFrom; i < samples; ++i) noteEnergy(gPcm[i]);
+    }
+    if (gServerEndedCapture) break;
     if (stream && stream->ok && samples - stream->sent >= WS_STREAM_SAMPLES) {
       flushRecordStream(stream, samples);
     }
   }
-  flushRecordStream(stream, samples);
+  if (!gServerEndedCapture) flushRecordStream(stream, samples);
 
   uint32_t outFlips = 0;
 #if MIC_PTT_PIN_DEBUG
@@ -1268,6 +1389,9 @@ static PlayResult captureAndSend() {
   stream.send = wsSendPcm;
   const bool live = wsEnsure();
   const size_t n = recordPtt(live ? &stream : nullptr);
+  if (gServerEndedCapture && live) {
+    return playWsLoop(gStashKind, gStashPlen);
+  }
   if (n < (SAMPLE_RATE / 10)) {
     Serial.printf("too short (%u samples) — hold PTT ~1s and speak\n",
                   (unsigned)n);
@@ -1650,8 +1774,8 @@ void loop() {
     delay(10);
     return;
   }
-  delay(30);
-  if (!pttHeld()) return;
+  delay(20);
+  // A tap may already be up. recordPtt treats that as hands-free.
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("no wifi — fix credentials or use serial: tone");
