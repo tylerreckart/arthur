@@ -1008,6 +1008,190 @@ int main() {
     std::filesystem::remove(db_other);
   }
 
+  {
+    auto tts_brief = std::make_shared<RecordingTts>();
+    auto arbiter_brief = std::make_shared<StreamingArbiter>(tts_brief);
+    auto stt_brief = std::make_shared<DummyStt>();
+    const auto db_brief =
+        std::filesystem::temp_directory_path() / "intercom_briefing_fail.db";
+    std::filesystem::remove(db_brief);
+    auto sessions_brief =
+        std::make_shared<intercom::SessionStore>(db_brief.string());
+    CHECK(sessions_brief->open(&err));
+    intercom::Config cfg_brief;
+    cfg_brief.fast_path = true;
+    cfg_brief.filler.enabled = false;
+    cfg_brief.news.google_news_rss = "http://127.0.0.1:9/rss";
+    cfg_brief.news.timeout_ms = 400;
+    cfg_brief.markets.quote_base = "http://127.0.0.1:9";
+    cfg_brief.markets.timeout_ms = 400;
+    cfg_brief.weather.geocode_base = "http://127.0.0.1:9";
+    cfg_brief.weather.forecast_base = "http://127.0.0.1:9";
+    cfg_brief.weather.timeout_ms = 400;
+    cfg_brief.weather.default_place = "London";
+    intercom::TurnPipeline pipe_brief(
+        cfg_brief, stt_brief, tts_brief, arbiter_brief, sessions_brief, nullptr);
+    CollectingSink sink_brief;
+
+    auto expect_local_brief = [&](const std::string& device, const std::string& phrase) {
+      const auto before = tts_brief->snapshot().size();
+      const auto turn = pipe_brief.run_text_utterance(device, phrase, sink_brief);
+      CHECK(turn.ok);
+      CHECK(turn.used_fast_path);
+      CHECK(turn.fast_path_kind == "briefing");
+      const auto said = tts_brief->snapshot();
+      CHECK(said.size() >= before + 4);
+      bool clock = false;
+      bool weather_gap = false;
+      bool news_gap = false;
+      bool market_gap = false;
+      for (std::size_t i = before; i < said.size(); ++i) {
+        if (said[i].find("It's ") == 0) clock = true;
+        if (said[i].find("No weather") != std::string::npos) weather_gap = true;
+        if (said[i].find("No headlines") != std::string::npos) news_gap = true;
+        if (said[i].find("No market") != std::string::npos) market_gap = true;
+      }
+      CHECK(clock);
+      CHECK(weather_gap);
+      CHECK(news_gap);
+      CHECK(market_gap);
+      const auto saved = sessions_brief->get(device);
+      CHECK(saved.has_value());
+      if (saved) {
+        CHECK(saved->last_fast_path_kind == "briefing");
+        CHECK(saved->last_spoken.find("It's ") != std::string::npos);
+      }
+    };
+    expect_local_brief("dev-brief", "brief me");
+    expect_local_brief("dev-morning", "morning briefing");
+    expect_local_brief("dev-whats", "what's the briefing");
+    CHECK(arbiter_brief->last_message.empty());
+
+    const auto news_only = pipe_brief.run_text_utterance(
+        "dev-news-only", "what's in the news", sink_brief);
+    CHECK(news_only.ok);
+    CHECK(!news_only.used_fast_path);
+    CHECK(arbiter_brief->last_message == "what's in the news");
+
+    const auto topical = pipe_brief.run_text_utterance(
+        "dev-topical", "brief me on the harbour", sink_brief);
+    CHECK(topical.ok);
+    CHECK(!topical.used_fast_path);
+    CHECK(arbiter_brief->last_message == "brief me on the harbour");
+    std::filesystem::remove(db_brief);
+  }
+
+  {
+    const char* rss = R"(<?xml version="1.0"?>
+<rss><channel><item>
+  <title>Harbour lights</title>
+  <link>https://example.com/harbour</link>
+</item></channel></rss>)";
+    const char* quotes = R"({
+      "quoteResponse": {"result": [{
+        "symbol": "^GSPC",
+        "shortName": "S&P 500",
+        "regularMarketPrice": 5700,
+        "regularMarketChange": 12,
+        "regularMarketChangePercent": 0.2,
+        "currency": "USD"
+      }]}
+    })";
+    httplib::Server brief;
+    brief.Get("/rss", [rss](const httplib::Request&, httplib::Response& res) {
+      res.set_content(rss, "application/rss+xml");
+    });
+    brief.Get("/v7/finance/quote", [quotes](const httplib::Request&, httplib::Response& res) {
+      res.set_content(quotes, "application/json");
+    });
+    brief.Get("/v1/search", [](const httplib::Request&, httplib::Response& res) {
+      res.set_content(
+          R"({"results":[{"name":"London","country":"United Kingdom","latitude":51.5,"longitude":-0.12}]})",
+          "application/json");
+    });
+    brief.Get("/v1/forecast", [](const httplib::Request&, httplib::Response& res) {
+      res.set_content(R"({
+        "current": {
+          "time": "2026-09-22T15:00",
+          "temperature_2m": 14,
+          "weather_code": 3,
+          "is_day": 1
+        },
+        "current_units": {"temperature_2m": "°C"},
+        "hourly": {"time": ["2026-09-22T15:00"], "temperature_2m": [14], "weather_code": [3]},
+        "daily": {
+          "time": ["2026-09-22"],
+          "weather_code": [3],
+          "temperature_2m_max": [16],
+          "temperature_2m_min": [9]
+        }
+      })",
+                      "application/json");
+    });
+    const int port = brief.bind_to_any_port("127.0.0.1");
+    CHECK(port > 0);
+    std::thread brief_thread([&brief] { brief.listen_after_bind(); });
+    for (int i = 0; i < 50 && !brief.is_running(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const std::string base = "http://127.0.0.1:" + std::to_string(port);
+
+    auto tts_cards = std::make_shared<RecordingTts>();
+    auto arbiter_cards = std::make_shared<StreamingArbiter>(tts_cards);
+    auto stt_cards = std::make_shared<DummyStt>();
+    const auto db_cards =
+        std::filesystem::temp_directory_path() / "intercom_briefing_cards.db";
+    std::filesystem::remove(db_cards);
+    auto sessions_cards =
+        std::make_shared<intercom::SessionStore>(db_cards.string());
+    CHECK(sessions_cards->open(&err));
+    intercom::Config cfg_cards;
+    cfg_cards.fast_path = true;
+    cfg_cards.filler.enabled = false;
+    cfg_cards.news.google_news_rss = base + "/rss";
+    cfg_cards.news.timeout_ms = 800;
+    cfg_cards.markets.quote_base = base;
+    cfg_cards.markets.timeout_ms = 800;
+    cfg_cards.weather.geocode_base = base;
+    cfg_cards.weather.forecast_base = base;
+    cfg_cards.weather.timeout_ms = 800;
+    cfg_cards.weather.default_place = "London";
+    intercom::TurnPipeline pipe_cards(
+        cfg_cards, stt_cards, tts_cards, arbiter_cards, sessions_cards, nullptr);
+    CollectingSink sink_cards;
+    const auto turn = pipe_cards.run_text_utterance(
+        "dev-cards", "brief me", sink_cards);
+    CHECK(turn.ok);
+    CHECK(turn.used_fast_path);
+    CHECK(turn.fast_path_kind == "briefing");
+    CHECK(arbiter_cards->last_message.empty());
+    bool weather_card = false;
+    bool news_card = false;
+    bool market_card = false;
+    for (const auto& event : sink_cards.events) {
+      if (event.first != "surface") continue;
+      if (event.second.find("\"weather\"") != std::string::npos) weather_card = true;
+      if (event.second.find("\"news\"") != std::string::npos) news_card = true;
+      if (event.second.find("\"markets\"") != std::string::npos) market_card = true;
+    }
+    CHECK(weather_card);
+    CHECK(news_card);
+    CHECK(market_card);
+    const auto said = tts_cards->snapshot();
+    CHECK(said.size() >= 4);
+    if (!said.empty()) CHECK(said.front().find("It's ") == 0);
+    bool headlines = false;
+    for (const auto& line : said) {
+      if (line.find("headlines") != std::string::npos) headlines = true;
+      CHECK(line.find("sir") == std::string::npos);
+    }
+    CHECK(headlines);
+
+    brief.stop();
+    if (brief_thread.joinable()) brief_thread.join();
+    std::filesystem::remove(db_cards);
+  }
+
   if (g_fails != 0) {
     std::cerr << g_fails << " failure(s)\n";
     return 1;

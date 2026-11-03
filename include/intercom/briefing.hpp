@@ -51,6 +51,10 @@ const char* briefing_kind_name(BriefingKind kind);
 // neither — weather, lights, greetings stay with their own parsers.
 std::optional<BriefingIntent> parse_briefing_intent(std::string_view transcript);
 
+// One local morning briefing (clock, weather, headlines, markets).
+// Distinct from a single news or markets question.
+bool is_spoken_briefing(std::string_view transcript);
+
 std::string extract_news_topic(std::string_view transcript);
 std::vector<std::string> extract_market_symbols(std::string_view transcript);
 

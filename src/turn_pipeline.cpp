@@ -1,5 +1,6 @@
 #include "intercom/turn_pipeline.hpp"
 #include "intercom/briefing.hpp"
+#include "intercom/clock.hpp"
 #include "intercom/home_client.hpp"
 #include "intercom/speakable.hpp"
 #include "intercom/surface.hpp"
@@ -92,7 +93,8 @@ bool bridges_fast_path_kind(std::string_view kind) {
          kind == "light_on" || kind == "light_off" ||
          kind == "light_toggle" || kind == "volume_up" ||
          kind == "volume_down" || kind == "weather" ||
-         kind == "alarm" || kind == "news" || kind == "markets";
+         kind == "alarm" || kind == "news" || kind == "markets" ||
+         kind == "briefing";
 }
 
 bool is_action_repeat(std::string_view t) {
@@ -536,6 +538,21 @@ std::string with_fast_path_context(const DeviceSession& prior,
          "[CURRENT USER REQUEST]\n" + std::string(current);
 }
 
+std::string understate(std::string line) {
+  for (const char* tail : {", sir.", " sir."}) {
+    const std::size_t n = std::char_traits<char>::length(tail);
+    if (line.size() >= n && line.compare(line.size() - n, n, tail) == 0) {
+      line.replace(line.size() - n, n, ".");
+      break;
+    }
+  }
+  return line;
+}
+
+std::string briefing_clock_line() {
+  return understate(spoken_time_now());
+}
+
 std::string with_correction_note(const DeviceSession& prior,
                                  std::string_view current, bool rewritten) {
   const std::string request = prior.last_user.empty() ? prior.last_fast_path_request
@@ -835,6 +852,110 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     kokoro_total_ms += dt;
     return ok;
   };
+
+  if (config_.fast_path && is_spoken_briefing(routing_transcript)) {
+    result.used_fast_path = true;
+    result.fast_path_kind = "briefing";
+    path_name = "fast";
+    pending_kind = "fast";
+    if (auto existing = sessions_->get(device_id)) {
+      result.conversation_id = existing->conversation_id;
+    }
+
+    auto weather_future = std::async(std::launch::async, [this]() -> std::optional<FastPathResult> {
+      if (config_.home.configured() && !config_.home.weather_entity.empty()) {
+        if (auto fp = fast_path_.try_handle("what's the weather")) {
+          if (fp->kind == "weather" && fp->context_valid && !fp->reply.empty()) return fp;
+        }
+      }
+      const std::string place = trim(config_.weather.default_place);
+      if (!place.empty()) {
+        if (auto fp = fast_path_.try_handle("what's the weather in " + place)) {
+          if (fp->kind == "weather" && fp->context_valid && !fp->reply.empty()) return fp;
+        }
+      }
+      return std::nullopt;
+    });
+    auto news_future = std::async(std::launch::async, [this]() -> std::optional<FastPathResult> {
+      if (auto fp = fast_path_.try_handle("what's in the news")) {
+        if (fp->kind == "news" && fp->context_valid && !fp->reply.empty()) return fp;
+      }
+      return std::nullopt;
+    });
+    auto markets_future = std::async(std::launch::async, [this]() -> std::optional<FastPathResult> {
+      if (auto fp = fast_path_.try_handle("how's the market")) {
+        if (fp->kind == "markets" && fp->context_valid && !fp->reply.empty()) return fp;
+      }
+      return std::nullopt;
+    });
+
+    std::string joined_reply;
+    auto speak_piece = [&](std::string line, const nlohmann::json& surface) -> bool {
+      line = understate(std::move(line));
+      if (line.empty()) return true;
+      if (!speak(line)) return false;
+      if (surface.is_object()) {
+        sink.event("surface", surface_event_body(result.turn_id, surface).dump());
+      }
+      if (!joined_reply.empty()) joined_reply.push_back(' ');
+      joined_reply += line;
+      return true;
+    };
+    auto speak_optional = [&](std::optional<FastPathResult> section,
+                              const char* gap) -> bool {
+      if (handle->cancel.load()) {
+        result.error = "canceled";
+        return false;
+      }
+      if (!section) return speak_piece(gap, nullptr);
+      nlohmann::json surface = section->surface.is_object() ? section->surface : nullptr;
+      return speak_piece(std::move(section->reply), surface);
+    };
+
+    if (!speak_piece(briefing_clock_line(), nullptr)) {
+      result.error = err.empty() ? "tts failed" : err;
+      return finish(result);
+    }
+    if (!speak_optional(weather_future.get(), "No weather just now.")) {
+      if (result.error.empty()) result.error = err.empty() ? "tts failed" : err;
+      return finish(result);
+    }
+    if (!speak_optional(news_future.get(), "No headlines just now.")) {
+      if (result.error.empty()) result.error = err.empty() ? "tts failed" : err;
+      return finish(result);
+    }
+    if (!speak_optional(markets_future.get(), "No market snapshot just now.")) {
+      if (result.error.empty()) result.error = err.empty() ? "tts failed" : err;
+      return finish(result);
+    }
+    if (handle->cancel.load()) {
+      result.error = "canceled";
+      return finish(result);
+    }
+
+    if (result.conversation_id <= 0) {
+      std::string conv_err;
+      result.conversation_id = ensure_conversation(device_id, &conv_err);
+      if (result.conversation_id <= 0) {
+        std::cerr << "intercom fast-path conversation: "
+                  << (conv_err.empty() ? "create failed" : conv_err) << std::endl;
+      }
+    }
+    result.ok = true;
+    if (result.conversation_id > 0) {
+      DeviceSession s;
+      s.device_id = device_id;
+      s.conversation_id = result.conversation_id;
+      s.last_turn_id = result.turn_id;
+      s.last_user = result.transcript;
+      s.last_spoken = joined_reply;
+      s.last_fast_path_kind = "briefing";
+      s.last_fast_path_request = routing_transcript;
+      s.updated_at = now_unix();
+      sessions_->upsert(s, &err);
+    }
+    return finish(result);
+  }
 
   if (const auto clauses = local_compound_clauses(config_, routing_transcript);
       clauses.size() >= 2) {

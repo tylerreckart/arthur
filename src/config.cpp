@@ -158,6 +158,17 @@ Config Config::load(const std::string& path) {
                  c.news.google_news_rss + "?hl=en-US&gl=US&ceid=US:en"});
   }
 
+  if (j.contains("weather") && j["weather"].is_object()) {
+    const auto& w = j["weather"];
+    c.weather.geocode_base =
+        require_string(w, "geocode_base", c.weather.geocode_base);
+    c.weather.forecast_base =
+        require_string(w, "forecast_base", c.weather.forecast_base);
+    c.weather.default_place =
+        require_string(w, "default_place", c.weather.default_place);
+    c.weather.timeout_ms = require_int(w, "timeout_ms", c.weather.timeout_ms);
+  }
+
   if (j.contains("markets") && j["markets"].is_object()) {
     const auto& m = j["markets"];
     c.markets.timeout_ms = require_int(m, "timeout_ms", c.markets.timeout_ms);

@@ -256,6 +256,17 @@ std::vector<std::string> extract_market_symbols(std::string_view transcript) {
   return out;
 }
 
+bool is_spoken_briefing(std::string_view transcript) {
+  const std::string t = fold_phatic(transcript);
+  return t == "brief me" || t == "briefing" || t == "the briefing" ||
+         t == "my briefing" || t == "a briefing" || t == "morning briefing" ||
+         t == "evening briefing" || t == "daily briefing" ||
+         t == "night briefing" || t == "whats the briefing" ||
+         t == "what is the briefing" || t == "whats my briefing" ||
+         t == "whats this mornings briefing" || t == "give me a briefing" ||
+         t == "give me the briefing" || t == "read me the briefing";
+}
+
 std::optional<BriefingIntent> parse_briefing_intent(std::string_view transcript) {
   const std::string t = fold_phatic(transcript);
   if (t.empty()) return std::nullopt;

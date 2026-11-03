@@ -108,6 +108,15 @@ int main() {
   CHECK(has_symbol(both, "AAPL"));
   CHECK(has_symbol(both, "TSLA"));
 
+  CHECK(intercom::is_spoken_briefing("brief me"));
+  CHECK(intercom::is_spoken_briefing("morning briefing"));
+  CHECK(intercom::is_spoken_briefing("what's the briefing"));
+  CHECK(!intercom::is_spoken_briefing("what's in the news"));
+  CHECK(!intercom::is_spoken_briefing("how's the market"));
+  CHECK(!intercom::is_spoken_briefing("brief me on Tesla"));
+  CHECK(!intercom::parse_briefing_intent("brief me").has_value());
+  CHECK(!intercom::parse_briefing_intent("morning briefing").has_value());
+
   CHECK(std::string(intercom::briefing_kind_name(intercom::BriefingKind::News)) == "news");
   CHECK(std::string(intercom::briefing_kind_name(intercom::BriefingKind::Markets)) ==
         "markets");
