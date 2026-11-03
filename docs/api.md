@@ -78,8 +78,8 @@ Fast-path phrases never call Arbiter:
 - Echo/repeat: `echo …`, `repeat that`, `say that again`
 - Home (only when `home.ha_base_url` and `home.ha_token` are set): timers, lights, volume, weather at home, next alarm. A timer with no duration answers `How long, sir?`; a standalone reply such as `five minutes` completes the pending timer for up to two minutes.
 - Place weather (`what's the weather in Tokyo`, `forecast for London`): Open-Meteo geocoding + forecast (no API key, no Home Assistant). Speaks a short line and emits a weather `surface`. Home weather without a place still uses HA when configured.
-- News (`what's in the news`, `news about Tesla`, `top headlines`): Google News RSS (or configured feeds). Speaks a short line and emits a news `surface`. No API key.
-- Markets (`how's the market`, `what's AAPL doing`, `bitcoin price`): Yahoo Finance public v7 quote JSON. Speaks a short line and emits a markets `surface`. No API key. Quote lookup failure falls through to Arthur for speech only.
+- News (`what's in the news`, `news about Tesla`, `top headlines`): Google News RSS (or configured feeds). Speaks the first three headlines and emits a news `surface`. No API key.
+- Markets (`how's the market`, `what's AAPL doing`, `bitcoin price`): Yahoo Finance public v7 quote JSON. Speaks a short snapshot and the first few quotes, and emits a markets `surface`. No API key. Quote lookup failure falls through to Arthur for speech only.
 - Briefing (`brief me`, `morning briefing`, `what's the briefing`): one local turn, in order, with the local time, home weather when Home Assistant is configured or `weather.default_place` when that place resolves, the top headlines, and the default market snapshot. Each section that returns data also emits its surface card. A section that fails is skipped with a short gap and does not sink the turn. This stays separate from `what's in the news`. Arbiter is not called when the clock line succeeds.
 
 Social turns always go through Arthur's constitution so their tone and history match substantive conversation. Home intents that match but have no Home Assistant config fall through to Arthur (place weather remains local). News and markets fast-path when Intercom is confident and the fetch succeeds; otherwise Arthur speaks and Intercom still attaches a card if it can fetch structured data for that turn.
@@ -122,10 +122,11 @@ lookup. If any clause is not deterministic, the whole utterance is left intact.
 
 After a news or markets card, a short pointer such as `the second one`,
 `read the first headline`, or `the last quote` speaks that item from the stored
-list. `headline` selects the latest news list and `quote` selects the latest
-markets list, including when a briefing showed both. A missing item gets a
-short local answer. The list is kept across later local answers such as the
-clock.
+list. The spoken news and market lines name the first three items, so the
+pointer matches what was just heard. `headline` selects the latest news list
+and `quote` selects the latest markets list, including when a briefing showed
+both. A missing item gets a short local answer. The list is kept across later
+local answers such as the clock.
 
 ## `POST /v1/turns/:turn_id/cancel`
 
