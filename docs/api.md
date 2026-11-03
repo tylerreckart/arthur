@@ -95,7 +95,21 @@ Successful light and volume actions also keep a normalized local request so
 short action follow-ups remain deterministic. `turn it off`, `the hallway too`,
 `do that again`, and `undo that` resolve against the previous action without an
 Arbiter round trip. Failed Home Assistant calls are never retained as action
-context, so a failed command cannot later be repeated or reversed by accident.
+context, so a failed command cannot later be repeated, reversed, or repaired.
+
+A short correction can retarget that previous local turn without a general
+rewrite. After a light action, `no, the bedroom`, `I meant the hallway`, and
+`not the kitchen` replace the room and run the same operation again. After a
+clock, weather, news, or market answer, `I meant tomorrow` or `no, tomorrow`
+resubmits the prior request with that time scope. The corrected request stays
+on the fast path when it is still deterministic. Otherwise Arthur receives one
+private correction note — the prior request, the prior answer, and the
+corrected line — and is told never to quote that note. `not that one` and
+`the other one` switch to the other light only when exactly two lights are
+configured and the previous target is one of them, or reverse the previous
+volume step. When the alternative is ambiguous, the utterance is left intact
+and Arthur gets a short private note with the prior request and answer.
+Unrelated utterances are not rewritten.
 
 One utterance can also contain two or three deterministic clauses joined by
 `and`, `then`, or `and then`. Arthur performs each clause in order and speaks

@@ -6,6 +6,8 @@
 #include "intercom/turn_pipeline.hpp"
 #include "intercom/warm.hpp"
 
+#include <httplib.h>
+#include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
 #include <chrono>
@@ -720,6 +722,290 @@ int main() {
       CHECK(restored->pending_at == session.pending_at);
     }
     std::filesystem::remove(db_migrate);
+  }
+
+  {
+    std::string light_entity;
+    std::string light_service;
+    httplib::Server ha;
+    ha.Post(R"(/api/services/([A-Za-z0-9_]+)/([A-Za-z0-9_]+))",
+            [&](const httplib::Request& req, httplib::Response& res) {
+              if (req.matches.size() >= 3) {
+                light_service = req.matches[2];
+              }
+              try {
+                const auto body = nlohmann::json::parse(req.body);
+                light_entity = body.value("entity_id", "");
+              } catch (...) {
+                light_entity = "";
+              }
+              res.set_content("[]", "application/json");
+            });
+    ha.Get(R"(/v1/search)", [](const httplib::Request&, httplib::Response& res) {
+      res.set_content(
+          R"({"results":[{"name":"Tokyo","country":"Japan","latitude":35.7,"longitude":139.7}]})",
+          "application/json");
+    });
+    ha.Get(R"(/v1/forecast)", [](const httplib::Request&, httplib::Response& res) {
+      res.set_content(R"({
+        "current": {
+          "time": "2026-09-22T15:00",
+          "temperature_2m": 18,
+          "apparent_temperature": 17,
+          "relative_humidity_2m": 40,
+          "weather_code": 1,
+          "wind_speed_10m": 5,
+          "is_day": 1
+        },
+        "current_units": {"temperature_2m": "°C", "wind_speed_10m": "km/h"},
+        "hourly": {"time": ["2026-09-22T15:00"], "temperature_2m": [18], "weather_code": [1]},
+        "daily": {
+          "time": ["2026-09-22"],
+          "weather_code": [1],
+          "temperature_2m_max": [20],
+          "temperature_2m_min": [12]
+        }
+      })",
+                      "application/json");
+    });
+    const int port = ha.bind_to_any_port("127.0.0.1");
+    CHECK(port > 0);
+    std::thread ha_thread([&ha] { ha.listen_after_bind(); });
+    for (int i = 0; i < 50 && !ha.is_running(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    auto tts_repair = std::make_shared<RecordingTts>();
+    auto arbiter_repair = std::make_shared<StreamingArbiter>(tts_repair);
+    auto stt_repair = std::make_shared<DummyStt>();
+    const auto db_repair =
+        std::filesystem::temp_directory_path() / "intercom_repairs.db";
+    std::filesystem::remove(db_repair);
+    auto sessions_repair =
+        std::make_shared<intercom::SessionStore>(db_repair.string());
+    CHECK(sessions_repair->open(&err));
+    intercom::Config cfg_repair;
+    cfg_repair.fast_path = true;
+    cfg_repair.filler.enabled = false;
+    cfg_repair.home.ha_base_url = "http://127.0.0.1:" + std::to_string(port);
+    cfg_repair.home.ha_token = "test";
+    cfg_repair.home.timeout_ms = 800;
+    cfg_repair.home.lights["kitchen"] = "light.kitchen";
+    cfg_repair.home.lights["hallway"] = "light.hallway";
+    cfg_repair.home.lights["bedroom"] = "light.bedroom";
+    cfg_repair.home.media_player = "media_player.house";
+    cfg_repair.news.google_news_rss = "http://127.0.0.1:9/rss";
+    cfg_repair.news.timeout_ms = 400;
+    cfg_repair.markets.quote_base = "http://127.0.0.1:9";
+    cfg_repair.markets.timeout_ms = 400;
+    cfg_repair.weather.geocode_base = cfg_repair.home.ha_base_url;
+    cfg_repair.weather.forecast_base = cfg_repair.home.ha_base_url;
+    cfg_repair.weather.timeout_ms = 800;
+    intercom::TurnPipeline pipe_repair(
+        cfg_repair, stt_repair, tts_repair, arbiter_repair, sessions_repair,
+        nullptr);
+    CollectingSink sink_repair;
+
+    auto seed = [&](const std::string& device, const std::string& kind,
+                    const std::string& request, const std::string& spoken) {
+      intercom::DeviceSession seeded;
+      seeded.device_id = device;
+      seeded.conversation_id = 42;
+      seeded.last_user = request;
+      seeded.last_spoken = spoken;
+      seeded.last_fast_path_kind = kind;
+      seeded.last_fast_path_request = request;
+      CHECK(sessions_repair->upsert(seeded, &err));
+    };
+
+    seed("dev-room", "light_on", "turn on the hallway lights", "On.");
+    light_entity.clear();
+    const auto bedroom = pipe_repair.run_text_utterance(
+        "dev-room", "no, the bedroom", sink_repair);
+    CHECK(bedroom.ok);
+    CHECK(bedroom.used_fast_path);
+    CHECK(bedroom.fast_path_kind == "light_on");
+    CHECK(light_entity == "light.bedroom");
+    CHECK(light_service == "turn_on");
+    CHECK(arbiter_repair->last_message.empty());
+    const auto bedroom_said = tts_repair->snapshot();
+    CHECK(!bedroom_said.empty());
+    if (!bedroom_said.empty()) {
+      CHECK(bedroom_said.back().find("bedroom") != std::string::npos);
+    }
+
+    seed("dev-meant", "light_off", "turn off the kitchen lights", "Off.");
+    light_entity.clear();
+    const auto hallway = pipe_repair.run_text_utterance(
+        "dev-meant", "I meant the hallway", sink_repair);
+    CHECK(hallway.ok);
+    CHECK(hallway.used_fast_path);
+    CHECK(hallway.fast_path_kind == "light_off");
+    CHECK(light_entity == "light.hallway");
+    CHECK(light_service == "turn_off");
+
+    seed("dev-not-room", "light_on", "turn on the hallway lights", "On.");
+    light_entity.clear();
+    const auto kitchen = pipe_repair.run_text_utterance(
+        "dev-not-room", "not the kitchen", sink_repair);
+    CHECK(kitchen.ok);
+    CHECK(kitchen.used_fast_path);
+    CHECK(kitchen.fast_path_kind == "light_on");
+    CHECK(light_entity == "light.kitchen");
+
+    seed("dev-joke", "light_on", "turn on the kitchen lights", "On.");
+    const auto joke = pipe_repair.run_text_utterance(
+        "dev-joke", "tell me a joke", sink_repair);
+    CHECK(joke.ok);
+    CHECK(!joke.used_fast_path);
+    CHECK(arbiter_repair->last_message == "tell me a joke");
+
+    intercom::DeviceSession failed;
+    failed.device_id = "dev-failed";
+    failed.conversation_id = 42;
+    failed.last_user = "turn on the kitchen light";
+    failed.last_spoken = "I couldn't do that, sir.";
+    failed.last_fast_path_kind = "";
+    failed.last_fast_path_request = "";
+    CHECK(sessions_repair->upsert(failed, &err));
+    const auto not_referent = pipe_repair.run_text_utterance(
+        "dev-failed", "no, the bedroom", sink_repair);
+    CHECK(not_referent.ok);
+    CHECK(!not_referent.used_fast_path);
+    CHECK(arbiter_repair->last_message == "no, the bedroom");
+
+    seed("dev-clock", "clock", "what time is it", "It is four.");
+    const auto tomorrow = pipe_repair.run_text_utterance(
+        "dev-clock", "I meant tomorrow", sink_repair);
+    CHECK(tomorrow.ok);
+    CHECK(!tomorrow.used_fast_path);
+    CHECK(arbiter_repair->last_message.find("never quote") != std::string::npos);
+    CHECK(arbiter_repair->last_message.find("It is four.") != std::string::npos);
+    CHECK(arbiter_repair->last_message.find("what time is it tomorrow") !=
+          std::string::npos);
+    CHECK(arbiter_repair->last_message.find("quote the") == std::string::npos);
+
+    seed("dev-news", "news", "what's in the news", "A short bulletin.");
+    const auto news_scope = pipe_repair.run_text_utterance(
+        "dev-news", "no, tomorrow", sink_repair);
+    CHECK(news_scope.ok);
+    CHECK(!news_scope.used_fast_path);
+    CHECK(arbiter_repair->last_message.find("news tomorrow") != std::string::npos);
+    CHECK(arbiter_repair->last_message.find("A short bulletin.") !=
+          std::string::npos);
+    CHECK(arbiter_repair->last_message.find("[CURRENT USER REQUEST]") !=
+          std::string::npos);
+
+    seed("dev-wx", "weather", "what's the weather in Tokyo", "Mild.");
+    const std::size_t surfaces_before = sink_repair.events.size();
+    const auto wx = pipe_repair.run_text_utterance(
+        "dev-wx", "no, tomorrow", sink_repair);
+    CHECK(wx.ok);
+    CHECK(wx.used_fast_path);
+    CHECK(wx.fast_path_kind == "weather");
+    bool saw_surface = false;
+    for (std::size_t i = surfaces_before; i < sink_repair.events.size(); ++i) {
+      if (sink_repair.events[i].first == "surface") saw_surface = true;
+    }
+    CHECK(saw_surface);
+    CHECK(arbiter_repair->last_message.find("Mild.") == std::string::npos);
+
+    seed("dev-ambiguous", "light_on", "turn on the kitchen lights", "On.");
+    const auto ambiguous = pipe_repair.run_text_utterance(
+        "dev-ambiguous", "the other one", sink_repair);
+    CHECK(ambiguous.ok);
+    CHECK(!ambiguous.used_fast_path);
+    CHECK(arbiter_repair->last_message.find("the other one") != std::string::npos);
+    CHECK(arbiter_repair->last_message.find("turn on the kitchen lights") !=
+          std::string::npos);
+    CHECK(arbiter_repair->last_message.find("never quote") != std::string::npos);
+
+    ha.stop();
+    if (ha_thread.joinable()) ha_thread.join();
+    std::filesystem::remove(db_repair);
+  }
+
+  {
+    auto tts_other = std::make_shared<RecordingTts>();
+    auto arbiter_other = std::make_shared<StreamingArbiter>(tts_other);
+    auto stt_other = std::make_shared<DummyStt>();
+    const auto db_other =
+        std::filesystem::temp_directory_path() / "intercom_repair_other.db";
+    std::filesystem::remove(db_other);
+    auto sessions_other =
+        std::make_shared<intercom::SessionStore>(db_other.string());
+    CHECK(sessions_other->open(&err));
+    std::string other_entity;
+    httplib::Server ha_other;
+    ha_other.Post("/api/services/light/turn_on",
+                  [&](const httplib::Request& req, httplib::Response& res) {
+                    try {
+                      other_entity =
+                          nlohmann::json::parse(req.body).value("entity_id", "");
+                    } catch (...) {
+                      other_entity.clear();
+                    }
+                    res.set_content("[]", "application/json");
+                  });
+    ha_other.Post("/api/services/media_player/volume_down",
+                  [](const httplib::Request&, httplib::Response& res) {
+                    res.set_content("[]", "application/json");
+                  });
+    const int port = ha_other.bind_to_any_port("127.0.0.1");
+    CHECK(port > 0);
+    std::thread ha_thread([&ha_other] { ha_other.listen_after_bind(); });
+    for (int i = 0; i < 50 && !ha_other.is_running(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    intercom::Config cfg_other;
+    cfg_other.fast_path = true;
+    cfg_other.filler.enabled = false;
+    cfg_other.home.ha_base_url = "http://127.0.0.1:" + std::to_string(port);
+    cfg_other.home.ha_token = "test";
+    cfg_other.home.lights["bedroom"] = "light.bedroom";
+    cfg_other.home.lights["kitchen"] = "light.kitchen";
+    cfg_other.home.media_player = "media_player.house";
+    intercom::TurnPipeline pipe_other(
+        cfg_other, stt_other, tts_other, arbiter_other, sessions_other, nullptr);
+    CollectingSink sink_other;
+    intercom::DeviceSession light;
+    light.device_id = "dev-pair";
+    light.conversation_id = 42;
+    light.last_user = "turn on the kitchen lights";
+    light.last_spoken = "On.";
+    light.last_fast_path_kind = "light_on";
+    light.last_fast_path_request = "turn on the kitchen lights";
+    CHECK(sessions_other->upsert(light, &err));
+    const auto other = pipe_other.run_text_utterance(
+        "dev-pair", "not that one", sink_other);
+    CHECK(other.ok);
+    CHECK(other.used_fast_path);
+    CHECK(other.fast_path_kind == "light_on");
+    CHECK(other_entity == "light.bedroom");
+    CHECK(arbiter_other->last_message.empty());
+
+    intercom::DeviceSession volume;
+    volume.device_id = "dev-vol";
+    volume.conversation_id = 42;
+    volume.last_user = "turn the volume up";
+    volume.last_spoken = "Louder.";
+    volume.last_fast_path_kind = "volume_up";
+    volume.last_fast_path_request = "turn the volume up";
+    CHECK(sessions_other->upsert(volume, &err));
+    const auto quieter = pipe_other.run_text_utterance(
+        "dev-vol", "the other one", sink_other);
+    CHECK(quieter.ok);
+    CHECK(quieter.used_fast_path);
+    CHECK(quieter.fast_path_kind == "volume_down");
+    const auto quieter_said = tts_other->snapshot();
+    CHECK(!quieter_said.empty());
+    if (!quieter_said.empty()) {
+      CHECK(quieter_said.back().find("uieter") != std::string::npos);
+    }
+
+    ha_other.stop();
+    if (ha_thread.joinable()) ha_thread.join();
+    std::filesystem::remove(db_other);
   }
 
   if (g_fails != 0) {
