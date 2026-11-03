@@ -16,6 +16,7 @@ struct DeviceSession {
   std::string last_user;
   std::string last_spoken;
   std::string last_fast_path_kind;
+  std::string last_fast_path_request;
   std::string pending_intent;
   std::int64_t pending_at = 0;
   std::int64_t updated_at = 0;

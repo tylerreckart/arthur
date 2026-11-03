@@ -95,6 +95,104 @@ bool bridges_fast_path_kind(std::string_view kind) {
          kind == "alarm" || kind == "news" || kind == "markets";
 }
 
+bool is_action_repeat(std::string_view t) {
+  return t == "again" || t == "do that again" || t == "same again" ||
+         t == "one more time";
+}
+
+bool is_action_undo(std::string_view t) {
+  return t == "undo that" || t == "put it back" || t == "reverse that";
+}
+
+bool is_light_kind(std::string_view kind) {
+  return kind == "light_on" || kind == "light_off" || kind == "light_toggle";
+}
+
+std::string light_request(std::string_view kind, std::string_view room) {
+  std::string out;
+  if (kind == "light_off") {
+    out = "turn off ";
+  } else if (kind == "light_toggle") {
+    out = "toggle ";
+  } else {
+    out = "turn on ";
+  }
+  if (!room.empty()) {
+    out += room;
+    out += " ";
+  }
+  out += "lights";
+  return out;
+}
+
+std::optional<std::string> resolve_local_action_followup(
+    const DeviceSession& prior, std::string_view current) {
+  const std::string t = fold_phatic(current);
+  if (t.empty() || t.size() > 80) return std::nullopt;
+
+  const std::string previous_request =
+      prior.last_fast_path_request.empty() ? prior.last_user
+                                          : prior.last_fast_path_request;
+  if (previous_request.empty()) return std::nullopt;
+
+  if (is_action_repeat(t) &&
+      (is_light_kind(prior.last_fast_path_kind) ||
+       prior.last_fast_path_kind == "volume_up" ||
+       prior.last_fast_path_kind == "volume_down")) {
+    return previous_request;
+  }
+
+  if (prior.last_fast_path_kind == "volume_up" && is_action_undo(t)) {
+    return "turn the volume down";
+  }
+  if (prior.last_fast_path_kind == "volume_down" && is_action_undo(t)) {
+    return "turn the volume up";
+  }
+  if (!is_light_kind(prior.last_fast_path_kind)) return std::nullopt;
+
+  std::string room;
+  if (auto previous = parse_home_intent(previous_request)) {
+    room = previous->room;
+  }
+
+  if (is_action_undo(t)) {
+    if (prior.last_fast_path_kind == "light_on") {
+      return light_request("light_off", room);
+    }
+    if (prior.last_fast_path_kind == "light_off") {
+      return light_request("light_on", room);
+    }
+    return light_request("light_toggle", room);
+  }
+
+  for (const auto& [phrase, kind] :
+       std::initializer_list<std::pair<std::string_view, std::string_view>>{
+           {"turn it on", "light_on"},
+           {"switch it on", "light_on"},
+           {"put it on", "light_on"},
+           {"turn it off", "light_off"},
+           {"switch it off", "light_off"},
+           {"put it off", "light_off"},
+           {"toggle it", "light_toggle"},
+       }) {
+    if (t == phrase) return light_request(kind, room);
+  }
+
+  std::string room_followup;
+  if (t.rfind("and ", 0) == 0) {
+    room_followup = trim(t.substr(4));
+  } else if (t.size() > 4 && t.substr(t.size() - 4) == " too") {
+    room_followup = trim(t.substr(0, t.size() - 4));
+  }
+  if (room_followup.empty()) return std::nullopt;
+
+  const std::string candidate =
+      light_request(prior.last_fast_path_kind, room_followup);
+  const auto parsed = parse_home_intent(candidate);
+  if (!parsed || parsed->room.empty()) return std::nullopt;
+  return candidate;
+}
+
 std::string context_line(std::string value) {
   for (char& c : value) {
     if (c == '\r' || c == '\n' || c == '\t') c = ' ';
@@ -347,6 +445,12 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     if (seconds > 0) {
       routing_transcript = "set a timer for " + spoken_duration(seconds);
     }
+  } else if (prior_session && config_.home.configured() &&
+             !parse_home_intent(result.transcript).has_value()) {
+    if (auto resolved =
+            resolve_local_action_followup(*prior_session, result.transcript)) {
+      routing_transcript = *resolved;
+    }
   }
 
   std::string err;
@@ -417,7 +521,10 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       s.last_turn_id = result.turn_id;
       s.last_user = result.transcript;
       s.last_spoken = fp->reply;
-      s.last_fast_path_kind = fp->kind;
+      if (fp->context_valid) {
+        s.last_fast_path_kind = fp->kind;
+        s.last_fast_path_request = routing_transcript;
+      }
       if (auto intent = parse_home_intent(routing_transcript);
           intent && intent->kind == HomeIntentKind::Timer &&
           intent->timer_seconds <= 0) {

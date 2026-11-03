@@ -20,6 +20,9 @@ struct FastPathResult {
   std::string kind = "social";
   // Versioned desk card (null when the turn is speech-only).
   nlohmann::json surface = nullptr;
+  // False when a local service matched but failed, so this turn must not
+  // become the referent for "again", "undo that", or later follow-ups.
+  bool context_valid = true;
 };
 
 // Social greetings, thanks, and presence checks. These still go to Arbiter,

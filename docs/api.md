@@ -91,6 +91,12 @@ did not run through Arbiter. The bridge is deliberately limited to clear,
 short follow-ups; unrelated requests are sent unchanged. Arthur's constitution
 instructs him to use this metadata silently and never quote it aloud.
 
+Successful light and volume actions also keep a normalized local request so
+short action follow-ups remain deterministic. `turn it off`, `the hallway too`,
+`do that again`, and `undo that` resolve against the previous action without an
+Arbiter round trip. Failed Home Assistant calls are never retained as action
+context, so a failed command cannot later be repeated or reversed by accident.
+
 ## `POST /v1/turns/:turn_id/cancel`
 
 Barge-in: stops TTS and cancels the Arbiter `request_id` when known.
@@ -99,13 +105,14 @@ Requires `Authorization` + `X-Device-Id`.
 
 ## `GET /v1/devices/:device_id/session`
 
-Debug: `{ device_id, conversation_id, last_turn_id, last_user, last_spoken, last_fast_path_kind, pending_intent, pending_at, updated_at }`.
+Debug: `{ device_id, conversation_id, last_turn_id, last_user, last_spoken, last_fast_path_kind, last_fast_path_request, pending_intent, pending_at, updated_at }`.
 
 Intercom keeps the last user request and completed spoken line per device.
 Exact requests such as `say that again` can replay deterministic or Arbiter
 answers without another model run; the fast-path kind supports the one-turn
-continuity bridge described above. This is device session context, separate
-from Arthur's durable `/mem` facts.
+continuity bridge described above, and the normalized fast-path request supports
+local action chaining. This is device session context, separate from Arthur's
+durable `/mem` facts.
 
 ## Arbiter mapping
 

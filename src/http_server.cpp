@@ -204,6 +204,7 @@ void run_http_server(ServerDeps deps) {
                 {"last_user", session->last_user},
                 {"last_spoken", session->last_spoken},
                 {"last_fast_path_kind", session->last_fast_path_kind},
+                {"last_fast_path_request", session->last_fast_path_request},
                 {"pending_intent", session->pending_intent},
                 {"pending_at", session->pending_at},
                 {"updated_at", session->updated_at},

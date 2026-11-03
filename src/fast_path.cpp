@@ -118,7 +118,10 @@ std::optional<FastPathResult> FastPath::try_handle(const std::string& transcript
     HomeAction action = home_client_->run(*intent, &err);
     if (action.reply.empty()) {
       std::cerr << "intercom home: " << (err.empty() ? "failed" : err) << std::endl;
-      return FastPathResult{"I couldn't do that, sir.", home_intent_kind_name(intent->kind)};
+      FastPathResult failed{
+          "I couldn't do that, sir.", home_intent_kind_name(intent->kind)};
+      failed.context_valid = false;
+      return failed;
     }
     FastPathResult result{std::move(action.reply), home_intent_kind_name(intent->kind)};
     if (action.surface.is_object()) {
