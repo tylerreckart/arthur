@@ -180,7 +180,9 @@ int main() {
     if (fast_session) {
       CHECK(fast_session->conversation_id == 42);
       CHECK(fast_session->last_turn_id == fast.turn_id);
+      CHECK(fast_session->last_user == "echo hello");
       CHECK(fast_session->last_spoken == "hello");
+      CHECK(fast_session->last_fast_path_kind == "echo");
     }
     const auto repeated = pipe_fp.run_text_utterance(
         "dev-fast", "say that again", sink_fp);
@@ -194,6 +196,37 @@ int main() {
       CHECK(repeated_text[1] == "hello.");
     }
     CHECK(arbiter_fp->last_message.empty());
+
+    const auto clock = pipe_fp.run_text_utterance(
+        "dev-context", "what time is it", sink_fp);
+    CHECK(clock.ok);
+    CHECK(clock.used_fast_path);
+    const auto clock_session = sessions_fp->get("dev-context");
+    CHECK(clock_session.has_value());
+    const auto followup = pipe_fp.run_text_utterance(
+        "dev-context", "what about tomorrow?", sink_fp);
+    CHECK(followup.ok);
+    CHECK(!followup.used_fast_path);
+    CHECK(arbiter_fp->last_message.find("VOICE CONTEXT") != std::string::npos);
+    CHECK(arbiter_fp->last_message.find(
+              "Previous user request: what time is it") != std::string::npos);
+    if (clock_session) {
+      CHECK(arbiter_fp->last_message.find(clock_session->last_spoken) !=
+            std::string::npos);
+    }
+    CHECK(arbiter_fp->last_message.find(
+              "[CURRENT USER REQUEST]\nwhat about tomorrow?") !=
+          std::string::npos);
+
+    const auto separate_clock = pipe_fp.run_text_utterance(
+        "dev-no-context", "what time is it", sink_fp);
+    CHECK(separate_clock.ok);
+    CHECK(separate_clock.used_fast_path);
+    const auto unrelated = pipe_fp.run_text_utterance(
+        "dev-no-context", "tell me a joke", sink_fp);
+    CHECK(unrelated.ok);
+    CHECK(!unrelated.used_fast_path);
+    CHECK(arbiter_fp->last_message == "tell me a joke");
     std::filesystem::remove(db_fp);
   }
 
@@ -521,14 +554,18 @@ int main() {
     session.device_id = "legacy-device";
     session.conversation_id = 77;
     session.last_turn_id = "turn-77";
+    session.last_user = "turn on the kitchen light";
     session.last_spoken = "The kitchen light is on.";
+    session.last_fast_path_kind = "light_on";
     session.pending_intent = "timer_duration";
     session.pending_at = 123;
     CHECK(migrated.upsert(session, &err));
     const auto restored = migrated.get("legacy-device");
     CHECK(restored.has_value());
     if (restored) {
+      CHECK(restored->last_user == session.last_user);
       CHECK(restored->last_spoken == session.last_spoken);
+      CHECK(restored->last_fast_path_kind == session.last_fast_path_kind);
       CHECK(restored->pending_intent == session.pending_intent);
       CHECK(restored->pending_at == session.pending_at);
     }

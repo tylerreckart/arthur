@@ -83,6 +83,14 @@ Fast-path phrases never call Arbiter:
 
 Social turns always go through Arthur's constitution so their tone and history match substantive conversation. Home intents that match but have no Home Assistant config fall through to Arthur (place weather remains local). News and markets fast-path when Intercom is confident and the fetch succeeds; otherwise Arthur speaks and Intercom still attaches a card if it can fetch structured data for that turn.
 
+When a short contextual follow-up follows a local clock, home, weather, news, or
+market answer, Intercom sends Arthur one bounded turn of private continuity
+metadata: the prior request, local answer, and fast-path kind. This lets turns
+such as `what about tomorrow?` continue naturally even though the previous turn
+did not run through Arbiter. The bridge is deliberately limited to clear,
+short follow-ups; unrelated requests are sent unchanged. Arthur's constitution
+instructs him to use this metadata silently and never quote it aloud.
+
 ## `POST /v1/turns/:turn_id/cancel`
 
 Barge-in: stops TTS and cancels the Arbiter `request_id` when known.
@@ -91,12 +99,13 @@ Requires `Authorization` + `X-Device-Id`.
 
 ## `GET /v1/devices/:device_id/session`
 
-Debug: `{ device_id, conversation_id, last_turn_id, last_spoken, pending_intent, pending_at, updated_at }`.
+Debug: `{ device_id, conversation_id, last_turn_id, last_user, last_spoken, last_fast_path_kind, pending_intent, pending_at, updated_at }`.
 
-Intercom keeps the last completed spoken line per device so exact requests such
-as `say that again` can replay deterministic or Arbiter answers without another
-model run. This is device session context, separate from Arthur's durable
-`/mem` facts.
+Intercom keeps the last user request and completed spoken line per device.
+Exact requests such as `say that again` can replay deterministic or Arbiter
+answers without another model run; the fast-path kind supports the one-turn
+continuity bridge described above. This is device session context, separate
+from Arthur's durable `/mem` facts.
 
 ## Arbiter mapping
 

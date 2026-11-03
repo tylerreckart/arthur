@@ -69,6 +69,54 @@ bool is_repeat_request(std::string_view transcript) {
          t == "could you repeat that" || t == "what did you say";
 }
 
+bool is_contextual_followup(std::string_view transcript) {
+  const std::string t = fold_phatic(transcript);
+  if (t.empty() || t.size() > 120) return false;
+  if (t == "tomorrow" || t == "today" || t == "tonight" ||
+      t == "why" || t == "when" || t == "where" ||
+      t == "which one" || t == "how much" || t == "how many" ||
+      t == "tell me more") {
+    return true;
+  }
+  for (const char* prefix : {
+           "what about ", "how about ", "and ", "does that ", "is that ",
+           "will it ", "which ", "why ", "when ", "where ", "more about ",
+       }) {
+    if (t.rfind(prefix, 0) == 0) return true;
+  }
+  return false;
+}
+
+bool bridges_fast_path_kind(std::string_view kind) {
+  return kind == "clock" || kind == "timer" ||
+         kind == "light_on" || kind == "light_off" ||
+         kind == "light_toggle" || kind == "volume_up" ||
+         kind == "volume_down" || kind == "weather" ||
+         kind == "alarm" || kind == "news" || kind == "markets";
+}
+
+std::string context_line(std::string value) {
+  for (char& c : value) {
+    if (c == '\r' || c == '\n' || c == '\t') c = ' ';
+  }
+  value = trim(value);
+  constexpr std::size_t kContextCap = 500;
+  if (value.size() > kContextCap) {
+    value.resize(kContextCap);
+    value += "…";
+  }
+  return value;
+}
+
+std::string with_fast_path_context(const DeviceSession& prior,
+                                   std::string_view current) {
+  return "[VOICE CONTEXT — private continuity metadata; never quote this block aloud]\n"
+         "Previous local turn kind: " + context_line(prior.last_fast_path_kind) + "\n"
+         "Previous user request: " + context_line(prior.last_user) + "\n"
+         "Arthur's previous spoken answer: " + context_line(prior.last_spoken) + "\n"
+         "[CURRENT USER REQUEST]\n" + std::string(current);
+}
+
 }  // namespace
 
 TurnPipeline::TurnPipeline(Config config,
@@ -367,7 +415,9 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       s.device_id = device_id;
       s.conversation_id = result.conversation_id;
       s.last_turn_id = result.turn_id;
+      s.last_user = result.transcript;
       s.last_spoken = fp->reply;
+      s.last_fast_path_kind = fp->kind;
       if (auto intent = parse_home_intent(routing_transcript);
           intent && intent->kind == HomeIntentKind::Timer &&
           intent->timer_seconds <= 0) {
@@ -378,6 +428,13 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       sessions_->upsert(s, &err);
     }
     return finish(result);
+  }
+
+  std::string arbiter_message = routing_transcript;
+  if (prior_session && bridges_fast_path_kind(prior_session->last_fast_path_kind) &&
+      !prior_session->last_user.empty() && !prior_session->last_spoken.empty() &&
+      is_contextual_followup(result.transcript)) {
+    arbiter_message = with_fast_path_context(*prior_session, result.transcript);
   }
 
   // Medium-confidence (or high-confidence fetch miss) news/markets: let
@@ -491,7 +548,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   auto arbiter_future = std::async(std::launch::async, [&]() {
     std::string stream_err;
     const bool streamed = arbiter_->send_message(
-        conv, routing_transcript, result.turn_id, cbs, &handle->cancel, &stream_err);
+        conv, arbiter_message, result.turn_id, cbs, &handle->cancel, &stream_err);
     arb_state.streamed = streamed;
     arb_state.stream_err = std::move(stream_err);
     arb_state.done.store(true);
@@ -666,6 +723,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   s.device_id = device_id;
   s.conversation_id = conv;
   s.last_turn_id = result.turn_id;
+  s.last_user = result.transcript;
   s.last_spoken = arb_state.full_content;
   s.updated_at = now_unix();
   sessions_->upsert(s, &err);
