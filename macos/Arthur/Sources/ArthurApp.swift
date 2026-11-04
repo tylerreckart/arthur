@@ -45,7 +45,7 @@ struct ArthurApp: App {
   }
 }
 
-/// Keeps the process alive after the chat window closes so the menu bar extra
+/// Keeps the process alive after the chat window closes so the menu-bar droplet
 /// and global PTT hotkey stay armed, like the hallway button.
 final class ArthurAppDelegate: NSObject, NSApplicationDelegate {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
