@@ -128,6 +128,14 @@ and `quote` selects the latest markets list, including when a briefing showed
 both. A missing item gets a short local answer. The list is kept across later
 local answers such as the clock.
 
+`more`, `tell me more`, and `more on the second one` read the stored summary
+of the item in focus. Another `go on`, or a question such as `why does that
+matter`, hands Arthur that title, source, and summary as private card context
+so he can go further and look the story up. `what else` and `the rest` speak
+the later items that were kept past the first three, and a further `what else`
+says when the list is finished. A line that does not point at the card is left
+unchanged.
+
 ## `POST /v1/turns/:turn_id/cancel`
 
 Barge-in: stops TTS and cancels the Arbiter `request_id` when known.

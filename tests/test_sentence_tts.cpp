@@ -1088,6 +1088,7 @@ int main() {
 <rss><channel><item>
   <title>Harbour lights</title>
   <link>https://example.com/harbour</link>
+  <description>The harbour authority switched the navigation lights back on after the storm.</description>
 </item></channel></rss>)";
     const char* quotes = R"({
       "quoteResponse": {"result": [{
@@ -1179,6 +1180,13 @@ int main() {
     CHECK(weather_card);
     CHECK(news_card);
     CHECK(market_card);
+    const auto kept_cards = sessions_cards->get("dev-cards");
+    CHECK(kept_cards.has_value());
+    if (kept_cards) {
+      CHECK(kept_cards->last_card.find("Harbour lights") != std::string::npos);
+      CHECK(kept_cards->last_card.find("navigation lights back on") !=
+            std::string::npos);
+    }
     const auto said = tts_cards->snapshot();
     CHECK(said.size() >= 4);
     if (!said.empty()) CHECK(said.front().find("It's ") == 0);
@@ -1265,7 +1273,10 @@ int main() {
     CHECK(clock.used_fast_path);
     const auto kept = sessions_card->get("dev-card");
     CHECK(kept.has_value());
-    if (kept) CHECK(kept->last_card == card_json);
+    if (kept) {
+      CHECK(kept->last_card.find("Fed holds rates") != std::string::npos);
+      CHECK(kept->last_card.find("Microsoft") != std::string::npos);
+    }
 
     const auto joke = pipe_card.run_text_utterance(
         "dev-card", "tell me a joke", sink_card);
@@ -1273,6 +1284,130 @@ int main() {
     CHECK(!joke.used_fast_path);
     CHECK(arbiter_card->last_message == "tell me a joke");
     std::filesystem::remove(db_card);
+  }
+
+  {
+    auto tts_deep = std::make_shared<RecordingTts>();
+    auto arbiter_deep = std::make_shared<StreamingArbiter>(tts_deep);
+    auto stt_deep = std::make_shared<DummyStt>();
+    const auto db_deep =
+        std::filesystem::temp_directory_path() / "intercom_card_depth.db";
+    std::filesystem::remove(db_deep);
+    auto sessions_deep = std::make_shared<intercom::SessionStore>(db_deep.string());
+    CHECK(sessions_deep->open(&err));
+    intercom::Config cfg_deep;
+    cfg_deep.fast_path = true;
+    cfg_deep.filler.enabled = false;
+    intercom::TurnPipeline pipe_deep(
+        cfg_deep, stt_deep, tts_deep, arbiter_deep, sessions_deep, nullptr);
+    CollectingSink sink_deep;
+    const std::string deep_json =
+        "{\"active\":\"news\",\"news\":["
+        "{\"label\":\"Fed holds rates\",\"detail\":\"Reuters\","
+        "\"summary\":\"The Federal Reserve left rates unchanged and signalled patience.\"},"
+        "{\"label\":\"Markets rally\",\"detail\":\"BBC\","
+        "\"summary\":\"Shares rose into the close after a quiet morning.\"},"
+        "{\"label\":\"Port strike ends\",\"detail\":\"AP\","
+        "\"summary\":\"Dock workers agreed a new contract overnight.\"},"
+        "{\"label\":\"Oil slips\",\"detail\":\"FT\","
+        "\"summary\":\"Crude fell on a surprise stockpile build.\"},"
+        "{\"label\":\"Chip demand\",\"detail\":\"Nikkei\","
+        "\"summary\":\"Orders for factory tools stayed strong through the quarter.\"}"
+        "],\"markets\":["
+        "{\"label\":\"Apple\",\"detail\":\"one hundred ninety two, up two percent\"},"
+        "{\"label\":\"Microsoft\",\"detail\":\"four hundred, down one percent\"}"
+        "]}";
+    intercom::DeviceSession seeded_deep;
+    seeded_deep.device_id = "dev-deep";
+    seeded_deep.conversation_id = 42;
+    seeded_deep.last_user = "what's in the news";
+    seeded_deep.last_spoken = "Here are the top headlines.";
+    seeded_deep.last_fast_path_kind = "news";
+    seeded_deep.last_card = deep_json;
+    CHECK(sessions_deep->upsert(seeded_deep, &err));
+
+    const auto pointed = pipe_deep.run_text_utterance(
+        "dev-deep", "the second one", sink_deep);
+    CHECK(pointed.ok);
+    CHECK(pointed.used_fast_path);
+    const auto pointed_text = tts_deep->snapshot();
+    CHECK(!pointed_text.empty());
+    if (!pointed_text.empty()) {
+      CHECK(pointed_text.back() ==
+            "The second headline is Markets rally, from BBC.");
+    }
+
+    const auto more = pipe_deep.run_text_utterance(
+        "dev-deep", "tell me more", sink_deep);
+    CHECK(more.ok);
+    CHECK(more.used_fast_path);
+    const auto more_text = tts_deep->snapshot();
+    CHECK(!more_text.empty());
+    if (!more_text.empty()) {
+      CHECK(more_text.back().find(
+                "Shares rose into the close after a quiet morning.") !=
+            std::string::npos);
+    }
+    CHECK(arbiter_deep->last_message.empty());
+
+    const auto deeper = pipe_deep.run_text_utterance("dev-deep", "go on", sink_deep);
+    CHECK(deeper.ok);
+    CHECK(!deeper.used_fast_path);
+    CHECK(arbiter_deep->last_message.find("CARD CONTEXT") != std::string::npos);
+    CHECK(arbiter_deep->last_message.find("Markets rally") != std::string::npos);
+    CHECK(arbiter_deep->last_message.find(
+              "Shares rose into the close after a quiet morning.") !=
+          std::string::npos);
+    CHECK(arbiter_deep->last_message.find("Go further") != std::string::npos);
+    CHECK(arbiter_deep->last_message.find("[CURRENT USER REQUEST]\ngo on") !=
+          std::string::npos);
+
+    const auto named = pipe_deep.run_text_utterance(
+        "dev-deep", "the one about the fed", sink_deep);
+    CHECK(named.ok);
+    CHECK(named.used_fast_path);
+    const auto named_text = tts_deep->snapshot();
+    CHECK(!named_text.empty());
+    if (!named_text.empty()) {
+      CHECK(named_text.back() ==
+            "The first headline is Fed holds rates, from Reuters.");
+    }
+
+    const auto rest = pipe_deep.run_text_utterance("dev-deep", "what else", sink_deep);
+    CHECK(rest.ok);
+    CHECK(rest.used_fast_path);
+    const auto rest_text = tts_deep->snapshot();
+    CHECK(!rest_text.empty());
+    if (!rest_text.empty()) {
+      CHECK(rest_text.back().find("The fourth headline is Oil slips, from FT.") !=
+            std::string::npos);
+      CHECK(rest_text.back().find(
+                "The fifth headline is Chip demand, from Nikkei.") !=
+            std::string::npos);
+    }
+
+    const auto done = pipe_deep.run_text_utterance("dev-deep", "what else", sink_deep);
+    CHECK(done.ok);
+    CHECK(done.used_fast_path);
+    const auto done_text = tts_deep->snapshot();
+    CHECK(!done_text.empty());
+    if (!done_text.empty()) CHECK(done_text.back() == "That is the list.");
+
+    const auto quote_more = pipe_deep.run_text_utterance(
+        "dev-deep", "more on the second quote", sink_deep);
+    CHECK(quote_more.ok);
+    CHECK(!quote_more.used_fast_path);
+    CHECK(arbiter_deep->last_message.find("Microsoft") != std::string::npos);
+    CHECK(arbiter_deep->last_message.find("four hundred, down one percent") !=
+          std::string::npos);
+    CHECK(arbiter_deep->last_message.find("CARD CONTEXT") != std::string::npos);
+
+    const auto aside = pipe_deep.run_text_utterance(
+        "dev-deep", "tell me a joke", sink_deep);
+    CHECK(aside.ok);
+    CHECK(!aside.used_fast_path);
+    CHECK(arbiter_deep->last_message == "tell me a joke");
+    std::filesystem::remove(db_deep);
   }
 
   if (g_fails != 0) {
