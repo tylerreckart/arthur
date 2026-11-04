@@ -116,7 +116,7 @@ private struct WeatherCard: View {
     .padding(.horizontal, 14)
     .padding(.vertical, 12)
     .frame(maxWidth: 360, alignment: .leading)
-    .glassEffect(.regular, in: .rect(cornerRadius: 16, style: .continuous))
+    .arthurPlate(radius: 16)
   }
 
   private var compactBody: some View {
@@ -139,7 +139,7 @@ private struct WeatherCard: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
+    .arthurPlate(radius: 14)
   }
 
   private var compactSummary: String {
@@ -236,7 +236,7 @@ private struct NewsCard: View {
     .padding(.horizontal, 14)
     .padding(.vertical, 12)
     .frame(maxWidth: 360, alignment: .leading)
-    .glassEffect(.regular, in: .rect(cornerRadius: 16, style: .continuous))
+    .arthurPlate(radius: 16)
   }
 
   private var compactBody: some View {
@@ -263,7 +263,7 @@ private struct NewsCard: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
+    .arthurPlate(radius: 14)
   }
 
   @ViewBuilder
@@ -374,7 +374,7 @@ private struct MarketsCard: View {
     .padding(.horizontal, 14)
     .padding(.vertical, 12)
     .frame(maxWidth: 360, alignment: .leading)
-    .glassEffect(.regular, in: .rect(cornerRadius: 16, style: .continuous))
+    .arthurPlate(radius: 16)
   }
 
   private var compactBody: some View {
@@ -397,7 +397,7 @@ private struct MarketsCard: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
+    .arthurPlate(radius: 14)
   }
 
   private var compactSummary: String {
@@ -490,6 +490,6 @@ private struct GenericSurfaceCard: View {
     .padding(.horizontal, compact ? 12 : 14)
     .padding(.vertical, compact ? 8 : 12)
     .frame(maxWidth: compact ? .infinity : 360, alignment: .leading)
-    .glassEffect(.regular, in: .rect(cornerRadius: compact ? 14 : 16, style: .continuous))
+    .arthurPlate(radius: compact ? 14 : 16)
   }
 }

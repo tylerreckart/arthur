@@ -23,8 +23,8 @@ final class WindowTransparencyView: NSView {
   func apply() {
     guard let window, window !== appliedWindow else { return }
     appliedWindow = window
-    window.isOpaque = false
-    window.backgroundColor = .clear
+    window.isOpaque = true
+    window.backgroundColor = .black
     window.titlebarAppearsTransparent = true
     window.titlebarSeparatorStyle = .none
     window.styleMask.insert(.fullSizeContentView)

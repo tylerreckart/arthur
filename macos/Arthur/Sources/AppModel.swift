@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import SwiftUI
 
@@ -100,6 +101,15 @@ final class AppModel {
       ConfigStore.saveQuietTextMode(quietTextMode)
     }
   }
+  /// Empty follows the system default microphone.
+  var microphoneID = "" {
+    didSet {
+      guard oldValue != microphoneID else { return }
+      ConfigStore.saveMicrophoneID(microphoneID)
+      audio.preferredDeviceID = microphoneID
+    }
+  }
+  var microphones: [MicInput] = []
   /// Last user-turn surface we can infer: this Mac, or the hallway button
   /// (session `last_turn_id` moved without a local send).
   var lastSurface: ConversationSurface?
@@ -137,6 +147,8 @@ final class AppModel {
     audio.soundEnabled = soundOn
     pttHotkey = PTTHotkey.load()
     quietTextMode = ConfigStore.loadQuietTextMode()
+    microphoneID = ConfigStore.loadMicrophoneID()
+    audio.preferredDeviceID = microphoneID
     transcriptDeviceId = config.deviceId
     discussion = ConfigStore.loadTranscript(deviceId: transcriptDeviceId)
     draft = ConfigStore.loadDraft()
@@ -165,6 +177,7 @@ final class AppModel {
     guard !started else { return }
     started = true
     installKeys()
+    refreshMicrophones()
     audio.requestMic { [weak self] ok in
       self?.micGranted = ok
       if !ok { self?.errorText = "Microphone access is off — type instead, or enable it in System Settings." }
@@ -305,6 +318,30 @@ final class AppModel {
     mcpProbes = probes
   }
 
+  func refreshMicrophones() {
+    micGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    microphones = AudioIO.availableInputs()
+  }
+
+  func requestMicrophoneAccess() {
+    let status = AVCaptureDevice.authorizationStatus(for: .audio)
+    if status == .denied || status == .restricted {
+      let urls = [
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone",
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+      ]
+      for raw in urls {
+        guard let url = URL(string: raw) else { continue }
+        if NSWorkspace.shared.open(url) { return }
+      }
+      return
+    }
+    audio.requestMic { [weak self] ok in
+      self?.micGranted = ok
+      self?.refreshMicrophones()
+    }
+  }
+
   func setMcpEnabled(_ name: String, _ enabled: Bool) {
     guard let idx = mcpServers.firstIndex(where: { $0.name == name }) else { return }
     mcpServers[idx].enabled = enabled
@@ -397,6 +434,13 @@ final class AppModel {
     endpoint.reset()
     let elapsed = Date().timeIntervalSince(pttStarted ?? Date())
     pttStarted = nil
+    if audio.capturePeak < 0.001 {
+      client.sendCancel()
+      clearHearing()
+      become(client.isConnected ? .idle : .disconnected)
+      errorText = "I didn't hear the microphone."
+      return
+    }
     let tooShort = wasHandsFree ? pcmBytes < 8000 : (elapsed < 0.35 || pcmBytes < 8000)
     if tooShort {
       client.sendCancel()
@@ -678,7 +722,7 @@ final class AppModel {
 
   private func attachSurface(_ surface: ChatSurface, turnId rawTurnId: String) {
     let keys = replyKeys(for: rawTurnId)
-    if let idx = discussion.indices.last(where: { line in
+    if let idx = discussion.lastIndex(where: { line in
       !line.fromYou && keys.contains(line.turnId)
     }) {
       applySurface(surface, at: idx, turnKey: keys.first { $0.hasPrefix("turn:") } ?? keys.first)

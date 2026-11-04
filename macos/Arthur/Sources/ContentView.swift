@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import SwiftUI
 
 struct ContentView: View {
@@ -18,16 +19,7 @@ struct ContentView: View {
 
   var body: some View {
     @Bindable var model = model
-    ZStack(alignment: .top) {
-      SpeakingRipple(
-        active: model.phase == .speaking,
-        energy: model.speakLevel,
-        restrained: rippleRestrained
-      )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-      NavigationStack {
+    NavigationStack {
         transcript
           .navigationTitle("Arthur")
           .toolbarTitleDisplayMode(.inline)
@@ -54,7 +46,6 @@ struct ContentView: View {
               .help("Settings")
             }
           }
-          .scrollEdgeEffectStyle(.soft, for: .top)
           .safeAreaBar(edge: .top) {
             if let notice = model.speakBack {
               SpeakBackBanner(notice: notice) {
@@ -86,30 +77,11 @@ struct ContentView: View {
             SettingsView()
               .environment(model)
           }
-      }
-      Rectangle()
-        .fill(.ultraThinMaterial)
-        .mask {
-          LinearGradient(
-            stops: [
-              .init(color: .black.opacity(0.55), location: 0),
-              .init(color: .black.opacity(0.18), location: 0.62),
-              .init(color: .clear, location: 1),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-          )
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: ArthurChrome.fadeBand)
-        .ignoresSafeArea(edges: .top)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
     .coordinateSpace(ArthurChrome.space)
     .preferredColorScheme(.dark)
-    .tint(ArthurTheme.accent)
-    .background(.clear)
+    .tint(.white)
+    .background(Color.black)
     .onChange(of: typing) { _, on in
       model.composerFocused = on
       if on, !didShowReturnHint {
@@ -204,7 +176,6 @@ struct ContentView: View {
           }
         }
         .scrollContentBackground(.hidden)
-        .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
         .scrollIndicators(.automatic)
         .background { ScrollEdgeEnabler() }
         .background(.clear)
@@ -334,22 +305,19 @@ struct ContentView: View {
     model.lastSurface == .hallway
   }
 
-  private var rippleRestrained: Bool {
-    model.discussion.filter(\.fromYou).count >= 2 || scrolledAway
-  }
-
   private func fold(_ text: String) -> String {
     ArthurProseJoin.fold(text)
   }
 
   private var emptyState: some View {
     VStack(spacing: 22) {
-      VStack(spacing: 8) {
-        Text("Arthur")
-          .font(.system(.largeTitle, design: .serif))
+      VStack(spacing: 10) {
+        Text("Hello.")
+          .font(.system(size: 28, weight: .regular, design: .serif))
+          .foregroundStyle(ArthurTheme.paper)
         Text(emptyHint)
-          .font(.callout)
-          .foregroundStyle(.secondary)
+          .font(.system(size: 15, weight: .regular))
+          .foregroundStyle(ArthurTheme.mute)
           .multilineTextAlignment(.center)
       }
       if !model.holding {
@@ -359,8 +327,8 @@ struct ContentView: View {
         }
       }
       Text(emptyFooter)
-        .font(.caption)
-        .foregroundStyle(.tertiary)
+        .font(.system(size: 12))
+        .foregroundStyle(ArthurTheme.whisper)
     }
     .padding(.horizontal, 28)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -461,11 +429,12 @@ struct ContentView: View {
         Text("Jump to latest")
           .font(.caption.weight(.semibold))
       }
+      .foregroundStyle(ArthurTheme.paper)
       .padding(.horizontal, 12)
       .padding(.vertical, 6)
     }
     .buttonStyle(.plain)
-    .glassEffect(.regular.interactive(), in: .capsule)
+    .arthurPlate(radius: 14)
     .padding(.bottom, 6)
     .help("Scroll to the latest line")
     .accessibilityLabel("Jump to latest")
@@ -484,7 +453,7 @@ private struct WorkTrail: View {
   var body: some View {
     HStack(spacing: 8) {
       Circle()
-        .fill(ArthurTheme.accent)
+        .fill(Color.white.opacity(0.7))
         .frame(width: 6, height: 6)
         .opacity(pulse ? 1 : 0.32)
       Text(line)
@@ -509,7 +478,7 @@ private struct SpeakBackBanner: View {
   var body: some View {
     HStack(alignment: .top, spacing: 10) {
       Image(systemName: notice.muted ? "bell.slash.fill" : "bell.fill")
-        .foregroundStyle(ArthurTheme.accent)
+        .foregroundStyle(ArthurTheme.paper)
         .padding(.top, 1)
       VStack(alignment: .leading, spacing: 2) {
         Text(notice.title)
@@ -538,7 +507,7 @@ private struct SpeakBackBanner: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
-    .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
+    .arthurPlate(radius: 14)
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(notice.title), \(notice.message)")
   }
@@ -551,7 +520,7 @@ private struct ErrorBanner: View {
   var body: some View {
     HStack(alignment: .top, spacing: 8) {
       Image(systemName: "exclamationmark.circle.fill")
-        .foregroundStyle(ArthurTheme.accent)
+        .foregroundStyle(ArthurTheme.paper)
         .padding(.top, 1)
       Text(text)
         .font(.callout)
@@ -570,7 +539,7 @@ private struct ErrorBanner: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
-    .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
+    .arthurPlate(radius: 14)
   }
 }
 
@@ -591,7 +560,8 @@ private struct StarterChip: View {
         .padding(.vertical, 6)
     }
     .buttonStyle(.plain)
-    .background(.fill.quaternary, in: Capsule())
+    .foregroundStyle(ArthurTheme.paper)
+    .arthurPlate(radius: 16)
     .help(title)
   }
 }
@@ -672,7 +642,6 @@ private struct ComposerBar: View {
     .animation(.easeInOut(duration: 0.16), value: model.holding)
     .animation(.easeInOut(duration: 0.16), value: model.canCancel)
     .animation(.easeInOut(duration: 0.16), value: model.quietTextMode)
-    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 22, style: .continuous))
   }
 
   private var listeningAffordance: some View {
@@ -680,8 +649,8 @@ private struct ComposerBar: View {
       ListeningMeter(level: model.inputLevel)
       VStack(alignment: .leading, spacing: 1) {
         Text("Listening")
-          .font(.body.weight(.medium))
-          .foregroundStyle(ArthurTheme.accent)
+          .font(.system(size: 20, weight: .regular, design: .serif))
+          .foregroundStyle(ArthurTheme.paper)
         Text(model.handsFree ? "Pause when you're done" : "Release to send")
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -703,7 +672,7 @@ private struct ListeningMeter: View {
       ForEach(0..<5, id: \.self) { i in
         let lit = level > Double(i) / 5.2
         Capsule()
-          .fill(ArthurTheme.accent.opacity(lit ? 0.95 : 0.28))
+          .fill(Color.white.opacity(lit ? 0.92 : 0.22))
           .frame(width: 3, height: 7 + CGFloat(i) * 2.4)
       }
     }
@@ -731,11 +700,11 @@ private struct QuietModeToggle: View {
             .font(.caption2.weight(.semibold))
         }
       }
-      .foregroundStyle(model.quietTextMode ? ArthurTheme.accent : .secondary)
+      .foregroundStyle(model.quietTextMode ? ArthurTheme.paper : ArthurTheme.mute)
       .padding(.horizontal, model.quietTextMode ? 8 : 6)
       .frame(height: 32)
       .background(
-        model.quietTextMode ? ArthurTheme.accent.opacity(0.16) : Color.clear,
+        model.quietTextMode ? Color.white.opacity(0.08) : Color.clear,
         in: Capsule()
       )
     }
@@ -793,9 +762,9 @@ private struct ComposerCircle: View {
   }
 
   private var circleFill: Color {
-    if !enabled { return Color.secondary.opacity(0.35) }
+    if !enabled { return Color.white.opacity(0.12) }
     if active { return .white }
-    return ArthurTheme.accent
+    return Color.white.opacity(0.14)
   }
 }
 
@@ -868,16 +837,11 @@ private struct UserCopy: View {
         ForEach(Array(texts.enumerated()), id: \.offset) { index, text in
           let live = liveLast && index == texts.count - 1
           Text(text)
-            .font(.body)
-            .foregroundStyle(live ? .secondary : .primary)
+            .font(.system(size: 17, weight: .regular, design: .serif))
+            .foregroundStyle(live ? ArthurTheme.whisper : ArthurTheme.mute)
             .multilineTextAlignment(.trailing)
             .textSelection(.enabled)
-            .padding(.horizontal, 13)
-            .padding(.vertical, 8)
-            .background(
-              ArthurTheme.bubbleFill.opacity(live ? 0.7 : 1),
-              in: .rect(cornerRadius: 16, style: .continuous)
-            )
+            .padding(.vertical, 2)
             .transaction { txn in
               if live { txn.animation = nil }
             }
@@ -914,7 +878,7 @@ private struct ArthurCopy: View {
     VStack(alignment: .leading, spacing: 8) {
       Text(live ? "Arthur · writing" : "Arthur")
         .font(.caption2)
-        .foregroundStyle(ArthurTheme.accent.opacity(0.8))
+        .foregroundStyle(ArthurTheme.whisper)
       VStack(alignment: .leading, spacing: 4) {
         ForEach(Array(texts.enumerated()), id: \.offset) { index, text in
           let streaming = live && index == texts.count - 1
@@ -1048,6 +1012,32 @@ struct SettingsView: View {
         }
 
         Section {
+          LabeledContent("Access") {
+            Text(model.micGranted ? "Allowed" : "Off")
+              .foregroundStyle(model.micGranted ? ArthurTheme.mute : Color.white.opacity(0.92))
+          }
+          if !model.micGranted {
+            Button(microphoneAccessTitle) {
+              model.requestMicrophoneAccess()
+            }
+          }
+          Picker("Input", selection: $model.microphoneID) {
+            Text("System default").tag("")
+            ForEach(model.microphones) { mic in
+              Text(mic.name).tag(mic.id)
+            }
+            if !model.microphoneID.isEmpty,
+               !model.microphones.contains(where: { $0.id == model.microphoneID }) {
+              Text("Unavailable").tag(model.microphoneID)
+            }
+          }
+        } header: {
+          Text("Microphone")
+        } footer: {
+          Text(microphoneFooter)
+        }
+
+        Section {
           Toggle("Quiet text mode", isOn: $model.quietTextMode)
         } header: {
           Text("Typing")
@@ -1077,6 +1067,8 @@ struct SettingsView: View {
         }
       }
       .formStyle(.grouped)
+      .scrollContentBackground(.hidden)
+      .background(Color.black)
       .navigationTitle("Settings")
       .navigationDestination(for: McpEditorRoute.self) { route in
         McpServerEditor(route: route, server: mcpServer(for: route))
@@ -1091,11 +1083,15 @@ struct SettingsView: View {
               model.applySettings()
               dismiss()
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.plain)
+            .font(.system(size: 13, weight: .semibold))
           }
         }
       }
-      .onAppear { model.loadMcpRegistry() }
+      .onAppear {
+        model.loadMcpRegistry()
+        model.refreshMicrophones()
+      }
     }
     .frame(minWidth: 520, minHeight: 560)
     .preferredColorScheme(.dark)
@@ -1113,6 +1109,27 @@ struct SettingsView: View {
       items.insert(model.pttHotkey, at: 0)
     }
     return items
+  }
+
+  private var microphoneAccessTitle: String {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .denied, .restricted:
+      return "Open System Settings"
+    default:
+      return "Allow microphone"
+    }
+  }
+
+  private var microphoneFooter: String {
+    if !model.microphoneID.isEmpty,
+       !model.microphones.contains(where: { $0.id == model.microphoneID }) {
+      return "That microphone is unplugged. Arthur will use the system default until it comes back."
+    }
+    if let chosen = model.microphones.first(where: { $0.id == model.microphoneID }) {
+      return "Arthur records from \(chosen.name) while you hold talk."
+    }
+    let system = AudioIO.captureDevice(preferredID: "")?.localizedName ?? "the Mac’s current microphone"
+    return "System default is \(system). Arthur follows it until you pick an input."
   }
 
   private var pttHotkeyFooter: String {

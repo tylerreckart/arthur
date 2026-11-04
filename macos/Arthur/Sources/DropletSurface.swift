@@ -25,86 +25,28 @@ struct DripSample: Equatable {
 }
 
 enum DripMotion {
+  /// Fades up into the corner. The card is not attached to the toolbar.
   static func opening(_ t: Double) -> DripSample {
-    if t >= 1.28 { return .settled }
-    let gather = smooth(seg(t, 0.00, 0.16))
-    let descend = gravity(segRaw(t, 0.10, 0.50))
-    let land = smooth(seg(t, 0.46, 0.64))
-    let fall = min(1, 0.05 * gather + 0.90 * descend + 0.10 * land)
-
-    let bridgeIn = smooth(seg(t, 0.00, 0.14))
-    let bridgeOut = smooth(seg(t, 0.38, 0.58))
-    let bridge = max(0, bridgeIn * (1 - bridgeOut))
-
-    let expand = easeOutBack(clamp01((t - 0.56) / 0.48))
-    let morph = expand
-    let content = smooth(clamp01((min(morph, 1.05) - 0.60) / 0.30))
-    let presence = t < 0.04 ? smooth(t / 0.04) : 1
-
-    var sx = 1 - 0.16 * sin(fall * .pi) * (1 - min(morph, 1))
-    var sy = 1 + 0.50 * sin(fall * .pi) * (1 - min(morph, 1))
-    let age = t - 1.02
-    if age > 0 && age < 0.36 {
-      let damp = exp(-age * 8)
-      let wobble = sin(age * 22) * damp
-      sx += 0.045 * wobble
-      sy -= 0.07 * wobble
-    }
+    if t >= 0.4 { return .settled }
+    let reveal = smoother(min(1, t / 0.34))
     return DripSample(
-      fall: Float(fall),
-      bridge: Float(bridge),
-      morph: Float(morph),
-      squishX: Float(sx),
-      squishY: Float(sy),
-      content: Float(content),
-      presence: Float(presence)
+      fall: Float(reveal), bridge: 0, morph: 1, squishX: 1, squishY: 1,
+      content: Float(reveal), presence: Float(reveal)
     )
   }
 
   static func closing(_ t: Double) -> DripSample {
     if t <= 0 { return .settled }
-    let fade = smooth(seg(t, 0.00, 0.12))
-    let shrink = smooth(seg(t, 0.06, 0.28))
-    let rise = gravity(segRaw(t, 0.22, 0.48))
-    let absorb = smooth(seg(t, 0.30, 0.46))
-    let gone = smooth(seg(t, 0.44, 0.56))
+    let gone = smoother(min(1, t / 0.22))
     return DripSample(
-      fall: Float(1 - rise),
-      bridge: Float(absorb * (1 - gone) * 0.9),
-      morph: Float(1 - shrink),
-      squishX: Float(1 - 0.06 * shrink),
-      squishY: Float(1 + 0.42 * shrink * (1 - rise)),
-      content: Float(1 - fade),
-      presence: Float(1 - gone)
+      fall: Float(1 - gone), bridge: 0, morph: 1, squishX: 1, squishY: 1,
+      content: Float(1 - gone), presence: Float(1 - gone)
     )
   }
 
-  private static func clamp01(_ x: Double) -> Double { min(1, max(0, x)) }
-
-  private static func smooth(_ x: Double) -> Double {
-    let u = clamp01(x)
-    return u * u * (3 - 2 * u)
-  }
-
-  private static func seg(_ t: Double, _ a: Double, _ b: Double) -> Double {
-    smooth((t - a) / (b - a))
-  }
-
-  private static func segRaw(_ t: Double, _ a: Double, _ b: Double) -> Double {
-    clamp01((t - a) / (b - a))
-  }
-
-  private static func gravity(_ u: Double) -> Double {
-    let t = clamp01(u)
-    return t * t
-  }
-
-  /// Slight overshoot so the card settles like a drop hitting glass.
-  private static func easeOutBack(_ x: Double) -> Double {
-    let t = clamp01(x)
-    let c1 = 1.05
-    let c3 = c1 + 1
-    return 1 + c3 * pow(t - 1, 3) + c1 * pow(t - 1, 2)
+  private static func smoother(_ x: Double) -> Double {
+    let u = min(1, max(0, x))
+    return u * u * u * (u * (u * 6 - 15) + 10)
   }
 }
 
@@ -152,6 +94,7 @@ struct DropletContent: Equatable {
     hotkey: "⌥Space"
   )
 
+  @MainActor
   static func capture(_ model: AppModel) -> DropletContent {
     let stage: DropletStage
     if model.holding || model.phase == .listening {
@@ -257,7 +200,7 @@ struct DropletContent: Equatable {
 enum DropletMetrics {
   static let panelSize = CGSize(width: 480, height: 700)
   static let cardWidth: CGFloat = 348
-  static let topInset: CGFloat = 16
+  static let cornerMargin: CGFloat = 20
   static let corner: CGFloat = 28
 }
 
@@ -433,8 +376,8 @@ struct ArthurBead: View {
             .fill(
               RadialGradient(
                 colors: [
-                  Color.white.opacity(0.72 + breath * 0.18),
-                  Color.white.opacity(0.14),
+                  Color.white.opacity(0.22 + breath * 0.06),
+                  Color.white.opacity(0.05),
                   Color.clear,
                 ],
                 center: UnitPoint(x: 0.5 + specX, y: 0.5 + specY),
@@ -448,9 +391,9 @@ struct ArthurBead: View {
             .strokeBorder(
               LinearGradient(
                 colors: [
-                  Color.white.opacity(0.62),
-                  Color.white.opacity(0.06),
-                  Color.white.opacity(listening ? 0.34 : 0.18),
+                  Color.white.opacity(0.22),
+                  Color.white.opacity(0.04),
+                  Color.white.opacity(listening ? 0.12 : 0.06),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -498,19 +441,7 @@ struct DropletCardRoot: View {
       let drag = session.dragOffset(at: now)
       GeometryReader { geo in
         let layout = layout(in: geo.size, sample: sample, drag: drag)
-        let draw = makeDraw(sample: sample, layout: layout, time: session.shaderTime(at: now))
-        ZStack(alignment: .topLeading) {
-          if session.metalOK {
-            DropletMetal(draw: draw) {
-              session.metalOK = false
-            }
-            .allowsHitTesting(false)
-          } else {
-            DropletFallbackBody(draw: draw)
-              .allowsHitTesting(false)
-          }
-          card(sample: sample, layout: layout)
-        }
+        card(sample: sample, layout: layout)
         .frame(width: geo.size.width, height: geo.size.height)
         .onAppear { session.actions.cardFrame(layout.card) }
         .onChange(of: layout.card) { _, rect in
@@ -547,7 +478,7 @@ struct DropletCardRoot: View {
       guard token > 0 else { return }
       let expected = token
       Task { @MainActor in
-        try? await Task.sleep(for: .milliseconds(580))
+        try? await Task.sleep(for: .milliseconds(280))
         guard session.closeToken == expected, session.closing else { return }
         session.actions.didFinishClose()
       }
@@ -555,24 +486,23 @@ struct DropletCardRoot: View {
   }
 
   private func hitsOpen(_ sample: DripSample) -> Bool {
-    sample.content > 0.55 && sample.presence > 0.85
+    sample.presence > 0.2
   }
 
   private func layout(in size: CGSize, sample: DripSample, drag: CGSize) -> DropletLayout {
     let width = DropletMetrics.cardWidth
-    var x = session.anchorX - width / 2
-    x = min(max(18, x), max(18, size.width - width - 18))
     let height = session.cardHeight
+    let margin = DropletMetrics.cornerMargin
     let rect = CGRect(
-      x: x + drag.width,
-      y: DropletMetrics.topInset + drag.height,
+      x: size.width - width - margin + drag.width,
+      y: size.height - height - margin + drag.height,
       width: width,
       height: height
     )
     return DropletLayout(
       card: rect,
-      anchor: CGPoint(x: session.anchorX, y: 1),
-      squish: squish(sample: sample, drag: drag)
+      anchor: CGPoint(x: rect.midX, y: rect.minY),
+      squish: CGSize(width: 1, height: 1)
     )
   }
 
@@ -584,7 +514,7 @@ struct DropletCardRoot: View {
 
   private func makeDraw(sample: DripSample, layout: DropletLayout, time: Float) -> DropletDraw {
     let hover = session.hovering
-    DropletDraw(
+    return DropletDraw(
       time: time,
       anchorX: Float(layout.anchor.x),
       anchorY: Float(layout.anchor.y),
@@ -619,34 +549,19 @@ struct DropletCardRoot: View {
   @ViewBuilder
   private func card(sample: DripSample, layout: DropletLayout) -> some View {
     let reveal = CGFloat(min(max(sample.content, 0), 1))
-    DropletCardBody(session: session, bead: bead)
+    let rise = CGFloat(min(max(sample.fall, 0), 1))
+    DropletCardBody(session: session)
       .fixedSize(horizontal: false, vertical: true)
       .background {
         GeometryReader { proxy in
           Color.clear.preference(key: DropletHeightKey.self, value: proxy.size.height)
         }
       }
+      .background(Color.black, in: RoundedRectangle(cornerRadius: DropletMetrics.corner, style: .continuous))
       .clipShape(RoundedRectangle(cornerRadius: DropletMetrics.corner, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: DropletMetrics.corner, style: .continuous)
-          .strokeBorder(
-            LinearGradient(
-              colors: [
-                Color.white.opacity(0.32),
-                Color.white.opacity(0.06),
-                Color.white.opacity(0.16),
-              ],
-              startPoint: .top,
-              endPoint: .bottom
-            ),
-            lineWidth: 1
-          )
-          .allowsHitTesting(false)
-      }
-      .position(x: layout.card.midX, y: layout.card.midY)
       .opacity(reveal)
-      .blur(radius: (1 - reveal) * 10)
-      .scaleEffect(x: 0.965 + 0.035 * reveal, y: 0.98 + 0.02 * reveal, anchor: .top)
+      .offset(y: (1 - rise) * 36)
+      .position(x: layout.card.midX, y: layout.card.midY)
       .onPreferenceChange(DropletHeightKey.self) { session.setCardHeight($0) }
       .preferredColorScheme(.dark)
   }
@@ -667,159 +582,64 @@ private struct DropletHeightKey: PreferenceKey {
 
 private struct DropletCardBody: View {
   var session: DropletSession
-  var bead: BeadState
-  @State private var draft = ""
-  @FocusState private var field: Bool
 
   var body: some View {
     let content = session.content
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(alignment: .center, spacing: 12) {
-        talkBead
-        VStack(alignment: .leading, spacing: 2) {
-          Text(content.title)
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(Color.white.opacity(0.96))
-          if !content.subtitle.isEmpty {
-            Text(content.subtitle)
-              .font(.system(size: 12))
-              .foregroundStyle(Color.white.opacity(0.42))
-              .lineLimit(2)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-        }
-        Spacer(minLength: 6)
-        Button {
-          session.actions.dismiss()
-        } label: {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack {
+        Spacer(minLength: 0)
+        Button(action: { session.actions.dismiss() }) {
           Image(systemName: "xmark")
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(Color.white.opacity(0.55))
-            .frame(width: 22, height: 22)
-            .background(Color.white.opacity(0.06), in: Circle())
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Color.white.opacity(0.82))
+            .frame(width: 36, height: 32)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help("Dismiss")
         .accessibilityLabel("Dismiss")
       }
 
-      if content.stage == .listening {
-        InkWaveform(level: content.level)
-      } else if content.stage == .thinking {
-        ThinkingSheen()
-      }
-
-      if !content.you.isEmpty {
-        VStack(alignment: .leading, spacing: 2) {
-          if content.stage != .listening {
-            Text("You")
-              .font(.system(size: 10, weight: .medium))
-              .foregroundStyle(Color.white.opacity(0.32))
-          }
-          Text(content.you)
-            .font(.system(size: 13))
-            .foregroundStyle(Color.white.opacity(content.stage == .listening ? 0.72 : 0.5))
-            .lineLimit(content.stage == .listening ? 4 : 3)
+      if content.reply.isEmpty {
+        Text(content.stage == .ready ? "Hello." : "Listening")
+          .font(.system(size: 20, weight: .regular, design: .serif))
+          .foregroundStyle(Color.white.opacity(0.92))
+          .frame(maxWidth: .infinity, alignment: .leading)
+        if content.stage == .ready,
+           !content.subtitle.isEmpty,
+           !content.subtitle.hasPrefix("Hold the droplet") {
+          Text(content.subtitle)
+            .font(.system(size: 13, weight: .regular))
+            .foregroundStyle(Color.white.opacity(0.55))
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+      } else {
+        SpokenReply(text: content.reply)
       }
 
-      if !content.reply.isEmpty {
-        Text(content.reply)
-          .font(.system(size: 17, weight: .regular, design: .serif))
-          .foregroundStyle(Color.white.opacity(0.94))
-          .lineLimit(8)
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .contextMenu {
-            Button("Copy") { ArthurPasteboard.copy(content.reply) }
-          }
-      }
-
-      if !content.noteTitle.isEmpty || !content.noteBody.isEmpty {
-        VStack(alignment: .leading, spacing: 2) {
-          if !content.noteTitle.isEmpty {
-            Text(content.noteTitle)
-              .font(.system(size: 12, weight: .semibold))
-              .foregroundStyle(Color.white.opacity(0.84))
-          }
-          if !content.noteBody.isEmpty {
-            Text(content.noteBody)
-              .font(.system(size: 12))
-              .foregroundStyle(Color.white.opacity(0.46))
-              .lineLimit(3)
-          }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-          RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-        }
-      }
-
-      if content.stage == .ready {
-        TextField("Ask Arthur", text: $draft)
-          .textFieldStyle(.plain)
-          .font(.body)
-          .foregroundStyle(Color.white)
-          .focused($field)
-          .onSubmit(commit)
-          .padding(.horizontal, 12)
-          .padding(.vertical, 8)
-          .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-          .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-              .strokeBorder(Color.white.opacity(field ? 0.34 : 0.10), lineWidth: 1)
-          }
-          .onChange(of: field) { _, on in
-            session.fieldFocused = on
-            session.actions.fieldFocus(on)
-          }
-      }
-
-      HStack(spacing: 8) {
-        if content.canCancel {
-          Button {
-            session.actions.stop()
-          } label: {
-            Text("Stop")
-              .font(.system(size: 12, weight: .semibold))
-              .foregroundStyle(Color.black)
-              .padding(.horizontal, 12)
-              .frame(height: 26)
-              .background(Color.white, in: Capsule())
-          }
-          .buttonStyle(InkPressStyle())
-          .help("Stop Arthur")
-          .accessibilityLabel("Stop")
-        }
+      HStack {
         Spacer(minLength: 0)
-        Button {
-          session.actions.open()
-        } label: {
+        Button(action: { session.actions.open() }) {
           Text("Open")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(Color.white.opacity(0.78))
-            .padding(.horizontal, 12)
-            .frame(height: 26)
-            .background(Color.white.opacity(0.08), in: Capsule())
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color.white.opacity(0.92))
+            .padding(.horizontal, 16)
+            .frame(height: 32)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(InkPressStyle())
+        .buttonStyle(.plain)
         .help("Open the conversation")
         .accessibilityLabel("Open Arthur")
       }
     }
     .padding(16)
     .frame(width: DropletMetrics.cardWidth, alignment: .leading)
-    .animation(.spring(response: 0.42, dampingFraction: 0.86), value: content.stage)
+    .animation(.easeOut(duration: 0.28), value: content.reply)
     .simultaneousGesture(cardDrag)
   }
 
   private var cardDrag: some Gesture {
-    DragGesture(minimumDistance: 10)
+    DragGesture(minimumDistance: 18)
       .onChanged { value in
         guard !session.talkArmed, !session.fieldFocused, !session.closing else { return }
         let sample = session.sample(at: Date())
@@ -835,39 +655,44 @@ private struct DropletCardBody: View {
       }
   }
 
-  private var talkBead: some View {
-    ArthurBead(bead: bead, diameter: 26)
-      .scaleEffect(session.talkArmed ? 0.88 : 1)
-      .animation(.spring(response: 0.28, dampingFraction: 0.58), value: session.talkArmed)
-      .frame(width: 44, height: 44)
-      .contentShape(Circle())
-      .highPriorityGesture(
-        DragGesture(minimumDistance: 0)
-          .onChanged { _ in
-            guard session.content.canTalk else { return }
-            session.armTalk()
-          }
-          .onEnded { _ in
-            session.releaseTalk()
-          }
-      )
-      .help(talkHelp)
-      .accessibilityLabel(talkHelp)
-      .accessibilityAddTraits(.isButton)
+}
+
+/// Arthur's spoken reply, revealed a few characters at a time as it arrives.
+private struct SpokenReply: View {
+  var text: String
+  @State private var count = 0
+  @State private var reveal: Task<Void, Never>?
+
+  var body: some View {
+    Text(String(text.prefix(count)))
+      .font(.system(size: 20, weight: .regular, design: .serif))
+      .foregroundStyle(Color.white)
+      .lineLimit(8)
+      .textSelection(.enabled)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .contextMenu {
+        Button("Copy") { ArthurPasteboard.copy(text) }
+      }
+      .onAppear { catchUp(to: text) }
+      .onChange(of: text) { old, next in
+        if count > 0, !next.hasPrefix(String(old.prefix(count))) {
+          count = 0
+        }
+        catchUp(to: next)
+      }
+      .onDisappear { reveal?.cancel() }
   }
 
-  private var talkHelp: String {
-    let content = session.content
-    if content.handsFree { return "Pause when you're done" }
-    if content.holding { return "Release to send" }
-    return "Tap to talk, or hold to talk. \(content.hotkey)"
-  }
-
-  private func commit() {
-    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty else { return }
-    draft = ""
-    session.actions.send(text)
+  private func catchUp(to next: String) {
+    reveal?.cancel()
+    let target = next.count
+    reveal = Task { @MainActor in
+      while count < target, !Task.isCancelled {
+        let remaining = target - count
+        count = min(target, count + max(1, remaining / 10))
+        try? await Task.sleep(for: .milliseconds(22))
+      }
+    }
   }
 }
 
@@ -1043,7 +868,7 @@ private struct DropletGPU {
 }
 
 final class DropletRenderer: NSObject, MTKViewDelegate {
-  var drawState = DropletDraw(
+  fileprivate var drawState = DropletDraw(
     time: 0, anchorX: 0, anchorY: 0, cardX: 0, cardY: 0, cardW: 1, cardH: 1,
     fall: 0, bridge: 0, morph: 0, squishX: 1, squishY: 1, level: 0, speak: 0,
     phase: 0, pointerX: 0.3, pointerY: 0.2, hovering: 0, presence: 0
@@ -1264,62 +1089,48 @@ private enum DropletShader {
     float2 p = float2(in.uv.x * u.resolutionX, (1.0 - in.uv.y) * u.resolutionY);
     Scene scene = evalScene(p, u);
     float dist = scene.dist;
-    float eps = 1.35;
-    float dx = evalScene(p + float2(eps, 0.0), u).dist - evalScene(p - float2(eps, 0.0), u).dist;
-    float dy = evalScene(p + float2(0.0, eps), u).dist - evalScene(p - float2(0.0, eps), u).dist;
-    float2 N = normalize(float2(dx, dy) + float2(0.00001));
 
-    float2 pointer = float2(u.cardX, u.cardY) + float2(u.pointerX * u.cardW, u.pointerY * u.cardH);
-    float2 drift = float2(sin(u.time * 0.33) * 18.0, cos(u.time * 0.27) * 10.0);
-    float2 lightAt = mix(scene.center + float2(-40.0, -70.0) + drift, pointer, u.hovering);
-    float2 toLight = lightAt - p;
-    float2 L = normalize(float2(-0.38, -1.0) + toLight * 0.0035);
-    float ndotl = saturate(dot(N, L));
-    float spec = pow(saturate(dot(N, normalize(L + float2(0.1, -0.25)))), 36.0);
-    float streak = pow(saturate(1.0 - abs(N.x + 0.22)), 5.0) * saturate(-N.y);
-    float fres = pow(saturate(1.0 - dot(N, float2(0.0, -1.0))), 2.2);
-
+    // Normals of a rounded box are constant across each face and jump
+    // along the diagonals, which reads as a folded metal envelope.
+    // Shade only from position so the body stays a soft black drop.
     float2 rel = (p - scene.center) / max(scene.halfSize, float2(1.0));
-    float radial = saturate(dot(rel, rel));
-    float3 col = float3(0.012);
-    col += float3(0.055) * (1.0 - radial);
-    col += float3(0.07) * saturate(1.0 - (p.y - (scene.center.y - scene.halfSize.y)) / 42.0);
-    col += float3(0.55) * pow(ndotl, 1.35) * 0.10;
-    col += float3(1.0) * spec * 0.78;
-    col += float3(0.9) * streak * 0.20;
-    col += float3(0.82) * fres * 0.22;
+    float above = saturate(-rel.y);
+    float lift = above * above;
+    float2 drift = float2(sin(u.time * 0.31), cos(u.time * 0.23)) * 0.03;
+    float2 hover = (float2(u.pointerX, u.pointerY) - float2(0.32, 0.20)) * u.hovering * 0.12;
+    float2 h = (rel - float2(0.0, -0.55) - drift - hover) * float2(0.75, 1.35);
+    float lobe = exp(-dot(h, h) * 0.85);
+
+    float3 col = float3(0.015, 0.015, 0.017);
+    col += float3(0.045, 0.046, 0.050) * lift;
+    col += float3(0.55, 0.56, 0.58) * lobe * 0.045;
 
     if (u.phase > 0.5 && u.phase < 1.5) {
-      float wave = sin(p.x * 0.045 + u.time * 6.2) * (2.4 + u.level * 11.0);
-      float band = p.y - (scene.center.y + sin(u.time * 2.8) * 1.6 + wave);
-      float meniscus = exp(-band * band / (14.0 + u.level * 26.0));
-      col += float3(0.82) * meniscus * (0.10 + u.level * 0.55);
+      float wave = sin(p.x * 0.03 + u.time * 3.4) * (1.2 + u.level * 4.0);
+      float band = p.y - (scene.center.y - scene.halfSize.y * 0.04) - wave;
+      float meniscus = exp(-band * band / (48.0 + u.level * 40.0));
+      col += float3(0.55) * meniscus * (0.015 + u.level * 0.05);
     }
 
     if (u.phase > 1.5) {
-      float amp = u.phase > 2.5 ? (0.20 + u.speak * 0.5) : 0.15;
-      float2 c1 = scene.center + float2(sin(u.time * 0.62) * scene.halfSize.x * 0.5, cos(u.time * 0.48) * scene.halfSize.y * 0.28);
-      float2 c2 = scene.center + float2(cos(u.time * 0.41 + 1.7) * scene.halfSize.x * 0.32, sin(u.time * 0.53 + 0.8) * scene.halfSize.y * 0.36);
-      float b1 = exp(-dot(p - c1, p - c1) / (1700.0 + u.speak * 2400.0));
-      float b2 = exp(-dot(p - c2, p - c2) / 2800.0);
-      col += float3(0.93, 0.94, 0.96) * (b1 * 0.95 + b2 * 0.4) * amp;
+      float amp = u.phase > 2.5 ? (0.02 + u.speak * 0.035) : 0.016;
+      float2 c1 = scene.center + float2(sin(u.time * 0.45) * scene.halfSize.x * 0.35, cos(u.time * 0.32) * scene.halfSize.y * 0.16);
+      float b1 = exp(-dot(p - c1, p - c1) / 6400.0);
+      col += float3(0.62, 0.63, 0.66) * b1 * amp;
     }
 
-    float grain = fract(sin(dot(p + fract(u.time * 8.0), float2(127.1, 311.7))) * 43758.5453);
-    col += (grain - 0.5) * 0.014;
+    float rim = smoothstep(2.6, 0.6, abs(dist));
+    col += float3(0.40, 0.41, 0.43) * rim * above * 0.05;
     col = clamp(col, 0.0, 1.0);
 
-    float aa = 1.15;
+    float aa = mix(2.0, 1.1, clamp(u.morph, 0.0, 1.0));
     float bodyA = smoothstep(aa, -aa, dist) * u.presence;
-    float glow = smoothstep(22.0, 0.0, dist) * 0.12 * u.presence;
-    Scene shadowScene = evalScene(p - float2(0.0, 16.0), u);
-    float shadow = smoothstep(34.0, -1.0, shadowScene.dist) * 0.50 * u.presence;
-
-    float edge = smoothstep(2.2, 0.2, abs(dist)) * bodyA;
-    col += float3(1.0) * edge * 0.28 * saturate(-N.y * 0.35 + 0.75);
+    float glow = smoothstep(12.0, 0.0, dist) * 0.03 * u.presence;
+    Scene shadowScene = evalScene(p - float2(0.0, 12.0), u);
+    float shadow = smoothstep(22.0, -1.0, shadowScene.dist) * 0.32 * u.presence;
 
     float outA = max(bodyA, max(glow * (1.0 - bodyA), shadow * (1.0 - bodyA)));
-    float3 outC = col * bodyA + float3(0.02) * glow * (1.0 - bodyA);
+    float3 outC = col * bodyA + float3(0.01) * glow * (1.0 - bodyA);
     return float4(outC, outA);
   }
   """
@@ -1328,8 +1139,42 @@ private enum DropletShader {
 // MARK: - Panel
 
 final class DropletPanel: NSPanel {
+  weak var host: DropletHostingView?
+  private var passingThrough = false
+
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { false }
+
+  /// Clicks outside the card go to the menu-bar and toolbar triggers.
+  override func sendEvent(_ event: NSEvent) {
+    switch event.type {
+    case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp:
+      if !passingThrough, let host {
+        let point: NSPoint
+        if let superview = host.superview {
+          point = superview.convert(event.locationInWindow, from: nil)
+        } else {
+          point = event.locationInWindow
+        }
+        if host.hitTest(point) == nil {
+          passingThrough = true
+          ignoresMouseEvents = true
+          NSApp.postEvent(event, atStart: true)
+          DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async {
+              guard let self else { return }
+              self.passingThrough = false
+              if self.isVisible { self.ignoresMouseEvents = false }
+            }
+          }
+          return
+        }
+      }
+    default:
+      break
+    }
+    super.sendEvent(event)
+  }
 }
 
 @MainActor
@@ -1351,9 +1196,10 @@ final class DropletController {
       session.talkArmed = false
     }
     onScreen = true
+    acceptsHits = true
     setMetalPaused(false)
     place(anchor: anchor)
-    panel?.ignoresMouseEvents = !acceptsHits
+    panel?.ignoresMouseEvents = false
     panel?.orderFrontRegardless()
   }
 
@@ -1386,20 +1232,24 @@ final class DropletController {
     guard let panel else { return }
     let size = DropletMetrics.panelSize
     let screen = screen(containing: anchor) ?? NSScreen.main
-    var x = anchor.midX - size.width / 2
-    if let screen {
-      let vis = screen.visibleFrame
-      x = min(max(x, vis.minX + 4), vis.maxX - size.width - 4)
-    }
-    let y = anchor.minY - 2 - size.height
+    let vis = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+    let x = vis.maxX - size.width - 12
+    let y = vis.minY + 12
     let frame = NSRect(x: x, y: y, width: size.width, height: size.height)
     if abs(panel.frame.minX - frame.minX) > 0.5 || abs(panel.frame.minY - frame.minY) > 0.5
         || panel.frame.size != frame.size {
       panel.setFrame(frame, display: true)
     }
-    let nextAnchor = anchor.midX - x
-    if abs(session.anchorX - nextAnchor) > 0.5 {
-      session.anchorX = nextAnchor
+    if cardInPanel.width < 1 {
+      let width = DropletMetrics.cardWidth
+      let height = max(session.cardHeight, 96)
+      let margin = DropletMetrics.cornerMargin
+      cardInPanel = NSRect(
+        x: size.width - width - margin,
+        y: size.height - height - margin,
+        width: width,
+        height: height
+      )
     }
     noteCardInPanel(cardInPanel)
   }
@@ -1446,6 +1296,7 @@ final class DropletController {
     host.autoresizingMask = [.width, .height]
     host.cardScreenRect = { [weak self] in self?.cardScreenRect ?? .zero }
     host.acceptsHits = { [weak self] in self?.acceptsHits ?? false }
+    panel.host = host
     panel.contentView = host
     session.actions.setAcceptsHits = { [weak self] on in
       guard let self, self.acceptsHits != on else { return }

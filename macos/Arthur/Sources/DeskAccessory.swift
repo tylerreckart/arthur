@@ -396,7 +396,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
       self.present(
         anchor: self.menuBarAnchor,
         fromToolbar: false,
-        drip: true,
+        drip: false,
         pinned: false,
         follow: true
       )
@@ -530,7 +530,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
           droplet.place(anchor: menuBarAnchor)
         }
       } else {
-        present(anchor: menuBarAnchor, fromToolbar: false, drip: true, pinned: false, follow: true)
+        present(anchor: menuBarAnchor, fromToolbar: false, drip: false, pinned: false, follow: true)
       }
     } else if cardFollowing && !cardPinned && droplet.onScreen && !utteranceActive && !incoming {
       scheduleDismiss(reset: false)
@@ -583,7 +583,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
       dismissDroplet()
       return
     }
-    present(anchor: anchor, fromToolbar: fromToolbar, drip: true, pinned: true, follow: false)
+    present(anchor: anchor, fromToolbar: fromToolbar, drip: false, pinned: true, follow: false)
   }
 
   private func present(

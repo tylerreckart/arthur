@@ -122,7 +122,7 @@ enum ArthurMarkdown {
         .foregroundStyle(.primary.opacity(opacity))
     }
     return Text(text)
-      .font(.system(.title3, design: .serif).weight(bold ? .semibold : .regular))
+      .font(.system(size: 20, weight: bold ? .semibold : .regular, design: .serif))
       .foregroundStyle(.primary.opacity(opacity))
   }
 

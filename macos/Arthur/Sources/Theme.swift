@@ -2,13 +2,23 @@ import AppKit
 import SwiftUI
 
 enum ArthurTheme {
-  /// Dusty periwinkle — night-sky accent on dark glass (`#8C87E0`).
-  private static let accentR = 0.55
-  private static let accentG = 0.53
-  private static let accentB = 0.88
+  /// The desk window matches the droplet: pure black, white type, no chrome.
+  static let accent = Color.white
+  static let accentNSColor = NSColor.white
+  static let ink = Color.black
+  static let paper = Color.white.opacity(0.92)
+  static let mute = Color.white.opacity(0.55)
+  static let whisper = Color.white.opacity(0.38)
+  static let bubbleFill = Color.white.opacity(0.05)
+  static let codeFill = Color.white.opacity(0.06)
+}
 
-  static let accent = Color(red: accentR, green: accentG, blue: accentB)
-  static let accentNSColor = NSColor(srgbRed: accentR, green: accentG, blue: accentB, alpha: 1)
-  static let bubbleFill = Color.white.opacity(0.16)
-  static let codeFill = Color.black.opacity(0.28)
+extension View {
+  /// A slightly lifted black plate. No stroke — the card has no border.
+  func arthurPlate(radius: CGFloat = 16) -> some View {
+    background(
+      Color.white.opacity(0.05),
+      in: RoundedRectangle(cornerRadius: radius, style: .continuous)
+    )
+  }
 }

@@ -13,7 +13,7 @@ struct ArthurApp: App {
         .environment(model)
         .frame(minWidth: 440, minHeight: 520)
         .containerBackground(for: .window) {
-          WindowGlassBackground()
+          Color.black
         }
         .background { WindowTransparency() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
