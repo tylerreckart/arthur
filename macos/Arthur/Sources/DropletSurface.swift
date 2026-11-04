@@ -152,6 +152,7 @@ struct DropletContent: Equatable {
     hotkey: "⌥Space"
   )
 
+  @MainActor
   static func capture(_ model: AppModel) -> DropletContent {
     let stage: DropletStage
     if model.holding || model.phase == .listening {
@@ -584,7 +585,7 @@ struct DropletCardRoot: View {
 
   private func makeDraw(sample: DripSample, layout: DropletLayout, time: Float) -> DropletDraw {
     let hover = session.hovering
-    DropletDraw(
+    return DropletDraw(
       time: time,
       anchorX: Float(layout.anchor.x),
       anchorY: Float(layout.anchor.y),
@@ -1043,7 +1044,7 @@ private struct DropletGPU {
 }
 
 final class DropletRenderer: NSObject, MTKViewDelegate {
-  var drawState = DropletDraw(
+  fileprivate var drawState = DropletDraw(
     time: 0, anchorX: 0, anchorY: 0, cardX: 0, cardY: 0, cardW: 1, cardH: 1,
     fall: 0, bridge: 0, morph: 0, squishX: 1, squishY: 1, level: 0, speak: 0,
     phase: 0, pointerX: 0.3, pointerY: 0.2, hovering: 0, presence: 0
