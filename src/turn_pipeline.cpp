@@ -548,6 +548,54 @@ std::string percent_phrase(double pct) {
   return std::string(pct > 0 ? "up " : "down ") + spoken_number(rounded) + " percent";
 }
 
+std::string tidy_card_summary(std::string raw, const std::string& title) {
+  std::string out;
+  out.reserve(raw.size());
+  bool tag = false;
+  bool space = false;
+  for (unsigned char uc : raw) {
+    const char c = static_cast<char>(uc);
+    if (c == '<') {
+      tag = true;
+      continue;
+    }
+    if (c == '>') {
+      tag = false;
+      space = true;
+      continue;
+    }
+    if (tag) continue;
+    if (std::isspace(uc)) {
+      space = true;
+      continue;
+    }
+    if (space && !out.empty()) out.push_back(' ');
+    space = false;
+    out.push_back(c);
+  }
+  out = trim(out);
+  if (out.size() < 24 || out == title) return {};
+  std::string lower = out;
+  for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (lower == "read more" || lower.find("http://") != std::string::npos ||
+      lower.find("https://") != std::string::npos) {
+    return {};
+  }
+  constexpr std::size_t kCap = 320;
+  if (out.size() > kCap) {
+    out.resize(kCap);
+    const auto dot = out.rfind('.');
+    if (dot != std::string::npos && dot >= 80) {
+      out.resize(dot + 1);
+    } else {
+      const auto sp = out.rfind(' ');
+      if (sp != std::string::npos && sp >= 80) out.resize(sp);
+      if (out.empty() || out.back() != '.') out.push_back('.');
+    }
+  }
+  return out;
+}
+
 nlohmann::json card_items_from_surface(const nlohmann::json& surface) {
   if (!surface.is_object()) return nullptr;
   const std::string kind = surface.value("kind", "");
@@ -563,6 +611,10 @@ nlohmann::json card_items_from_surface(const nlohmann::json& surface) {
       nlohmann::json item = {{"label", label}};
       const std::string source = row.value("source", "");
       if (!source.empty()) item["detail"] = source;
+      if (const std::string summary = tidy_card_summary(row.value("summary", ""), label);
+          !summary.empty()) {
+        item["summary"] = summary;
+      }
       items.push_back(std::move(item));
       if (items.size() >= 8) break;
     }
@@ -606,39 +658,214 @@ std::string merge_card_state(const std::string& prior, const nlohmann::json& sur
   const std::string kind = extracted.value("kind", "");
   state[kind] = extracted["items"];
   state["active"] = kind;
+  if (state.contains("focus") && state["focus"].is_object() &&
+      state["focus"].value("kind", "") == kind) {
+    state.erase("focus");
+  }
+  if (state.contains("read_through") && state["read_through"].is_object()) {
+    state["read_through"].erase(kind);
+  }
   return state.dump();
 }
 
-struct CardReference {
+enum class CardAction { Speak, Discuss };
+
+struct CardTurn {
+  CardAction action = CardAction::Speak;
   std::string line;
   std::string list_kind;
   std::string label;
+  std::string note;
+  std::string card_state;
 };
 
-std::optional<CardReference> resolve_card_reference(const std::string& card_state,
-                                                    std::string_view transcript) {
-  if (card_state.empty()) return std::nullopt;
-  nlohmann::json state;
-  try {
-    state = nlohmann::json::parse(card_state);
-  } catch (...) {
-    return std::nullopt;
-  }
-  if (!state.is_object()) return std::nullopt;
+const char* ordinal_word(int ordinal) {
+  static const char* words[] = {"first", "second", "third", "fourth",
+                                "fifth", "sixth", "seventh", "eighth"};
+  if (ordinal >= 0 && ordinal < 8) return words[ordinal];
+  return "next";
+}
 
-  std::string text = fold_phatic(transcript);
-  if (text.empty() || text.size() > 80) return std::nullopt;
-  bool progressed = true;
-  while (progressed) {
-    progressed = false;
-    for (const char* prefix : {"tell me about", "tell me", "what about", "how about",
-                               "more about", "more on", "give me", "read me", "read",
-                               "whats", "what is"}) {
-      if (consume_prefix(&text, prefix)) progressed = true;
+bool card_topic_active(std::string_view kind) {
+  return kind == "news" || kind == "markets" || kind == "briefing" || kind == "card";
+}
+
+bool contains_word(std::string_view hay, std::string_view word) {
+  if (word.empty() || hay.size() < word.size()) return false;
+  std::size_t pos = 0;
+  while ((pos = hay.find(word, pos)) != std::string_view::npos) {
+    const bool left = pos == 0 || hay[pos - 1] == ' ';
+    const bool right =
+        pos + word.size() == hay.size() || hay[pos + word.size()] == ' ';
+    if (left && right) return true;
+    pos += 1;
+  }
+  return false;
+}
+
+std::string lower_copy(std::string value) {
+  for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return value;
+}
+
+std::string one_line(std::string value) {
+  for (char& c : value) {
+    if (c == '\r' || c == '\n' || c == '\t') c = ' ';
+  }
+  value = trim(value);
+  if (value.size() > 500) {
+    value.resize(500);
+    value += "…";
+  }
+  return value;
+}
+
+bool list_ok(const nlohmann::json& state, const std::string& kind) {
+  return (kind == "news" || kind == "markets") && state.contains(kind) &&
+         state[kind].is_array() && !state[kind].empty();
+}
+
+std::string spoken_item(const nlohmann::json& item, const std::string& kind,
+                        const std::string& which) {
+  const std::string label = item.value("label", "");
+  const std::string detail = item.value("detail", "");
+  if (kind == "news") {
+    std::string line = "The " + which + " headline is " + label;
+    if (!detail.empty()) line += ", from " + detail;
+    line += ".";
+    return line;
+  }
+  std::string line = label;
+  if (!detail.empty()) line += " is " + detail;
+  line += ".";
+  return line;
+}
+
+std::string spoken_summary(const nlohmann::json& item) {
+  std::string summary = trim(item.value("summary", ""));
+  if (summary.empty()) return {};
+  const char end = summary.back();
+  if (end != '.' && end != '!' && end != '?') summary.push_back('.');
+  const std::string label = item.value("label", "");
+  if (!label.empty() && summary.find(label) == std::string::npos) {
+    return label + ". " + summary;
+  }
+  return summary;
+}
+
+void set_focus(nlohmann::json* state, const std::string& kind, int index, int depth) {
+  if (!state) return;
+  (*state)["focus"] = {{"kind", kind}, {"index", index}, {"depth", depth}};
+}
+
+int focused_index(const nlohmann::json& state, const std::string& kind) {
+  if (!state.contains("focus") || !state["focus"].is_object()) return -1;
+  const auto& focus = state["focus"];
+  if (focus.value("kind", "") != kind) return -1;
+  if (!focus.contains("index") || !focus["index"].is_number_integer()) return -1;
+  return focus["index"].get<int>();
+}
+
+int focused_depth(const nlohmann::json& state, const std::string& kind, int index) {
+  if (focused_index(state, kind) != index) return -1;
+  if (!state["focus"].contains("depth") || !state["focus"]["depth"].is_number_integer()) {
+    return 0;
+  }
+  return state["focus"]["depth"].get<int>();
+}
+
+std::string card_discuss_note(const nlohmann::json& item, const std::string& kind,
+                              std::string_view current) {
+  std::string note =
+      "[CARD CONTEXT — private story metadata; never quote this block aloud]\n";
+  note += "Story kind: " + kind + "\n";
+  note += "Title: " + one_line(item.value("label", "")) + "\n";
+  const std::string detail = item.value("detail", "");
+  if (!detail.empty()) {
+    note += std::string(kind == "news" ? "Source: " : "Quote: ") + one_line(detail) + "\n";
+  }
+  const std::string summary = item.value("summary", "");
+  if (!summary.empty()) note += "What we already have: " + one_line(summary) + "\n";
+  note += "Go further than this. Stay with this story. You may look it up. "
+          "Do not open by repeating the title.\n";
+  note += "[CURRENT USER REQUEST]\n";
+  note += current;
+  return note;
+}
+
+int match_query(const nlohmann::json& items, const std::string& query) {
+  if (query.size() < 3) return -1;
+  const std::string needle = lower_copy(query);
+  std::vector<std::string> words;
+  std::string cur;
+  for (char c : needle) {
+    if (c == ' ') {
+      if (cur.size() >= 3 && cur != "the" && cur != "one" && cur != "about") words.push_back(cur);
+      cur.clear();
+    } else {
+      cur.push_back(c);
     }
   }
+  if (cur.size() >= 3 && cur != "the" && cur != "one" && cur != "about") words.push_back(cur);
+  if (words.empty()) return -1;
+
+  int phrase = -1;
+  int phrase_count = 0;
+  int word_hit = -1;
+  int word_count = 0;
+  for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+    if (!items[i].is_object()) continue;
+    const std::string hay = lower_copy(items[i].value("label", "") + " " +
+                                        items[i].value("detail", ""));
+    if (hay.find(needle) != std::string::npos) {
+      phrase = i;
+      ++phrase_count;
+      continue;
+    }
+    bool all = !words.empty();
+    for (const auto& word : words) {
+      if (!contains_word(hay, word)) all = false;
+    }
+    if (all) {
+      word_hit = i;
+      ++word_count;
+    }
+  }
+  if (phrase_count == 1) return phrase;
+  if (phrase_count > 1) return -1;
+  if (word_count == 1) return word_hit;
+  return -1;
+}
+
+struct CardTarget {
+  std::string kind;
+  int index = -1;
+  bool missing = false;
+  std::string which;
+};
+
+std::optional<CardTarget> parse_card_target(const nlohmann::json& state, std::string text) {
   consume_prefix(&text, "the");
   if (text.empty()) return std::nullopt;
+  if (text == "that" || text == "that one" || text == "this" || text == "this one" ||
+      text == "it") {
+    std::string kind = state.value("active", "");
+    int index = 0;
+    if (state.contains("focus") && state["focus"].is_object()) {
+      const std::string focused = state["focus"].value("kind", "");
+      const int at = focused_index(state, focused);
+      if (list_ok(state, focused) && at >= 0 && at < static_cast<int>(state[focused].size())) {
+        kind = focused;
+        index = at;
+      }
+    }
+    if (!list_ok(state, kind)) return std::nullopt;
+    CardTarget target;
+    target.kind = kind;
+    target.index = index;
+    target.which = ordinal_word(index);
+    return target;
+  }
 
   std::string first;
   std::string rest;
@@ -654,57 +881,238 @@ std::optional<CardReference> resolve_card_reference(const std::string& card_stat
     first = next == std::string::npos ? rest : rest.substr(0, next);
     rest = next == std::string::npos ? std::string() : trim(rest.substr(next + 1));
   }
-  int index = ordinal_index(first);
-  if (first == "that") index = 0;
-  if (index == -2) return std::nullopt;
+  const int ordinal = ordinal_index(first);
+  const bool list_noun = rest == "one" || rest == "item" || rest.empty() ||
+                         rest == "headline" || rest == "headlines" || rest == "story" ||
+                         rest == "stories" || rest == "quote" || rest == "quotes" ||
+                         rest == "stock" || rest == "stocks";
+  if (ordinal != -2 && list_noun) {
+    std::string want;
+    if (rest == "one" || rest == "item" || rest.empty()) {
+      want = state.value("active", "");
+    } else if (rest == "headline" || rest == "headlines" || rest == "story" ||
+               rest == "stories") {
+      want = "news";
+    } else {
+      want = "markets";
+    }
+    if (!list_ok(state, want)) return std::nullopt;
+    const int count = static_cast<int>(state[want].size());
+    CardTarget target;
+    target.kind = want;
+    target.index = ordinal < 0 ? count - 1 : ordinal;
+    target.missing = target.index >= count;
+    target.which = first == "last" ? "last" : ordinal_word(target.index);
+    return target;
+  }
 
-  std::string want;
-  if (rest == "one" || rest == "item" || rest.empty()) {
-    want = state.value("active", "");
-  } else if (rest == "headline" || rest == "headlines" || rest == "story" ||
-             rest == "stories") {
-    want = "news";
-  } else if (rest == "quote" || rest == "quotes" || rest == "stock" ||
-             rest == "stocks") {
-    want = "markets";
+  std::string query;
+  if (consume_prefix(&text, "one about") || consume_prefix(&text, "one on") ||
+      consume_prefix(&text, "story about") || consume_prefix(&text, "headline about")) {
+    query = text;
   } else {
+    for (const char* tail : {" headline", " story", " quote", " stock", " one"}) {
+      const std::size_t n = std::char_traits<char>::length(tail);
+      if (text.size() > n && text.compare(text.size() - n, n, tail) == 0) {
+        query = trim(text.substr(0, text.size() - n));
+        break;
+      }
+    }
+    if (query.empty() && text.find(' ') == std::string::npos) query = text;
+  }
+  if (query.empty()) return std::nullopt;
+
+  const std::string active = state.value("active", "");
+  std::string kinds[2];
+  int n_kinds = 0;
+  if (list_ok(state, active)) kinds[n_kinds++] = active;
+  for (const char* kind : {"news", "markets"}) {
+    if (n_kinds == 2) break;
+    if (active == kind) continue;
+    if (list_ok(state, kind)) kinds[n_kinds++] = kind;
+  }
+  int found = -1;
+  std::string found_kind;
+  for (int i = 0; i < n_kinds; ++i) {
+    const int at = match_query(state[kinds[i]], query);
+    if (at < 0) continue;
+    if (found >= 0) return std::nullopt;
+    found = at;
+    found_kind = kinds[i];
+  }
+  if (found < 0) return std::nullopt;
+  CardTarget target;
+  target.kind = found_kind;
+  target.index = found;
+  target.which = ordinal_word(found);
+  return target;
+}
+
+std::string rest_kind_of(const nlohmann::json& state) {
+  const std::string active = state.value("active", "");
+  if (list_ok(state, active)) return active;
+  if (state.contains("focus") && state["focus"].is_object()) {
+    const std::string kind = state["focus"].value("kind", "");
+    if (list_ok(state, kind)) return kind;
+  }
+  if (list_ok(state, "news")) return "news";
+  if (list_ok(state, "markets")) return "markets";
+  return {};
+}
+
+std::optional<CardTurn> resolve_card_turn(const std::string& card_state,
+                                          std::string_view transcript,
+                                          std::string_view prior_kind) {
+  if (card_state.empty()) return std::nullopt;
+  nlohmann::json state;
+  try {
+    state = nlohmann::json::parse(card_state);
+  } catch (...) {
     return std::nullopt;
   }
-  if (want != "news" && want != "markets") return std::nullopt;
-  if (!state.contains(want) || !state[want].is_array() || state[want].empty()) {
-    return std::nullopt;
+  if (!state.is_object()) return std::nullopt;
+
+  const std::string text = fold_phatic(transcript);
+  if (text.empty() || text.size() > 120) return std::nullopt;
+  const bool topic = card_topic_active(prior_kind);
+
+  enum class Ask { Title, More, Rest, Discuss };
+  Ask ask = Ask::Title;
+  std::string body = text;
+  if (topic && (text == "what else" || text == "the rest" || text == "any others" ||
+                text == "any more" || text == "what else is there" ||
+                text == "the other headlines" || text == "the other stories" ||
+                text == "what are the others")) {
+    ask = Ask::Rest;
+  } else if (topic && (text == "more" || text == "tell me more" || text == "go on" ||
+                       text == "expand" || text == "elaborate" || text == "more on that" ||
+                       text == "more about that" || text == "more on this" ||
+                       text == "tell me more about that" || text == "go deeper" ||
+                       text == "more detail" || text == "in more detail" ||
+                       text == "expand on that")) {
+    ask = Ask::More;
+  } else if (topic && (text == "why" || text == "why is that" || text == "why does that matter" ||
+                       text == "so what" || text == "what do you think" ||
+                       text == "what does that mean" || text == "is that good" ||
+                       text == "is that bad" || text == "and why" || text == "what about it")) {
+    ask = Ask::Discuss;
+  } else {
+    for (const char* prefix : {"tell me more about", "more detail on", "in more detail on",
+                               "expand on", "elaborate on", "go on about", "more about",
+                               "more on"}) {
+      if (consume_prefix(&body, prefix)) {
+        ask = Ask::More;
+        break;
+      }
+    }
+    if (ask == Ask::Title) {
+      bool progressed = true;
+      while (progressed) {
+        progressed = false;
+        for (const char* prefix : {"tell me about", "tell me", "what about", "how about",
+                                   "give me", "read me", "read", "whats", "what is"}) {
+          if (consume_prefix(&body, prefix)) progressed = true;
+        }
+      }
+    }
   }
-  const auto& items = state[want];
-  const int count = static_cast<int>(items.size());
-  if (index < 0) index = count - 1;
-  const char* noun = want == "news" ? "headline" : "quote";
-  auto ordinal_word = [](int ordinal) -> const char* {
-    static const char* words[] = {"first", "second", "third", "fourth",
-                                  "fifth", "sixth", "seventh", "eighth"};
-    if (ordinal >= 0 && ordinal < 8) return words[ordinal];
-    return "next";
-  };
-  CardReference hit;
-  hit.list_kind = want;
-  if (index >= count) {
-    hit.line = std::string("There isn't a ") + ordinal_word(index) + " " + noun + ".";
+
+  if (ask == Ask::Rest) {
+    const std::string kind = rest_kind_of(state);
+    if (!list_ok(state, kind)) return std::nullopt;
+    const auto& items = state[kind];
+    const int count = static_cast<int>(items.size());
+    int start = std::min(3, count);
+    if (state.contains("read_through") && state["read_through"].is_object() &&
+        state["read_through"].contains(kind) &&
+        state["read_through"][kind].is_number_integer()) {
+      start = state["read_through"][kind].get<int>();
+      if (start < 0) start = 0;
+    }
+    CardTurn hit;
+    hit.list_kind = kind;
+    if (start >= count) {
+      hit.line = "That is the list.";
+      return hit;
+    }
+    const int end = std::min(count, start + 3);
+    for (int i = start; i < end; ++i) {
+      if (!items[i].is_object()) continue;
+      const std::string label = items[i].value("label", "");
+      if (label.empty()) continue;
+      if (!hit.line.empty()) hit.line.push_back(' ');
+      hit.line += spoken_item(items[i], kind, ordinal_word(i));
+      hit.label = label;
+    }
+    if (hit.line.empty()) return std::nullopt;
+    if (!state.contains("read_through") || !state["read_through"].is_object()) {
+      state["read_through"] = nlohmann::json::object();
+    }
+    state["read_through"][kind] = end;
+    hit.card_state = state.dump();
     return hit;
   }
-  const auto& item = items[index];
-  hit.label = item.value("label", "");
-  if (hit.label.empty()) return std::nullopt;
-  const std::string which = first == "last" ? "last" : ordinal_word(index);
-  if (want == "news") {
-    hit.line = "The " + which + " headline is " + hit.label;
-    const std::string source = item.value("detail", "");
-    if (!source.empty()) hit.line += ", from " + source;
-    hit.line += ".";
-  } else {
-    hit.line = hit.label;
-    const std::string detail = item.value("detail", "");
-    if (!detail.empty()) hit.line += " is " + detail;
-    hit.line += ".";
+
+  std::optional<CardTarget> target;
+  if (ask == Ask::More || ask == Ask::Discuss) {
+    if (body == text) {
+      std::string kind = state.value("active", "");
+      int index = 0;
+      if (state.contains("focus") && state["focus"].is_object()) {
+        const std::string focused = state["focus"].value("kind", "");
+        const int at = focused_index(state, focused);
+        if (list_ok(state, focused) && at >= 0 &&
+            at < static_cast<int>(state[focused].size())) {
+          kind = focused;
+          index = at;
+        }
+      }
+      if (!list_ok(state, kind)) return std::nullopt;
+      CardTarget bare;
+      bare.kind = kind;
+      bare.index = index;
+      bare.which = ordinal_word(index);
+      target = bare;
+    }
   }
+  if (!target) target = parse_card_target(state, body);
+  if (!target) return std::nullopt;
+
+  const char* noun = target->kind == "news" ? "headline" : "quote";
+  if (target->missing) {
+    CardTurn hit;
+    hit.list_kind = target->kind;
+    hit.line = std::string("There isn't a ") + target->which + " " + noun + ".";
+    return hit;
+  }
+  const auto& item = state[target->kind][target->index];
+  if (!item.is_object()) return std::nullopt;
+  const std::string label = item.value("label", "");
+  if (label.empty()) return std::nullopt;
+
+  CardTurn hit;
+  hit.list_kind = target->kind;
+  hit.label = label;
+  const bool deepen = ask == Ask::More || ask == Ask::Discuss;
+  const std::string summary = item.value("summary", "");
+  const int depth = focused_depth(state, target->kind, target->index);
+  if (deepen && (ask == Ask::Discuss || summary.empty() || depth >= 1)) {
+    hit.action = CardAction::Discuss;
+    hit.note = card_discuss_note(item, target->kind, transcript);
+    set_focus(&state, target->kind, target->index, 2);
+    hit.card_state = state.dump();
+    return hit;
+  }
+  if (deepen) {
+    hit.line = spoken_summary(item);
+    if (hit.line.empty()) return std::nullopt;
+    set_focus(&state, target->kind, target->index, 1);
+    hit.card_state = state.dump();
+    return hit;
+  }
+  hit.line = spoken_item(item, target->kind, target->which);
+  set_focus(&state, target->kind, target->index, 0);
+  hit.card_state = state.dump();
   return hit;
 }
 
@@ -1050,8 +1458,18 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     return ok;
   };
 
+  std::string card_note;
+  std::string card_follow_kind;
+  std::string card_follow_request;
   if (prior_session && routing_transcript == result.transcript) {
-    if (auto card = resolve_card_reference(prior_session->last_card, result.transcript)) {
+    if (auto card = resolve_card_turn(prior_session->last_card, result.transcript,
+                                      prior_session->last_fast_path_kind)) {
+      if (!card->card_state.empty()) carried_card = card->card_state;
+      if (card->action == CardAction::Discuss) {
+        card_note = card->note;
+        card_follow_kind = card->list_kind;
+        card_follow_request = card->label;
+      } else {
       result.used_fast_path = true;
       result.fast_path_kind = "card";
       path_name = "fast";
@@ -1080,7 +1498,8 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
         s.last_user = result.transcript;
         s.last_spoken = card->line;
         s.last_fast_path_kind = card->list_kind;
-        s.last_fast_path_request = card->label;
+        s.last_fast_path_request =
+            card->label.empty() ? prior_session->last_fast_path_request : card->label;
         s.last_card = carried_card;
         if (prior_session) {
           s.pending_intent = prior_session->pending_intent;
@@ -1090,6 +1509,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
         sessions_->upsert(s, &err);
       }
       return finish(result);
+      }
     }
   }
 
@@ -1324,7 +1744,9 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   }
 
   std::string arbiter_message = routing_transcript;
-  if (prior_session &&
+  if (!card_note.empty()) {
+    arbiter_message = card_note;
+  } else if (prior_session &&
       (repair.kind == RepairKind::Rewrite || repair.kind == RepairKind::Note)) {
     const std::string current = repair.kind == RepairKind::Rewrite
                                     ? repair.routing
@@ -1627,6 +2049,10 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   s.last_user = result.transcript;
   s.last_spoken = arb_state.full_content;
   s.last_card = carried_card;
+  if (!card_follow_kind.empty()) {
+    s.last_fast_path_kind = card_follow_kind;
+    s.last_fast_path_request = card_follow_request;
+  }
   s.updated_at = now_unix();
   sessions_->upsert(s, &err);
 
