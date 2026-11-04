@@ -32,6 +32,9 @@ struct ContentView: View {
           .navigationTitle("Arthur")
           .toolbarTitleDisplayMode(.inline)
           .toolbar {
+            ToolbarItem(placement: .navigation) {
+              ArthurToolbarBead()
+            }
             ToolbarItemGroup(placement: .primaryAction) {
               Button {
                 model.soundOn.toggle()
@@ -375,7 +378,7 @@ struct ContentView: View {
       if model.quietTextMode {
         return "Type below — Space won’t talk"
       }
-      return "Tap Talk or \(model.pttHotkey.display), or hold to talk"
+      return "Click the droplet, or \(model.pttHotkey.display)"
     }
   }
 
@@ -383,7 +386,7 @@ struct ContentView: View {
     if model.quietTextMode {
       return "Quiet text on · \(model.pttHotkey.display) still talks · ⌘L to type"
     }
-    return "Tap Talk or \(model.pttHotkey.display) to speak · hold to talk · ⌘L to type"
+    return "The droplet talks and shows the reply · \(model.pttHotkey.display) · ⌘L to type"
   }
 
   @ViewBuilder
@@ -743,7 +746,7 @@ private struct QuietModeToggle: View {
         : "Quiet text — Space will not start talk"
     )
     .accessibilityLabel(model.quietTextMode ? "Quiet text on" : "Quiet text off")
-    .accessibilityHint("Turns off Space as push-to-talk. Option-Space and the menu bar still talk.")
+    .accessibilityHint("Turns off Space as push-to-talk. Option-Space and the menu-bar droplet still talk.")
     .accessibilityAddTraits(model.quietTextMode ? [.isSelected] : [])
   }
 }
@@ -1049,7 +1052,7 @@ struct SettingsView: View {
         } header: {
           Text("Typing")
         } footer: {
-          Text("When on, Space will not start push-to-talk. \(model.pttHotkey.display) and the menu bar extra still talk.")
+          Text("When on, Space will not start push-to-talk. \(model.pttHotkey.display) and the menu-bar droplet still talk.")
         }
 
         Section {

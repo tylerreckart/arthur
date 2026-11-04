@@ -78,7 +78,7 @@ struct PTTHotkey: Hashable, Identifiable {
   }
 }
 
-/// Same-process menu bar extra, global PTT hotkey, and compact Listening HUD.
+/// Menu-bar droplet, global PTT hotkey, and the card that falls open from it.
 /// Calls `AppModel.talkPressed` / `talkReleased` — the same path as in-window Space.
 @MainActor
 final class DeskAccessory: NSObject, NSMenuDelegate {
@@ -105,7 +105,16 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
   private var globalKeyMonitors: [Any] = []
   private(set) var usingInputMonitoringFallback = false
 
-  private var hud: ListeningHUDController?
+  let bead = BeadState()
+  private let droplet = DropletController()
+  private var beadTimer: Timer?
+  private var toolbarAnchor: NSRect = .zero
+  private var usingToolbarAnchor = false
+  private var cardPinned = false
+  private var cardFollowing = false
+  private var dismissWork: DispatchWorkItem?
+  private var dripWork: DispatchWorkItem?
+  private var outsideMonitors: [Any] = []
   private var watching = false
   private var attached = false
 
@@ -135,8 +144,13 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     removePressMonitors()
     holdWork?.cancel()
     holdWork = nil
-    hud?.hide()
-    hud = nil
+    dripWork?.cancel()
+    dripWork = nil
+    cancelDismiss()
+    removeOutsideMonitors()
+    droplet.hideImmediate()
+    beadTimer?.invalidate()
+    beadTimer = nil
     if let statusItem {
       NSStatusBar.system.removeStatusItem(statusItem)
     }
@@ -261,23 +275,58 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
   }
 
   private func installStatusItem() {
-    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    let item = NSStatusBar.system.statusItem(withLength: 32)
     if let button = item.button {
-      if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Arthur") {
-        image.isTemplate = true
-        button.image = image
-        button.imagePosition = .imageLeading
-      }
-      button.title = "Arthur"
-      button.toolTip = "Arthur — tap or hold to talk, click for menu"
+      button.title = ""
+      button.imagePosition = .imageOnly
+      button.imageScaling = .scaleNone
+      button.toolTip = "Arthur — click to open, hold to talk. Right-click for the menu."
       button.setAccessibilityTitle("Arthur")
-      button.setAccessibilityHelp("Tap to talk hands-free, or hold to talk. Click for the Arthur menu. Default shortcut is Option-Space.")
+      button.setAccessibilityHelp("Click to open Arthur. Hold to talk. Right-click for the menu. Default shortcut is Option-Space.")
       button.target = self
       button.action = #selector(statusButtonEvent(_:))
       button.sendAction(on: [.leftMouseDown, .leftMouseUp, .rightMouseUp])
     }
     statusItem = item
     menu = buildMenu()
+    wireDroplet()
+    refreshStatusImage()
+  }
+
+  /// The status item paints a template-free image so the bead stays black,
+  /// with a white rim that still reads on a dark menu bar.
+  private func refreshStatusImage(fromTimer: Bool = false) {
+    let animating = bead.listening || bead.thinking || bead.speaking || bead.dripping || bead.connected
+    if fromTimer || beadTimer == nil || !animating {
+      paintStatusImage()
+    }
+    if animating {
+      guard beadTimer == nil else { return }
+      let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+        Task { @MainActor in self?.refreshStatusImage(fromTimer: true) }
+      }
+      beadTimer = timer
+      RunLoop.main.add(timer, forMode: .common)
+    } else {
+      beadTimer?.invalidate()
+      beadTimer = nil
+    }
+  }
+
+  private func paintStatusImage() {
+    guard let button = statusItem?.button else { return }
+    let renderer = ImageRenderer(
+      content: ArthurBead(bead: bead, diameter: 16, clock: Date())
+        .frame(width: 18, height: 18)
+    )
+    renderer.scale = button.window?.backingScaleFactor ?? 2
+    renderer.proposedSize = ProposedViewSize(width: 18, height: 18)
+    renderer.isOpaque = false
+    if let image = renderer.nsImage {
+      image.isTemplate = false
+      image.size = NSSize(width: 18, height: 18)
+      button.image = image
+    }
   }
 
   private func buildMenu() -> NSMenu {
@@ -344,6 +393,13 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
       guard let self, self.statusPressActive else { return }
       self.talkingFromStatus = true
       self.model?.talkPressed()
+      self.present(
+        anchor: self.menuBarAnchor,
+        fromToolbar: false,
+        drip: true,
+        pinned: false,
+        follow: true
+      )
     }
     holdWork = work
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: work)
@@ -370,7 +426,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     if wasTalking {
       model?.talkReleased()
     } else {
-      popMenu()
+      toggle(anchor: menuBarAnchor, fromToolbar: false)
     }
   }
 
@@ -420,12 +476,9 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
   private func observeModel() {
     guard watching, let model else { return }
     withObservationTracking {
-      _ = model.holding
-      _ = model.handsFree
-      _ = model.inputLevel
+      _ = DropletContent.capture(model)
       _ = model.soundOn
-      _ = model.canTalk
-      _ = model.phase
+      _ = model.turnModality
     } onChange: {
       Task { @MainActor in
         self.syncChrome()
@@ -437,32 +490,219 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
 
   private func syncChrome() {
     guard let model else { return }
+    let content = DropletContent.capture(model)
+    let listening = model.turnModality == .utterance && (model.holding || model.phase == .listening)
+    bead.listening = listening
+    bead.thinking = model.phase == .thinking
+    bead.speaking = model.phase == .speaking
+    bead.level = model.inputLevel
+    refreshStatusImage()
+
     if let button = statusItem?.button {
-      let symbol = model.holding ? "mic.fill" : "waveform"
-      if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Arthur") {
-        image.isTemplate = true
-        button.image = image
-      }
-      button.toolTip = model.handsFree
-        ? "Arthur — listening"
-        : (model.holding
-          ? "Arthur — listening, release to send"
-          : "Arthur — tap or hold to talk, click for menu")
+      button.toolTip = listening
+        ? (model.handsFree
+          ? "Arthur is listening — pause when you're done"
+          : "Arthur is listening — release to send")
+        : "Arthur — click to open, hold to talk. Right-click for the menu."
+      button.setAccessibilityTitle(bead.accessibilityLabel)
     }
     holdView?.listening = model.holding
     holdView?.handsFree = model.handsFree
     holdView?.enabled = model.canTalk || model.holding
+    holdView?.shortcut = model.pttHotkey.display
     muteItem?.title = muteTitle
 
-    let mainKey = NSApp.windows.contains { window in
+    let mainKey = mainWindowIsKey
+    let utteranceActive = model.turnModality == .utterance && (
+      model.holding || model.phase == .listening || model.phase == .thinking || model.phase == .speaking
+    )
+    let incoming = model.speakBack?.live == true
+
+    if mainKey && cardFollowing && !cardPinned && droplet.onScreen {
+      dismissDroplet()
+    }
+
+    if !mainWindowIsKey && (utteranceActive || incoming) {
+      cardFollowing = true
+      if droplet.onScreen && !droplet.session.closing {
+        cancelDismiss()
+        if !usingToolbarAnchor {
+          droplet.place(anchor: menuBarAnchor)
+        }
+      } else {
+        present(anchor: menuBarAnchor, fromToolbar: false, drip: true, pinned: false, follow: true)
+      }
+    } else if cardFollowing && !cardPinned && droplet.onScreen && !utteranceActive && !incoming {
+      scheduleDismiss(reset: false)
+    }
+
+    if droplet.onScreen {
+      droplet.update(content)
+    }
+  }
+
+  func toggleFromToolbar() {
+    let anchor = toolbarAnchor.width > 1 ? toolbarAnchor : menuBarAnchor
+    toggle(anchor: anchor, fromToolbar: toolbarAnchor.width > 1)
+  }
+
+  func noteToolbarAnchor(_ rect: NSRect) {
+    guard rect.width > 1, rect.height > 1 else { return }
+    toolbarAnchor = rect
+    guard usingToolbarAnchor, droplet.onScreen else { return }
+    droplet.place(anchor: rect)
+  }
+
+  @discardableResult
+  func dismissDroplet() -> Bool {
+    guard droplet.onScreen else { return false }
+    cardPinned = false
+    cardFollowing = false
+    cancelDismiss()
+    model?.deskFieldFocused = false
+    droplet.hideAnimated()
+    return true
+  }
+
+  private var mainWindowIsKey: Bool {
+    NSApp.windows.contains { window in
       window.isKeyWindow && window.isVisible && !(window is NSPanel) && window.level == .normal
     }
-    if model.holding && !mainKey {
-      if hud == nil { hud = ListeningHUDController() }
-      hud?.show(level: model.inputLevel, handsFree: model.handsFree)
-    } else {
-      hud?.hide()
+  }
+
+  private var menuBarAnchor: NSRect {
+    guard let button = statusItem?.button, let window = button.window else {
+      let screen = NSScreen.main?.frame ?? .zero
+      return NSRect(x: screen.midX - 8, y: screen.maxY - 22, width: 16, height: 20)
     }
+    return window.convertToScreen(button.convert(button.bounds, to: nil))
+  }
+
+  private func toggle(anchor: NSRect, fromToolbar: Bool) {
+    if droplet.onScreen && !droplet.session.closing {
+      dismissDroplet()
+      return
+    }
+    present(anchor: anchor, fromToolbar: fromToolbar, drip: true, pinned: true, follow: false)
+  }
+
+  private func present(
+    anchor: NSRect,
+    fromToolbar: Bool,
+    drip: Bool,
+    pinned: Bool,
+    follow: Bool
+  ) {
+    if let model {
+      droplet.update(DropletContent.capture(model))
+    }
+    if pinned { cardPinned = true }
+    if follow { cardFollowing = true }
+    if !cardPinned && !cardFollowing { cardPinned = true }
+    usingToolbarAnchor = fromToolbar
+    let opening = !droplet.onScreen || droplet.session.closing
+    droplet.show(anchor: anchor, drip: drip && opening)
+    bead.connected = true
+    if drip && opening {
+      bead.dripping = true
+      dripWork?.cancel()
+      let work = DispatchWorkItem { [weak self] in
+        self?.bead.dripping = false
+      }
+      dripWork = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.78, execute: work)
+    }
+    installOutsideMonitors()
+    cancelDismiss()
+  }
+
+  private func wireDroplet() {
+    droplet.session.actions.talkDown = { [weak self] in self?.model?.talkPressed() }
+    droplet.session.actions.talkUp = { [weak self] in self?.model?.talkReleased() }
+    droplet.session.actions.stop = { [weak self] in self?.model?.cancelTurn() }
+    droplet.session.actions.open = { [weak self] in
+      self?.revealMainWindow()
+      self?.dismissDroplet()
+    }
+    droplet.session.actions.dismiss = { [weak self] in self?.dismissDroplet() }
+    droplet.session.actions.send = { [weak self] text in
+      self?.cardPinned = true
+      self?.cancelDismiss()
+      self?.model?.sendTypedLine(text)
+    }
+    droplet.session.actions.fieldFocus = { [weak self] on in
+      guard let self else { return }
+      self.model?.deskFieldFocused = on
+      if on {
+        self.cardPinned = true
+        self.model?.composerFocused = false
+        self.cancelDismiss()
+        self.droplet.focusForTyping()
+      }
+    }
+    droplet.session.actions.hover = { [weak self] hot in
+      guard let self, hot, self.cardFollowing, !self.cardPinned else { return }
+      self.scheduleDismiss(reset: true)
+    }
+    droplet.onClosed = { [weak self] in
+      guard let self else { return }
+      self.bead.connected = false
+      self.bead.dripping = false
+      self.model?.deskFieldFocused = false
+      self.removeOutsideMonitors()
+    }
+  }
+
+  private func scheduleDismiss(reset: Bool) {
+    if !reset, dismissWork != nil { return }
+    dismissWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, !self.cardPinned else { return }
+      guard let model = self.model else { return }
+      let live = model.holding || model.phase == .listening || model.phase == .thinking || model.phase == .speaking
+      if live || model.speakBack?.live == true { return }
+      self.cardFollowing = false
+      self.droplet.hideAnimated()
+    }
+    dismissWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 7.5, execute: work)
+  }
+
+  private func cancelDismiss() {
+    dismissWork?.cancel()
+    dismissWork = nil
+  }
+
+  private func installOutsideMonitors() {
+    guard outsideMonitors.isEmpty else { return }
+    let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+      Task { @MainActor in self?.outsideClick() }
+      return event
+    }
+    let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+      Task { @MainActor in self?.outsideClick() }
+    }
+    if let local { outsideMonitors.append(local) }
+    if let global { outsideMonitors.append(global) }
+  }
+
+  private func removeOutsideMonitors() {
+    for monitor in outsideMonitors {
+      NSEvent.removeMonitor(monitor)
+    }
+    outsideMonitors.removeAll()
+  }
+
+  private func outsideClick() {
+    guard droplet.onScreen, droplet.acceptsHits else { return }
+    let mouse = NSEvent.mouseLocation
+    if menuBarAnchor.insetBy(dx: -8, dy: -8).contains(mouse) { return }
+    if toolbarAnchor.width > 1, toolbarAnchor.insetBy(dx: -8, dy: -8).contains(mouse) { return }
+    let card = droplet.cardScreenRect
+    guard card.width > 20 else { return }
+    if card.insetBy(dx: -12, dy: -18).contains(mouse) { return }
+    if model?.holding == true || model?.phase == .listening { return }
+    dismissDroplet()
   }
 }
 
@@ -551,87 +791,5 @@ private final class HoldTalkMenuView: NSView {
       withAttributes: hintAttrs
     )
     _ = tracking
-  }
-}
-
-private final class ListeningHUDController {
-  private var panel: NSPanel?
-  private var hosting: NSHostingView<ListeningHUDView>?
-
-  func show(level: Double, handsFree: Bool) {
-    let view = ListeningHUDView(level: level, handsFree: handsFree)
-    if let hosting {
-      hosting.rootView = view
-    } else {
-      let hosting = NSHostingView(rootView: view)
-      hosting.frame = NSRect(x: 0, y: 0, width: 268, height: 56)
-      let panel = NSPanel(
-        contentRect: hosting.frame,
-        styleMask: [.borderless, .nonactivatingPanel],
-        backing: .buffered,
-        defer: false
-      )
-      panel.isFloatingPanel = true
-      panel.becomesKeyOnlyIfNeeded = true
-      panel.hidesOnDeactivate = false
-      panel.level = .statusBar
-      panel.isOpaque = false
-      panel.backgroundColor = .clear
-      panel.hasShadow = true
-      panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .transient]
-      panel.contentView = hosting
-      panel.animationBehavior = .utilityWindow
-      self.hosting = hosting
-      self.panel = panel
-    }
-    position()
-    panel?.orderFrontRegardless()
-  }
-
-  func hide() {
-    panel?.orderOut(nil)
-  }
-
-  private func position() {
-    guard let panel, let screen = NSScreen.main else { return }
-    let visible = screen.visibleFrame
-    let size = panel.frame.size
-    let origin = NSPoint(
-      x: visible.midX - size.width / 2,
-      y: visible.maxY - size.height - 10
-    )
-    panel.setFrameOrigin(origin)
-  }
-}
-
-private struct ListeningHUDView: View {
-  var level: Double
-  var handsFree: Bool
-
-  var body: some View {
-    HStack(spacing: 10) {
-      HStack(alignment: .center, spacing: 3) {
-        ForEach(0..<5, id: \.self) { i in
-          let lit = level > Double(i) / 5.2
-          Capsule()
-            .fill(ArthurTheme.accent.opacity(lit ? 0.95 : 0.28))
-            .frame(width: 3, height: 7 + CGFloat(i) * 2.4)
-        }
-      }
-      VStack(alignment: .leading, spacing: 1) {
-        Text("Listening…")
-          .font(.body.weight(.medium))
-          .foregroundStyle(ArthurTheme.accent)
-        Text(handsFree ? "Pause when you're done" : "Release to send")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-      Spacer(minLength: 0)
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 10)
-    .frame(width: 228, height: 56)
-    .preferredColorScheme(.dark)
-    .glassEffect(.regular, in: .rect(cornerRadius: 18, style: .continuous))
   }
 }

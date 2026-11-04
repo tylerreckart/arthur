@@ -17,6 +17,13 @@ enum ConversationSurface: Equatable {
   case hallway
 }
 
+/// Voice versus typed. The droplet only grows a listening tail for utterance.
+enum TurnModality: Equatable {
+  case none
+  case utterance
+  case text
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -48,6 +55,9 @@ final class AppModel {
   var errorText = ""
   var composerFocusToken = 0
   var composerFocused = false
+  /// The droplet card's field is first responder. Space must type.
+  var deskFieldFocused = false
+  var turnModality: TurnModality = .none
   var conversationId: Int64 = 0
   var turnId = ""
   var micGranted = false
@@ -83,7 +93,7 @@ final class AppModel {
     }
   }
   /// When on, Space does not start push-to-talk. ⌥Space, the configured
-  /// global chord, the mic hold, and the menu bar extra still talk.
+  /// global chord, the mic hold, and the menu-bar droplet still talk.
   var quietTextMode = false {
     didSet {
       guard oldValue != quietTextMode else { return }
@@ -322,7 +332,7 @@ final class AppModel {
 
   /// Starts push-to-talk. Implicit Space only reaches here when the composer is
   /// unfocused and the draft is empty. Pass `explicit: true` for the mic hold,
-  /// menu bar extra, or configured global hotkey — those may run even when
+  /// menu-bar droplet, or configured global hotkey — those may run even when
   /// there is typed text, and they never clear `draft`.
   func pttDown(explicit: Bool = false) {
     guard canSend else { return }
@@ -346,6 +356,7 @@ final class AppModel {
       resetArthurReplyKey()
       beginHearing()
       try audio.startCapture()
+      turnModality = .utterance
       holding = true
       inputLevel = 0.12
       pttStarted = Date()
@@ -425,6 +436,7 @@ final class AppModel {
       audio.interruptPlayback()
     }
     guard canSend else { return }
+    turnModality = .text
     youSaid = text
     appendDiscussion(fromYou: true, text: text)
     draft = ""
@@ -437,6 +449,22 @@ final class AppModel {
     become(.thinking)
     lastSurface = .desk
     client.sendText(text)
+  }
+
+  /// Send a line from the droplet without discarding a draft sitting in the window.
+  func sendTypedLine(_ text: String) {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    let preserved = draft
+    draft = trimmed
+    sendDraft()
+    if draft.isEmpty {
+      if !preserved.isEmpty, preserved != trimmed {
+        draft = preserved
+      }
+    } else {
+      draft = preserved
+    }
   }
 
   var canSend: Bool {
@@ -921,8 +949,8 @@ final class AppModel {
   /// - ⌘L / ⌘K focus Ask Arthur (menu + this monitor).
   /// - Return sends, Shift-Return inserts a newline (single path; not onSubmit).
   /// - Escape calls `cancelTurn()` when `canCancel`.
-  /// - Space is PTT only when the composer is unfocused, the draft is empty,
-  ///   and quiet text mode is off.
+  /// - Space is PTT only when the composer is unfocused, the droplet field
+  ///   is unfocused, the draft is empty, and quiet text mode is off.
   /// Space is never stolen while typing or in quiet text mode.
   private func installKeys() {
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
@@ -944,9 +972,14 @@ final class AppModel {
 
       if event.type == .keyDown {
         if self.handleCommandShortcut(event) { return nil }
-        if event.keyCode == 53, self.canCancel {
-          Task { @MainActor in self.cancelTurn() }
-          return nil
+        if event.keyCode == 53 {
+          if self.canCancel {
+            Task { @MainActor in self.cancelTurn() }
+            return nil
+          }
+          if DeskAccessory.shared.dismissDroplet() {
+            return nil
+          }
         }
         switch self.handleComposerReturn(event) {
         case .ignore:
@@ -999,6 +1032,7 @@ final class AppModel {
 
   private func handlePushToTalk(_ event: NSEvent) -> NSEvent? {
     guard event.keyCode == 49 else { return event }
+    if deskFieldFocused { return event }
     // The configured global chord is consumed above so Space-only PTT
     // and the hotkey do not both fire.
     if pttHotkey.matches(event) { return event }

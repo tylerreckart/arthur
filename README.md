@@ -29,7 +29,7 @@ Intercom maps each `X-Device-Id` to one Arbiter conversation in SQLite (`session
 
 **Intercom daemon** — HTTP on `:8090` (`POST /v1/utterance`, health, cancel) and a WebSocket hub on `:8093` (`/v1/stream`). It owns STT, TTS, the turn pipeline, device sessions, optional Home Assistant fast-path, and speak-back from Arbiter’s notification stream.
 
-**Mac desk app** (`macos/Arthur`) — a native SwiftUI window that uses the same WebSocket, `device_token`, and device id for shared conversation memory.
+**Mac desk app** (`macos/Arthur`) — a native SwiftUI window plus a menu-bar droplet. Click the droplet, hold it, or use the global shortcut to talk. It falls open into a black card that shows listening, thinking, and Arthur's reply. The window keeps the full conversation, and uses the same WebSocket, `device_token`, and device id for shared memory.
 
 **Hardware device** (`firmware/`, `hardware/`) — a thin audio endpoint, not the brain. Firmware for an ESP32-S3 (Arduino Nano ESP32 or a board with the same pin map) plus I2S mic (INMP441) and amp (MAX98357A) lives in `firmware/nano-esp32/intercom-endpoint`.
 
@@ -93,7 +93,7 @@ Optional `home` block: when `ha_base_url` and `ha_token` are set, hallway phrase
 
 **Firmware.** Copy Wi-Fi and token into `firmware/nano-esp32/intercom-endpoint/secrets.h` (gitignored) or edit [`config.h`](firmware/nano-esp32/intercom-endpoint/config.h). `INTERCOM_HOST` must be the LAN address of the Intercom machine — not `127.0.0.1`. WebSocket is on `INTERCOM_WS_PORT` (8093); set it to `0` for HTTP-only. Flash the sketch in `firmware/nano-esp32/intercom-endpoint`. Contract: [`docs/device.md`](docs/device.md).
 
-**Mac.** Settings load host, ports, and `device_token` from `intercom.json`. Choose the hallway device under Shared memory so this Mac and the wall button keep one conversation. Default global talk shortcut is ⌥Space (change it under Push to talk). Microphone permission is required to speak. Quiet text mode (Arthur menu or Settings → Typing) stops Space from starting push-to-talk so the composer is safe to type in; the global shortcut and menu bar extra still talk.
+**Mac.** Settings load host, ports, and `device_token` from `intercom.json`. Choose the hallway device under Shared memory so this Mac and the wall button keep one conversation. Default global talk shortcut is ⌥Space (change it under Push to talk). Microphone permission is required to speak. Quiet text mode (Arthur menu or Settings → Typing) stops Space from starting push-to-talk so the composer is safe to type in; the global shortcut and menu-bar droplet still talk.
 
 ### Voice
 
