@@ -12,6 +12,9 @@ struct ContentView: View {
   @State private var knownClusterIDs: Set<UUID> = []
   @State private var showReturnHint = false
   @State private var didShowReturnHint = false
+  /// Owned here so the split view can animate. A bool that snaps back to
+  /// `.all` or `.detailOnly` cancels that animation on every frame.
+  @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
 
   private static let bottomAnchor = "bottom"
   /// Distance from the live edge before we stop pinning (points).
@@ -19,15 +22,30 @@ struct ContentView: View {
 
   var body: some View {
     @Bindable var model = model
-    NavigationStack {
+    NavigationSplitView(columnVisibility: $columnVisibility) {
+      ConversationSidebar()
+    } detail: {
+      NavigationStack {
         transcript
+          .id(model.activeConversationId)
           .navigationTitle("Arthur")
           .toolbarTitleDisplayMode(.inline)
+          .toolbarBackground(Color.black, for: .windowToolbar)
+          .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
           .toolbar {
             ToolbarItem(placement: .navigation) {
               ArthurToolbarBead()
             }
             ToolbarItemGroup(placement: .primaryAction) {
+              Button {
+                model.newConversation()
+              } label: {
+                Label("New conversation", systemImage: "square.and.pencil")
+              }
+              .disabled(!model.canStartConversation || model.conversationIsEmpty)
+              .help("New conversation")
+              .keyboardShortcut("n", modifiers: .command)
+
               Button {
                 model.soundOn.toggle()
               } label: {
@@ -77,7 +95,11 @@ struct ContentView: View {
             SettingsView()
               .environment(model)
           }
+      }
     }
+    .navigationSplitViewStyle(.balanced)
+    .toolbarBackground(Color.black, for: .windowToolbar)
+    .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
     .coordinateSpace(ArthurChrome.space)
     .preferredColorScheme(.dark)
     .tint(.white)
@@ -90,7 +112,14 @@ struct ContentView: View {
       }
       if !on { showReturnHint = false }
     }
-    .onAppear { focusComposerIfAllowed() }
+    .onAppear {
+      if model.sidebarOpen { columnVisibility = .doubleColumn }
+      focusComposerIfAllowed()
+    }
+    .onChange(of: columnVisibility) { _, visibility in
+      let open = visibility != .detailOnly
+      if model.sidebarOpen != open { model.sidebarOpen = open }
+    }
     .onChange(of: model.composerFocusToken) { _, _ in
       focusComposerIfAllowed()
     }
@@ -99,6 +128,12 @@ struct ContentView: View {
     }
     .onChange(of: model.settingsOpen) { _, open in
       if !open { focusComposerIfAllowed() }
+    }
+    .onChange(of: model.activeConversationId) {
+      knownClusterIDs = []
+      seededClusterIDs = false
+      followLiveEdge = true
+      scrolledAway = false
     }
     .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
       guard let window = note.object as? NSWindow, window.isKeyWindow else { return }
@@ -983,7 +1018,7 @@ struct SettingsView: View {
         } header: {
           Text("Shared memory")
         } footer: {
-          Text("Intercom maps each device onto one conversation. Pick the hallway device so this Mac shares memory with the wall button.")
+          Text("The conversation you have open is this device’s memory. Pick the hallway device to share that memory with the wall button.")
         }
 
         Section {
@@ -1151,6 +1186,18 @@ struct SettingsView: View {
   ContentView()
     .environment(ArthurPreviews.listening)
     .frame(width: 520, height: 680)
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Conversations") {
+  ContentView()
+    .environment(
+      AppModel.previewCanvas(
+        history: ArthurPreviews.conversationHistory,
+        sidebarOpen: true
+      )
+    )
+    .frame(width: 780, height: 680)
     .preferredColorScheme(.dark)
 }
 

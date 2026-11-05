@@ -64,6 +64,10 @@ final class AppModel {
   var deskFieldFocused = false
   var turnModality: TurnModality = .none
   var conversationId: Int64 = 0
+  var conversations: [DeskConversation] = []
+  var activeConversationId = UUID()
+  /// Sidebar column. The desk starts on the transcript; the toolbar opens this.
+  var sidebarOpen = false
   var turnId = ""
   var micGranted = false
   var settingsOpen = false
@@ -161,7 +165,7 @@ final class AppModel {
     microphoneID = ConfigStore.loadMicrophoneID()
     audio.preferredDeviceID = microphoneID
     transcriptDeviceId = config.deviceId
-    discussion = ConfigStore.loadTranscript(deviceId: transcriptDeviceId)
+    loadLibrary(deviceId: transcriptDeviceId)
     draft = ConfigStore.loadDraft()
     loadMcpRegistry()
     refreshSessionContinuity(initial: true)
@@ -267,8 +271,9 @@ final class AppModel {
     ConfigStore.saveConfigPath(config.configPath)
     sessions = ConfigStore.loadSessions(dbPath: config.sessionDb)
     if config.deviceId != transcriptDeviceId {
+      persistLibrary(deviceId: transcriptDeviceId)
       transcriptDeviceId = config.deviceId
-      discussion = ConfigStore.loadTranscript(deviceId: transcriptDeviceId)
+      loadLibrary(deviceId: transcriptDeviceId)
       lastSurface = nil
       lastPolledTurnId = ""
     }
@@ -826,7 +831,66 @@ final class AppModel {
 
   private func persistTranscript(deviceId: String? = nil) {
     guard !previewCanvas else { return }
-    ConfigStore.saveTranscript(discussion, deviceId: deviceId ?? transcriptDeviceId)
+    let device = deviceId ?? transcriptDeviceId
+    captureActiveLines()
+    ConfigStore.saveTranscript(discussion, deviceId: device)
+    persistLibrary(deviceId: device)
+  }
+
+  /// A turn is on the wire or the mic is open. Switching threads would orphan it.
+  var canStartConversation: Bool {
+    !holding && phase != .listening && phase != .thinking && phase != .speaking
+  }
+
+  var conversationIsEmpty: Bool {
+    discussion.isEmpty && formingText.isEmpty && hearingText.isEmpty
+  }
+
+  var listedConversations: [DeskConversation] {
+    conversations.sorted { $0.updatedAt > $1.updatedAt }
+  }
+
+  func newConversation() {
+    guard canStartConversation else { return }
+    captureActiveLines()
+    guard !conversationIsEmpty else { return }
+    conversations.removeAll { $0.id != activeConversationId && $0.lines.isEmpty }
+    let item = DeskConversation.empty(needsFreshServer: true)
+    conversations.insert(item, at: 0)
+    activeConversationId = item.id
+    discussion = []
+    formingText = ""
+    hearingText = ""
+    youSaid = ""
+    draft = ""
+    conversationId = 0
+    client.sendNewConversation(bind: item.id.uuidString)
+    persistTranscript()
+  }
+
+  func openConversation(_ id: UUID) {
+    guard id != activeConversationId else { return }
+    guard canStartConversation else { return }
+    guard conversations.contains(where: { $0.id == id }) else { return }
+    captureActiveLines()
+    let previous = activeConversationId
+    if let previousItem = conversations.first(where: { $0.id == previous }),
+       previousItem.lines.isEmpty {
+      conversations.removeAll { $0.id == previous }
+    }
+    guard let item = conversations.first(where: { $0.id == id }) else { return }
+    activeConversationId = id
+    discussion = item.lines
+    formingText = ""
+    hearingText = ""
+    youSaid = ""
+    conversationId = item.serverConversationId
+    if item.needsFreshServer {
+      client.sendNewConversation(bind: id.uuidString)
+    } else if item.serverConversationId > 0 {
+      client.sendResumeConversation(item.serverConversationId, bind: id.uuidString)
+    }
+    persistTranscript()
   }
 
   private func persistDraft() {
@@ -950,6 +1014,7 @@ final class AppModel {
       healthDetail = "connected"
       errorText = ""
       refreshSessionContinuity(initial: lastPolledTurnId.isEmpty)
+      alignServerConversation()
     case .accept(let id):
       turnId = id
       lastSurface = .desk
@@ -976,8 +1041,10 @@ final class AppModel {
         clearHearing()
       }
       typedThisTurn = false
-      if conv > 0 { conversationId = conv }
+      if conv > 0 { noteServerConversation(conv) }
       if !ok { errorText = "That turn did not finish cleanly." }
+    case .conversation(let id, _, let bind):
+      noteBoundConversation(id, bind: bind)
     case .done(let ok, let err, let eventTurnId):
       guard eventTurnId.isEmpty || eventTurnId == turnId else { return }
       expectingReply = false
@@ -1297,7 +1364,7 @@ final class AppModel {
     guard let match = sessions.first(where: { $0.deviceId == config.deviceId }) else {
       return
     }
-    if match.conversationId > 0 { conversationId = match.conversationId }
+    if match.conversationId > 0 { noteServerConversation(match.conversationId) }
     let remote = match.lastTurnId
     guard !remote.isEmpty else { return }
     if initial {
@@ -1333,18 +1400,97 @@ final class AppModel {
     return event
   }
 
+  private func loadLibrary(deviceId: String) {
+    let library = ConfigStore.loadLibrary(deviceId: deviceId)
+    conversations = library.conversations
+    activeConversationId = library.activeId
+    discussion = library.conversations.first { $0.id == library.activeId }?.lines ?? []
+    if let server = library.conversations.first(where: { $0.id == library.activeId })?.serverConversationId,
+       server > 0 {
+      conversationId = server
+    }
+  }
+
+  private func captureActiveLines() {
+    let title = DeskConversation.title(for: discussion)
+    if let idx = conversations.firstIndex(where: { $0.id == activeConversationId }) {
+      let changed = conversations[idx].lines != discussion || conversations[idx].title != title
+      conversations[idx].lines = discussion
+      conversations[idx].title = title
+      if changed { conversations[idx].updatedAt = Date() }
+      if conversations[idx].serverConversationId == 0, conversationId > 0,
+         !conversations[idx].needsFreshServer {
+        conversations[idx].serverConversationId = conversationId
+      }
+      return
+    }
+    var item = DeskConversation.empty(serverConversationId: conversationId)
+    item.id = activeConversationId
+    item.title = title
+    item.lines = discussion
+    conversations.insert(item, at: 0)
+  }
+
+  private func persistLibrary(deviceId: String? = nil) {
+    guard !previewCanvas else { return }
+    ConfigStore.saveLibrary(
+      ConversationLibrary(activeId: activeConversationId, conversations: conversations),
+      deviceId: deviceId ?? transcriptDeviceId
+    )
+  }
+
+  /// Adopt a server id onto the open thread only when that thread is not
+  /// waiting on a fresh conversation and does not already name another one.
+  private func noteServerConversation(_ id: Int64) {
+    guard id > 0 else { return }
+    guard let idx = conversations.firstIndex(where: { $0.id == activeConversationId }) else {
+      conversationId = id
+      return
+    }
+    guard !conversations[idx].needsFreshServer else { return }
+    let current = conversations[idx].serverConversationId
+    guard current == 0 || current == id else { return }
+    conversations[idx].serverConversationId = id
+    conversationId = id
+  }
+
+  private func noteBoundConversation(_ id: Int64, bind: String) {
+    guard id > 0, let local = UUID(uuidString: bind),
+          let idx = conversations.firstIndex(where: { $0.id == local })
+    else { return }
+    conversations[idx].serverConversationId = id
+    conversations[idx].needsFreshServer = false
+    if local == activeConversationId {
+      conversationId = id
+    }
+    persistLibrary()
+  }
+
+  private func alignServerConversation() {
+    guard canStartConversation else { return }
+    guard let item = conversations.first(where: { $0.id == activeConversationId }) else { return }
+    let bind = item.id.uuidString
+    if item.needsFreshServer {
+      client.sendNewConversation(bind: bind)
+      return
+    }
+    guard item.serverConversationId > 0 else { return }
+    client.sendResumeConversation(item.serverConversationId, bind: bind)
+  }
+
   #if DEBUG
   /// Desk state for Xcode's canvas. Builds a real model, then fills phase,
   /// discussion, and draft without connecting, capturing, or writing disk.
   static func previewCanvas(
     phase: ArthurPhase = .idle,
     discussion: [DiscussionLine] = [],
-    draft: String = ""
+    draft: String = "",
+    history: [DeskConversation] = [],
+    sidebarOpen: Bool = false
   ) -> AppModel {
     let model = AppModel()
     model.previewCanvas = true
     model.phase = phase
-    model.discussion = discussion
     model.formingText = ""
     model.hearingText = ""
     model.errorText = ""
@@ -1353,6 +1499,19 @@ final class AppModel {
     model.quietTextMode = false
     model.micGranted = true
     model.draft = draft
+    model.sidebarOpen = sidebarOpen
+    if history.isEmpty {
+      var item = DeskConversation.empty()
+      item.lines = discussion
+      item.title = DeskConversation.title(for: discussion)
+      model.conversations = [item]
+      model.activeConversationId = item.id
+      model.discussion = discussion
+    } else {
+      model.conversations = history
+      model.activeConversationId = history[0].id
+      model.discussion = history[0].lines
+    }
     return model
   }
   #endif

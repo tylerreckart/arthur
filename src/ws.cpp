@@ -683,6 +683,35 @@ void WsServer::handle_client(int fd) {
         }
         continue;
       }
+      if (type == "new_conversation" || type == "resume_conversation") {
+        const std::string bind = j.value("bind", "");
+        std::string err;
+        std::int64_t id = 0;
+        bool fresh = type == "new_conversation";
+        if (fresh) {
+          id = deps_.pipeline->begin_conversation(device_id, &err);
+        } else {
+          id = j.value("conversation_id", static_cast<std::int64_t>(0));
+          if (!deps_.pipeline->resume_conversation(device_id, id, &err)) id = 0;
+        }
+        if (id <= 0) {
+          nlohmann::json fail = {
+              {"type", "error"},
+              {"error", err.empty() ? "conversation failed" : err},
+          };
+          if (!bind.empty()) fail["bind"] = bind;
+          send_text(fail);
+        } else {
+          nlohmann::json ok = {
+              {"type", "conversation"},
+              {"conversation_id", id},
+              {"fresh", fresh},
+          };
+          if (!bind.empty()) ok["bind"] = bind;
+          send_text(ok);
+        }
+        continue;
+      }
       if (type == "end" || type == "text") {
         const std::string text =
             type == "text" ? j.value("text", "") : std::string();

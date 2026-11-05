@@ -5,6 +5,7 @@ enum IntercomEvent {
   case accept(turnId: String)
   case pcm(Data)
   case turn(turnId: String, transcript: String, conversationId: Int64, ok: Bool, fastPath: Bool)
+  case conversation(conversationId: Int64, fresh: Bool, bind: String)
   case done(ok: Bool, error: String, turnId: String)
   case speak(kind: String, runId: String, text: String)
   case heard(String)
@@ -123,6 +124,18 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
   }
   func sendText(_ text: String) { sendJSON(["type": "text", "text": text]) }
 
+  func sendNewConversation(bind: String) {
+    sendJSON(["type": "new_conversation", "bind": bind])
+  }
+
+  func sendResumeConversation(_ id: Int64, bind: String) {
+    sendJSON([
+      "type": "resume_conversation",
+      "conversation_id": NSNumber(value: id),
+      "bind": bind,
+    ])
+  }
+
   private func send(_ message: URLSessionWebSocketTask.Message, failure: String) {
     lock.lock()
     let gen = generation
@@ -240,6 +253,12 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
         conversationId: int64Value(json["conversation_id"]),
         ok: json["ok"] as? Bool ?? true,
         fastPath: json["fast_path"] as? Bool ?? false
+      ))
+    case "conversation":
+      emit(.conversation(
+        conversationId: int64Value(json["conversation_id"]),
+        fresh: json["fresh"] as? Bool ?? false,
+        bind: json["bind"] as? String ?? ""
       ))
     case "done":
       emit(.done(
