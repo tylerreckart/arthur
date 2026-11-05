@@ -1,41 +1,17 @@
 #!/usr/bin/env bash
+# Builds the Xcode project and leaves Arthur.app in dist/, ad-hoc signed.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-SRC="$ROOT/Sources"
-DIST="$ROOT/dist/Arthur.app"
-MACOS="$DIST/Contents/MacOS"
-RES="$DIST/Contents/Resources"
-SDK="$(xcrun --show-sdk-path --sdk macosx)"
-TARGET="arm64-apple-macosx26.0"
 
-rm -rf "$DIST"
-mkdir -p "$MACOS" "$RES"
+xcodebuild \
+  -project "$ROOT/Arthur.xcodeproj" \
+  -scheme Arthur \
+  -configuration Release \
+  -destination "platform=macOS,arch=arm64" \
+  -derivedDataPath "$ROOT/build" \
+  CONFIGURATION_BUILD_DIR="$ROOT/dist" \
+  build
 
-swiftc -parse-as-library -O \
-  -target "$TARGET" \
-  -sdk "$SDK" \
-  -framework SwiftUI \
-  -framework AppKit \
-  -framework Carbon \
-  -framework AVFoundation \
-  -framework Metal \
-  -framework MetalKit \
-  -framework QuartzCore \
-  -framework Network \
-  -framework CryptoKit \
-  -framework Security \
-  -framework UserNotifications \
-  -lsqlite3 \
-  -o "$MACOS/Arthur" \
-  "$SRC"/*.swift
-
-cp "$ROOT/Info.plist" "$DIST/Contents/Info.plist"
-if [[ -f "$ROOT/Arthur.entitlements" ]]; then
-  codesign --force --sign - --entitlements "$ROOT/Arthur.entitlements" "$DIST"
-else
-  codesign --force --sign - "$DIST"
-fi
-
-echo "built $DIST"
-echo "open -a $DIST"
+echo "built $ROOT/dist/Arthur.app"
+echo "open $ROOT/dist/Arthur.app"

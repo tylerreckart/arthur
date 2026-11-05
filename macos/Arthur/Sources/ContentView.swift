@@ -272,6 +272,7 @@ struct ContentView: View {
 
   private var emptyState: some View {
     VStack(spacing: 22) {
+      ArthurMarkTile(size: 56, shadows: false)
       VStack(spacing: 10) {
         Text("Hello.")
           .font(.system(size: 28, weight: .regular, design: .serif))

@@ -1,37 +1,18 @@
 # Arthur
 
-Arthur is my personal silicon assistant — local-first and available on the desktop via a MacOS app and through an experimental hardware device that share the same conversational memory.
+Arthur is my personal silicon assistant. Local-first and on the desktop natively in MacOS and through an experimental hardware device that share the same conversational memory.
 
 This repository is the voice layer: capture, speech, devices, and the spoken reply. The spoken-agent definition is [`config/arthur.agent.json`](config/arthur.agent.json).
 
-STT and TTS run on the machine that hosts Intercom. [whisper.cpp](https://github.com/ggerganov/whisper.cpp) transcribes, [Kokoro](https://github.com/hexgrad/kokoro) speaks, and [Arbiter](https://github.com/tylerreckart/arbiter) handles reasoning.
-
-```
-Input ─┐
-       │  PCM up while you hold talk
-       ├─ ws://…:8093/v1/stream ── Intercom daemon (this repo)
-       │  PCM down as Arthur answers      │
-       │                                  ├── whisper.cpp  STT
-       │                                  ├── Kokoro       TTS
-       │                                  └── SQLite sessions
-       │                                          │
-       └──────── HTTP :8090 fallback ─────────────┤
-                                                  │
-                                            Arbiter :8080
-                                              text + SSE
-```
-
-Hold talk, speak, release. The device streams 24 kHz mono s16le while the button is down, then sends `{"type":"end"}`. Intercom runs Whisper on the clip, then either answers deterministic requests locally (time and configured home or briefing commands) or sends the transcript to Arbiter. Kokoro starts speaking as sentences arrive; the same socket plays the PCM back. Idle sockets also take unsolicited speak-back — a scheduled reminder, spoken without another press.
-
-Intercom maps each `X-Device-Id` to one Arbiter conversation in SQLite (`session_db`). In the Mac app, pick the hallway device so the desk and the wall button share that memory.
+STT and TTS run on the machine that hosts the Intercom daemon. [whisper.cpp](https://github.com/ggerganov/whisper.cpp) transcribes, [Kokoro](https://github.com/hexgrad/kokoro) speaks, and [Arbiter](https://github.com/tylerreckart/arbiter) handles reasoning.
 
 ## Components
 
 **Intercom daemon** — HTTP on `:8090` (`POST /v1/utterance`, health, cancel) and a WebSocket hub on `:8093` (`/v1/stream`). It owns STT, TTS, the turn pipeline, device sessions, optional Home Assistant fast-path, and speak-back from Arbiter’s notification stream.
 
-**Mac desk app** (`macos/Arthur`) — a native SwiftUI window plus a menu-bar droplet. Click the droplet, hold it, or use the global shortcut to talk. It falls open into a black card that shows listening, thinking, and Arthur's reply. The window keeps the full conversation, and uses the same WebSocket, `device_token`, and device id for shared memory.
+**Mac desk app** (`macos/Arthur`) — a native SwiftUI window plus a menu-bar droplet. Click the droplet, hold it, or use the global shortcut to talk. The app keeps the full conversation, and uses the same WebSocket, `device_token`, and device id for shared memory.
 
-**Hardware device** (`firmware/`, `hardware/`) — a thin audio endpoint, not the brain. Firmware for an ESP32-S3 (Arduino Nano ESP32 or a board with the same pin map) plus I2S mic (INMP441) and amp (MAX98357A) lives in `firmware/nano-esp32/intercom-endpoint`.
+**Hardware device** (`firmware/`, `hardware/`) — a thin audio endpoint. Firmware for an ESP32-S3 (Arduino Nano ESP32 or a board with the same pin map) plus I2S mic (INMP441) and amp (MAX98357A) lives in `firmware/nano-esp32/intercom-endpoint`.
 
 Weather (home via Home Assistant, or any city via Open-Meteo), news (Google News RSS / configured feeds), and markets (Yahoo public quotes) each speak a short line and emit a versioned `{type:surface}` card on the desk WebSocket. Voice-only devices ignore `surface`. See [`docs/api.md`](docs/api.md).
 
@@ -44,7 +25,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-**Mac app** (Apple Silicon, macOS 26+):
+**Mac app** (Apple Silicon, macOS 26+). Open `macos/Arthur/Arthur.xcodeproj`, or:
 
 ```bash
 macos/Arthur/build.sh
@@ -94,10 +75,6 @@ Optional `home` block: when `ha_base_url` and `ha_token` are set, hallway phrase
 **Firmware.** Copy Wi-Fi and token into `firmware/nano-esp32/intercom-endpoint/secrets.h` (gitignored) or edit [`config.h`](firmware/nano-esp32/intercom-endpoint/config.h). `INTERCOM_HOST` must be the LAN address of the Intercom machine — not `127.0.0.1`. WebSocket is on `INTERCOM_WS_PORT` (8093); set it to `0` for HTTP-only. Flash the sketch in `firmware/nano-esp32/intercom-endpoint`. Contract: [`docs/device.md`](docs/device.md).
 
 **Mac.** Settings load host, ports, and `device_token` from `intercom.json`. Choose the hallway device under Shared memory so this Mac and the wall button keep one conversation. Default global talk shortcut is ⌥Space (change it under Push to talk). Microphone permission is required to speak. Quiet text mode (Arthur menu or Settings → Typing) stops Space from starting push-to-talk so the composer is safe to type in; the global shortcut and menu-bar droplet still talk.
-
-### Voice
-
-Shipped `kokoro.voice` is `bm_lewis`, matching Arthur's understated British persona. A single Kokoro name or a `+`-separated blend both work; weights are optional and normalized, and the language follows the heaviest name prefix. Existing local `intercom.json` files are not overwritten — change `kokoro.voice` there to adopt the new default. Blend syntax and speech DSP live in [`docs/api.md`](docs/api.md).
 
 ## Docs
 

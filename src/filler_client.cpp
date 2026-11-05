@@ -100,12 +100,12 @@ std::string cap_words(std::string s, std::size_t max_words) {
 
 std::string build_system_prompt(FillerStage stage) {
   if (stage == FillerStage::FollowUp) {
-    return "Arthur, a British voice on a home intercom. The user is still waiting. "
+    return "Arthur, a personal assistant. The user is still waiting. "
            "Give one quiet progress cue, 1-3 words, like 'still with you'. "
            "Do not put them on hold. Do not say you are looking or thinking. "
            "Output only the phrase.";
   }
-  return "Arthur, a British voice on a home intercom. The user just asked something. "
+  return "Arthur, a personal assistant. The user just asked something. "
          "Acknowledge only if the silence has become awkward, 1-3 words, "
          "like 'of course' or 'all right'. Do not use 'sir'. "
          "Do not put them on hold. Do not narrate thinking, looking, or working. "

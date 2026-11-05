@@ -102,6 +102,7 @@ final class AppModel {
   var quietTextMode = false {
     didSet {
       guard oldValue != quietTextMode else { return }
+      guard !previewCanvas else { return }
       ConfigStore.saveQuietTextMode(quietTextMode)
     }
   }
@@ -143,6 +144,9 @@ final class AppModel {
   private var lastPolledTurnId = ""
   /// Surfaces that arrived before the matching Arthur `said` line.
   private var pendingSurfaces: [(turnId: String, surface: ChatSurface)] = []
+  /// Set only by `previewCanvas`. Skips notebook, draft, and quiet-mode writes
+  /// so the Xcode canvas cannot clobber the running desk.
+  private var previewCanvas = false
 
   init() {
     config = ConfigStore.load()
@@ -236,6 +240,7 @@ final class AppModel {
   }
 
   func connect() {
+    guard !previewCanvas else { return }
     reconnectWork?.cancel()
     reconnectWork = nil
     wantsSocket = true
@@ -335,6 +340,7 @@ final class AppModel {
   }
 
   func requestMicrophoneAccess() {
+    guard !previewCanvas else { return }
     let status = AVCaptureDevice.authorizationStatus(for: .audio)
     if status == .denied || status == .restricted {
       let urls = [
@@ -383,6 +389,7 @@ final class AppModel {
   /// menu-bar droplet, or configured global hotkey — those may run even when
   /// there is typed text, and they never clear `draft`.
   func pttDown(explicit: Bool = false) {
+    guard !previewCanvas else { return }
     guard canSend else { return }
     if !explicit && quietTextMode { return }
     if !explicit && hasDraft { return }
@@ -818,10 +825,12 @@ final class AppModel {
   }
 
   private func persistTranscript(deviceId: String? = nil) {
+    guard !previewCanvas else { return }
     ConfigStore.saveTranscript(discussion, deviceId: deviceId ?? transcriptDeviceId)
   }
 
   private func persistDraft() {
+    guard !previewCanvas else { return }
     ConfigStore.saveDraft(draft)
   }
 
@@ -1324,4 +1333,27 @@ final class AppModel {
     return event
   }
 
+  #if DEBUG
+  /// Desk state for Xcode's canvas. Builds a real model, then fills phase,
+  /// discussion, and draft without connecting, capturing, or writing disk.
+  static func previewCanvas(
+    phase: ArthurPhase = .idle,
+    discussion: [DiscussionLine] = [],
+    draft: String = ""
+  ) -> AppModel {
+    let model = AppModel()
+    model.previewCanvas = true
+    model.phase = phase
+    model.discussion = discussion
+    model.formingText = ""
+    model.hearingText = ""
+    model.errorText = ""
+    model.holding = false
+    model.handsFree = false
+    model.quietTextMode = false
+    model.micGranted = true
+    model.draft = draft
+    return model
+  }
+  #endif
 }

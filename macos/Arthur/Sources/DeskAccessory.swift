@@ -275,7 +275,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
   }
 
   private func installStatusItem() {
-    let item = NSStatusBar.system.statusItem(withLength: 32)
+    let item = NSStatusBar.system.statusItem(withLength: 22)
     if let button = item.button {
       button.title = ""
       button.imagePosition = .imageOnly
@@ -293,8 +293,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     refreshStatusImage()
   }
 
-  /// The status item paints a template-free image so the bead stays black,
-  /// with a white rim that still reads on a dark menu bar.
+  /// The status item is a template glyph. The toolbar bead keeps the squircle plate.
   private func refreshStatusImage(fromTimer: Bool = false) {
     let animating = bead.listening || bead.thinking || bead.speaking || bead.dripping || bead.connected
     if fromTimer || beadTimer == nil || !animating {
@@ -315,16 +314,18 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
 
   private func paintStatusImage() {
     guard let button = statusItem?.button else { return }
+    let side: CGFloat = 16
     let renderer = ImageRenderer(
-      content: ArthurBead(bead: bead, diameter: 16, clock: Date())
-        .frame(width: 18, height: 18)
+      content: ArthurGlyph()
+        .fill(Color.black)
+        .frame(width: side, height: side)
     )
     renderer.scale = button.window?.backingScaleFactor ?? 2
-    renderer.proposedSize = ProposedViewSize(width: 18, height: 18)
+    renderer.proposedSize = ProposedViewSize(width: side, height: side)
     renderer.isOpaque = false
     if let image = renderer.nsImage {
-      image.isTemplate = false
-      image.size = NSSize(width: 18, height: 18)
+      image.isTemplate = true
+      image.size = NSSize(width: side, height: side)
       button.image = image
     }
   }
