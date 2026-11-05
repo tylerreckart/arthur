@@ -238,50 +238,15 @@ struct ContentView: View {
         ))
       }
     }
-    if showForming {
-      let live = model.formingText
-      let liveTurn = model.liveArthurTurnId
-      if var last = clusters.last, !last.fromYou,
-         last.turnId.isEmpty || liveTurn.isEmpty || last.turnId == liveTurn {
-        if let prior = last.texts.last {
-          // Only stitch a remainder *prefix*. A sliding tail that merely
-          // overlaps the said would replace the bubble and drop mid-reply words.
-          if ArthurProseJoin.shouldStitch(prior, live) || ArthurProseJoin.isGrowingPrefix(prior, live) {
-            last.texts[last.texts.count - 1] = ArthurProseJoin.join(prior, live)
-          } else if !ArthurProseJoin.alreadySpoken(prior, live) {
-            last.texts.append(live)
-          }
-        } else {
-          last.texts.append(live)
-        }
-        last.liveLast = true
-        clusters[clusters.count - 1] = last
+    if model.pacingReply, let idx = clusters.lastIndex(where: { !$0.fromYou }) {
+      if model.spokenReveal.isEmpty {
+        clusters.remove(at: idx)
       } else {
-        clusters.append(TranscriptCluster(
-          id: model.formingLineId,
-          fromYou: false,
-          texts: [live],
-          turnId: liveTurn,
-          liveLast: true
-        ))
+        clusters[idx].texts = [model.spokenReveal]
+        clusters[idx].liveLast = true
       }
     }
     return clusters
-  }
-
-  private var showForming: Bool {
-    guard model.phase == .thinking || model.phase == .speaking else { return false }
-    let live = fold(model.formingText)
-    guard !live.isEmpty else { return false }
-    // Only the current Arthur bubble — a phrase in an older reply must not
-    // hide this turn's forming remainder (that looked like dropped stream).
-    let lastArthur = model.discussion.last(where: { !$0.fromYou })
-    if let lastArthur, !lastArthur.turnId.isEmpty, !model.liveArthurTurnId.isEmpty,
-       lastArthur.turnId != model.liveArthurTurnId {
-      return true
-    }
-    let spoken = ArthurProseJoin.fold(lastArthur?.text ?? "")
-    return spoken.isEmpty || !spoken.contains(live)
   }
 
   private var showWorkTrail: Bool {
@@ -303,10 +268,6 @@ struct ContentView: View {
   /// Hallway turns (or a narrow desk) should not force a full weather card.
   private var hallwayCompact: Bool {
     model.lastSurface == .hallway
-  }
-
-  private func fold(_ text: String) -> String {
-    ArthurProseJoin.fold(text)
   }
 
   private var emptyState: some View {
@@ -923,12 +884,25 @@ private struct ArthurCopy: View {
 }
 
 private struct ArthurReply: View {
+  @Environment(AppModel.self) private var model
   let text: String
   var live = false
 
   var body: some View {
+    if live {
+      // The animation schedule keeps painting while the transcript is scrolling.
+      // The scroll run loop does not refresh an ordinary body until the gesture ends.
+      TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { _ in
+        blockStack(model.spokenReveal.isEmpty ? text : model.spokenReveal)
+      }
+    } else {
+      blockStack(text)
+    }
+  }
+
+  private func blockStack(_ shown: String) -> some View {
     VStack(alignment: .leading, spacing: 10) {
-      ForEach(Array(ArthurMarkdown.blocks(from: text).enumerated()), id: \.offset) { _, block in
+      ForEach(Array(ArthurMarkdown.blocks(from: shown).enumerated()), id: \.offset) { _, block in
         switch block {
         case .prose(let line):
           ArthurProse(text: line, live: live)

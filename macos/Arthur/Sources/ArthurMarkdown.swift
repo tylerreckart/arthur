@@ -151,6 +151,7 @@ struct ArthurProse: View {
     ArthurMarkdown.inline(text, live: live)
       .multilineTextAlignment(.leading)
       .textSelection(.enabled)
+      .frame(maxWidth: .infinity, alignment: .leading)
       .fixedSize(horizontal: false, vertical: true)
   }
 }

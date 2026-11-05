@@ -47,12 +47,13 @@ bool is_clock_query(std::string_view transcript) {
 }
 
 bool withholds_fillers(std::string_view transcript) {
+  // Social, clock, and home turns answer in well under a second; an ack
+  // there would step on the reply. Briefing-shaped queries are NOT
+  // withheld: they only reach the filler loop when the fast path has no
+  // data, and that model path takes seconds — the dead air needs the ack.
   if (is_social_turn(transcript) || is_clock_query(transcript) ||
       parse_home_intent(transcript).has_value()) {
     return true;
-  }
-  if (auto briefing = parse_briefing_intent(transcript)) {
-    return briefing->confidence == BriefingConfidence::High;
   }
   return false;
 }

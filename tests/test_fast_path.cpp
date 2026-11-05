@@ -83,11 +83,14 @@ int main() {
   CHECK(intercom::is_social_turn("Good morning, Arthur."));
   CHECK(intercom::withholds_fillers("good morning"));
   CHECK(intercom::withholds_fillers("what time is it"));
-  CHECK(intercom::withholds_fillers("what's the weather"));
   CHECK(intercom::withholds_fillers("set a timer for 5 minutes"));
+  // Briefing-shaped queries only reach the filler loop when the fast path
+  // has no data; that slow model path should still get an instant ack.
+  // Weather stays withheld via the home-intent clause.
+  CHECK(intercom::withholds_fillers("what's the weather"));
   CHECK(intercom::withholds_fillers("what's the weather in Tokyo"));
-  CHECK(intercom::withholds_fillers("what's in the news"));
-  CHECK(intercom::withholds_fillers("how's the market"));
+  CHECK(!intercom::withholds_fillers("what's in the news"));
+  CHECK(!intercom::withholds_fillers("how's the market"));
   CHECK(!intercom::withholds_fillers("tell me a joke"));
   CHECK(!intercom::is_clock_query("what time is it in Tokyo"));
   CHECK(!on.try_handle("what's in the news").has_value());

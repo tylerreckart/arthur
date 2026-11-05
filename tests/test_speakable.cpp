@@ -48,6 +48,63 @@ int main() {
   CHECK(!contains(intercom::to_speakable("Hello — world"), "minus"));
   CHECK_EQ(intercom::to_speakable("Wait... okay"), "Wait, okay.");
   CHECK(contains(intercom::to_speakable("2 * 3"), "times"));
+  CHECK(contains(intercom::to_speakable("2/3"), "over"));
+
+  const char* kMemoryTurn =
+      "/mem search market headlines\n"
+      "/search stock market today November 4 2026 reaction midterms top=5\n"
+      "One moment while I pull the market picture, sir.\n"
+      "/fetch https://www.cnbc.com/markets\n"
+      "/fetch https://finance.yahoo.com/markets\n";
+  const std::string spoken = intercom::to_speakable(kMemoryTurn);
+  CHECK_EQ(spoken, "One moment while I pull the market picture, sir.");
+  CHECK(!contains(spoken, "mem"));
+  CHECK(!contains(spoken, "cnbc"));
+  CHECK(!contains(spoken, "yahoo"));
+
+  const char* kOneLine =
+      "mem search market headlines search stock market today November 4 2026 "
+      "reaction midterms top=5 One moment while I pull the market picture, sir. "
+      "fetch https://www.cnbc.com/markets fetch https://finance.yahoo.com/markets";
+  CHECK_EQ(intercom::to_speakable(kOneLine),
+           "One moment while I pull the market picture, sir.");
+  CHECK_EQ(intercom::to_speakable("/mem search coffee"), "");
+  CHECK_EQ(intercom::to_speakable("Search the latest headlines."),
+           "Search the latest headlines.");
+  CHECK_EQ(intercom::to_speakable("I'll fetch the report."), "I'll fetch the report.");
+  CHECK_EQ(intercom::to_speakable("Hello. /mem search coffee"), "Hello.");
+
+  intercom::ToolSpeechGate gate;
+  CHECK_EQ(gate.push("/mem sea"), "");
+  CHECK_EQ(gate.push("rch coffee\nHello."), "Hello.");
+  CHECK_EQ(gate.flush(), "");
+
+  // The model invented a weather pseudo-writ and ran its prose straight
+  // into it. The writ drops, the seam gets its space back, and the
+  // model's "sir ," spacing is tightened.
+  const char* kWeatherTurn =
+      "One moment, sir , fetching the Philadelphia forecast. "
+      "weather Philadelphia forecastThe national weather service is being "
+      "stubborn, sir , I'll try the open forecast service instead.";
+  const std::string weather = intercom::to_speakable(kWeatherTurn);
+  CHECK(!contains(weather, "weather Philadelphia"));
+  CHECK(contains(weather, "forecast. The national weather service"));
+  CHECK(!contains(weather, " ,"));
+  CHECK(contains(weather, "sir, I'll try"));
+
+  // Prose keeps its shape: mid-sentence weather, lowercase continuation,
+  // and domains are untouched by the writ gate and seam repair.
+  CHECK_EQ(intercom::to_speakable("The weather Tuesday will be cold, sir."),
+           "The weather Tuesday will be cold, sir.");
+  CHECK_EQ(intercom::to_speakable("Weather in Philadelphia looks grim, sir."),
+           "Weather in Philadelphia looks grim, sir.");
+  CHECK(contains(intercom::to_speakable("see www.cnbc.com/markets"), "www.cnbc.com"));
+  CHECK_EQ(intercom::to_speakable("/weather Philadelphia forecast"), "");
+
+  // Paragraph breaks survive to the transcript; single newlines do not.
+  const std::string para = intercom::to_speakable("First topic done.\n\nSecond topic here.");
+  CHECK_EQ(para, "First topic done.\n\nSecond topic here.");
+  CHECK_EQ(intercom::to_speakable("one line\nnext line"), "one line next line.");
 
   if (g_fails != 0) {
     std::cerr << g_fails << " failure(s)\n";

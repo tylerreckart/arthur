@@ -118,18 +118,19 @@ struct DropletContent: Equatable {
       you = model.discussion.last(where: \.fromYou)?.text ?? ""
     }
 
-    let forming = model.formingText.trimmingCharacters(in: .whitespacesAndNewlines)
     let lastArthur = model.discussion.last(where: { !$0.fromYou })
     let reply: String
-    if stage == .listening || (stage == .thinking && forming.isEmpty) {
+    if stage == .listening {
       reply = ""
-    } else if !forming.isEmpty {
-      reply = forming
+    } else if model.pacingReply {
+      reply = model.spokenReveal
+    } else if stage == .thinking {
+      reply = ""
     } else {
       reply = lastArthur?.text ?? ""
     }
 
-    let surface = (stage == .listening || !forming.isEmpty) ? nil : lastArthur?.surfaces.last
+    let surface = (stage == .listening || model.pacingReply || stage == .thinking) ? nil : lastArthur?.surfaces.last
     let workLine = model.work.line
     let speak = model.speakLevel
     let hotkey = model.pttHotkey.display
@@ -601,9 +602,9 @@ private struct DropletCardBody: View {
       }
 
       if content.reply.isEmpty {
-        Text(content.stage == .ready ? "Hello." : "Listening")
+        Text(content.stage == .ready ? "Hello." : (content.stage == .listening ? "Listening" : "…"))
           .font(.system(size: 20, weight: .regular, design: .serif))
-          .foregroundStyle(Color.white.opacity(0.92))
+          .foregroundStyle(Color.white.opacity(content.stage == .ready || content.stage == .listening ? 0.92 : 0.45))
           .frame(maxWidth: .infinity, alignment: .leading)
         if content.stage == .ready,
            !content.subtitle.isEmpty,
@@ -685,14 +686,7 @@ private struct SpokenReply: View {
 
   private func catchUp(to next: String) {
     reveal?.cancel()
-    let target = next.count
-    reveal = Task { @MainActor in
-      while count < target, !Task.isCancelled {
-        let remaining = target - count
-        count = min(target, count + max(1, remaining / 10))
-        try? await Task.sleep(for: .milliseconds(22))
-      }
-    }
+    count = next.count
   }
 }
 

@@ -845,10 +845,469 @@ std::string ensure_spoken_stop(std::string s) {
   return s;
 }
 
+bool is_hspace(char c) { return c == ' ' || c == '\t' || c == '\r'; }
+
+std::string lower_copy(std::string_view s) {
+  std::string out(s);
+  for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return out;
+}
+
+bool word_eq(std::string_view word, const char* cmd) {
+  if (word.size() != std::char_traits<char>::length(cmd)) return false;
+  for (std::size_t i = 0; i < word.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(word[i])) != cmd[i]) return false;
+  }
+  return true;
+}
+
+bool is_writ(std::string_view word) {
+  static const char* kCmds[] = {
+      "fetch",     "exec",      "agent",     "pane",        "write",
+      "endwrite",  "mem",       "endmem",    "read",        "list",
+      "map",       "browse",    "search",    "todo",        "endtodo",
+      "schedule",  "mcp",       "a2a",       "parallel",    "endparallel",
+      "advise",    "lesson",    "endlesson", "help",        "attach",
+      // The model sometimes invents pseudo-writs for capabilities it
+      // believes exist ("weather Philadelphia forecast"). Slashless
+      // matching stays guarded (slashless_tool); slashed always drops.
+      "weather",
+  };
+  for (const char* cmd : kCmds) {
+    if (word_eq(word, cmd)) return true;
+  }
+  return false;
+}
+
+bool is_cmd_prefix(std::string_view word, const char* const* cmds, std::size_t count) {
+  if (word.empty()) return false;
+  for (std::size_t c = 0; c < count; ++c) {
+    const char* cmd = cmds[c];
+    const std::size_t n = std::char_traits<char>::length(cmd);
+    if (word.size() > n) continue;
+    bool match = true;
+    for (std::size_t i = 0; i < word.size(); ++i) {
+      if (std::tolower(static_cast<unsigned char>(word[i])) != cmd[i]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return true;
+  }
+  return false;
+}
+
+bool is_writ_prefix(std::string_view word) {
+  static const char* kCmds[] = {
+      "fetch",     "exec",      "agent",     "pane",        "write",
+      "endwrite",  "mem",       "endmem",    "read",        "list",
+      "map",       "browse",    "search",    "todo",        "endtodo",
+      "schedule",  "mcp",       "a2a",       "parallel",    "endparallel",
+      "advise",    "lesson",    "endlesson", "help",        "attach",
+  };
+  return is_cmd_prefix(word, kCmds, sizeof(kCmds) / sizeof(kCmds[0]));
+}
+
+bool is_hold_prefix(std::string_view word) {
+  static const char* kPrefix[] = {
+      "mem",     "endmem", "endwrite", "endtodo", "endparallel",
+      "endlesson", "fetch", "search",  "browse", "weather",
+  };
+  return is_cmd_prefix(word, kPrefix, sizeof(kPrefix) / sizeof(kPrefix[0]));
+}
+
+bool is_month(std::string_view word) {
+  static const char* kMonths[] = {
+      "January", "February", "March",     "April",   "May",      "June",
+      "July",    "August",   "September", "October", "November", "December",
+  };
+  for (const char* month : kMonths) {
+    if (word == month) return true;
+  }
+  return false;
+}
+
+bool is_url_token(std::string_view tok) {
+  return tok.rfind("https://", 0) == 0 || tok.rfind("http://", 0) == 0 ||
+         tok.rfind("www.", 0) == 0;
+}
+
+bool is_url_prefix(std::string_view tok) {
+  static const char* kUrls[] = {"https://", "http://", "www."};
+  for (const char* url : kUrls) {
+    const std::size_t n = std::char_traits<char>::length(url);
+    if (tok.size() <= n) {
+      bool match = true;
+      for (std::size_t i = 0; i < tok.size(); ++i) {
+        if (tok[i] != url[i]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) return true;
+    }
+  }
+  return is_url_token(tok);
+}
+
+std::size_t line_limit_of(std::string_view s, std::size_t i) {
+  const auto n = s.find('\n', i);
+  return n == std::string_view::npos ? s.size() : n;
+}
+
+bool is_sentence_start(std::string_view s, std::size_t k, std::size_t limit) {
+  if (k >= limit || !std::isupper(static_cast<unsigned char>(s[k]))) return false;
+  std::size_t j = k + 1;
+  while (j < limit && is_alpha(s[j])) ++j;
+  return !is_month(s.substr(k, j - k));
+}
+
+struct ToolAt {
+  std::size_t start = 0;
+  std::size_t cmd_end = 0;
+  bool slash = false;
+  std::string cmd;
+};
+
+bool match_tool(std::string_view s, std::size_t i, std::size_t limit, bool allow_open,
+                ToolAt* out) {
+  if (i >= limit) return false;
+  if (i > 0 && !is_hspace(s[i - 1]) && s[i - 1] != '\n') return false;
+  std::size_t p = i;
+  bool slash = false;
+  if (s[p] == '/') {
+    slash = true;
+    ++p;
+  }
+  if (p >= limit) return false;
+  std::size_t n = 0;
+  while (p + n < limit && is_alpha(s[p + n])) ++n;
+  if (n == 0) return false;
+  const bool at_end = p + n == limit;
+  if (!at_end && !is_space(s[p + n])) return false;
+  if (at_end && !allow_open) return false;
+  const std::string cmd = lower_copy(s.substr(p, n));
+  if (at_end) return false;
+  // Slashed words are writs even when the model invents a name the host
+  // does not implement ("/weather Philadelphia"): prose never begins a
+  // token with a slash. Slashless writs stay limited to the known list.
+  if (!slash && !is_writ(cmd)) return false;
+  out->start = i;
+  out->cmd_end = p + n;
+  out->slash = slash;
+  out->cmd = cmd;
+  return true;
+}
+
+bool search_has_equals(std::string_view s, std::size_t from, std::size_t limit) {
+  for (std::size_t i = from; i < limit; ++i) {
+    if (s[i] == '\n') return false;
+    if (s[i] == '.' || s[i] == '!' || s[i] == '?') return false;
+    if (is_hspace(s[i])) {
+      std::size_t k = i;
+      while (k < limit && is_hspace(s[k])) ++k;
+      if (k < limit && is_sentence_start(s, k, limit)) return false;
+    }
+    if (s[i] == '=') return true;
+  }
+  return false;
+}
+
+std::size_t word_count_from(std::string_view s, std::size_t i, std::size_t limit) {
+  std::size_t words = 0;
+  bool in_word = false;
+  for (std::size_t k = i; k < limit; ++k) {
+    if (is_space(s[k])) {
+      in_word = false;
+      continue;
+    }
+    if (!in_word) {
+      in_word = true;
+      ++words;
+    }
+  }
+  return words;
+}
+
+bool slashless_tool(const ToolAt& tool, std::string_view s, std::size_t limit, bool closed) {
+  if (tool.slash) return true;
+  if (tool.cmd == "mem" || tool.cmd == "endmem" || tool.cmd == "endwrite" ||
+      tool.cmd == "endtodo" || tool.cmd == "endparallel" || tool.cmd == "endlesson") {
+    return true;
+  }
+  if (tool.cmd == "fetch") {
+    std::size_t k = tool.cmd_end;
+    while (k < limit && is_hspace(s[k])) ++k;
+    if (k >= limit) return false;
+    std::size_t j = k;
+    while (j < limit && !is_space(s[j])) ++j;
+    if (j == limit && !closed) return false;
+    return is_url_token(s.substr(k, j - k));
+  }
+  if (tool.cmd == "search" || tool.cmd == "browse") {
+    return search_has_equals(s, tool.cmd_end, limit);
+  }
+  if (tool.cmd == "weather") {
+    // Slashless pseudo-writ: "weather Philadelphia forecast". Gate it
+    // only when it follows a sentence end (mid-sentence prose "The
+    // weather Tuesday…" stays spoken) and its first argument is a
+    // capitalized place name ("Weather will be…" stays spoken).
+    std::size_t k = tool.cmd_end;
+    while (k < limit && is_hspace(s[k])) ++k;
+    if (k >= limit) return false;
+    if (std::isupper(static_cast<unsigned char>(s[k])) == 0) return false;
+    std::size_t back = tool.start;
+    while (back > 0 && is_hspace(s[back - 1])) --back;
+    if (back == 0) return true;
+    const char prev = s[back - 1];
+    return prev == '.' || prev == '!' || prev == '?' || prev == '\n';
+  }
+  return false;
+}
+
+std::size_t scan_tool_args(std::string_view s, const ToolAt& tool, std::size_t limit) {
+  if (!tool.slash && tool.cmd == "fetch") {
+    std::size_t k = tool.cmd_end;
+    while (k < limit && is_hspace(s[k])) ++k;
+    while (k < limit && !is_space(s[k])) ++k;
+    return k;
+  }
+  if (tool.cmd == "weather") {
+    // The invented weather writ takes a place name and a descriptor, with
+    // no "=" and no reliable terminator. Consume argument tokens until a
+    // newline, a sentence end, or an internal lower→upper seam — the
+    // model sometimes runs its prose straight into the writ
+    // ("…forecastThe national weather service…"), and the seam is the
+    // only boundary that survives the mash. Applies to the slashed form
+    // too: its capitalized place argument would otherwise read as a
+    // sentence start to the generic scanner.
+    std::size_t i = tool.cmd_end;
+    while (i < limit) {
+      if (s[i] == '\n') return i;
+      if (is_hspace(s[i])) {
+        ++i;
+        continue;
+      }
+      std::size_t j = i;
+      while (j < limit && !is_space(s[j])) {
+        if (j > i && std::isupper(static_cast<unsigned char>(s[j])) &&
+            is_alnum(s[j - 1]) &&
+            !std::isupper(static_cast<unsigned char>(s[j - 1]))) {
+          return j;
+        }
+        ++j;
+      }
+      if (j < limit &&
+          (s[j - 1] == '.' || s[j - 1] == '!' || s[j - 1] == '?')) {
+        return j;
+      }
+      i = j;
+    }
+    return i;
+  }
+  std::size_t i = tool.cmd_end;
+  while (i < limit) {
+    if (s[i] == '\n') return i;
+    if (is_hspace(s[i])) {
+      std::size_t k = i;
+      while (k < limit && is_hspace(s[k])) ++k;
+      if (k >= limit) return limit;
+      if (s[k] == '\n') return k;
+      ToolAt next;
+      if (match_tool(s, k, limit, false, &next) &&
+          slashless_tool(next, s, limit, limit < s.size())) {
+        return k;
+      }
+      if (is_sentence_start(s, k, limit)) return k;
+      i = k;
+      while (i < limit && !is_space(s[i])) ++i;
+      continue;
+    }
+    while (i < limit && !is_space(s[i])) ++i;
+  }
+  return i;
+}
+
+// End index of a writ that is safe to drop, or npos if s[i] is not one.
+std::size_t tool_span_end(std::string_view s, std::size_t i, bool flush) {
+  const std::size_t limit = line_limit_of(s, i);
+  const bool complete = limit < s.size() || flush;
+  ToolAt tool;
+  if (!match_tool(s, i, limit, false, &tool)) return std::string_view::npos;
+  if (!slashless_tool(tool, s, limit, complete)) return std::string_view::npos;
+  const std::size_t end = scan_tool_args(s, tool, limit);
+  if (end < limit) return end;
+  if (complete) return limit;
+  return std::string_view::npos;
+}
+
+bool should_hold_suffix(std::string_view s, std::size_t i) {
+  if (s.find('\n', i) != std::string_view::npos) return false;
+  std::size_t p = i;
+  while (p < s.size() && is_hspace(s[p])) ++p;
+  if (p == s.size()) return i == s.size() || is_hspace(s[i]) || i == 0;
+  bool line_start = true;
+  if (p > 0) {
+    for (std::size_t k = p; k > 0; --k) {
+      if (s[k - 1] == '\n') break;
+      if (!is_hspace(s[k - 1])) {
+        line_start = false;
+        break;
+      }
+    }
+  }
+  std::size_t q = p;
+  const bool slash = s[q] == '/';
+  if (slash) ++q;
+  if (q >= s.size()) return slash;
+  std::size_t n = 0;
+  while (q + n < s.size() && is_alpha(s[q + n])) ++n;
+  if (n == 0) return false;
+  if (q + n < s.size() && !is_space(s[q + n])) return false;
+  const std::string cmd = lower_copy(s.substr(q, n));
+  const bool open = q + n == s.size();
+  if (!slash && !line_start && cmd != "fetch") return false;
+  if (open) {
+    if (slash) return true;  // any slashed prefix is a writ being typed
+    return is_hold_prefix(cmd);
+  }
+  if (slash) return true;  // closed slashed word: hold until the line resolves
+  if (cmd == "mem" || cmd == "endmem" || cmd == "endwrite" || cmd == "endtodo" ||
+      cmd == "endparallel" || cmd == "endlesson") {
+    return true;
+  }
+  if (cmd == "fetch") {
+    std::size_t k = q + n;
+    while (k < s.size() && is_hspace(s[k])) ++k;
+    if (k >= s.size()) return true;
+    std::size_t j = k;
+    while (j < s.size() && !is_space(s[j])) ++j;
+    const auto tok = s.substr(k, j - k);
+    if (j == s.size()) return is_url_prefix(tok);
+    return false;
+  }
+  if (cmd == "search" || cmd == "browse") {
+    if (search_has_equals(s, q + n, s.size())) return true;
+    if (s.find_first_of(".!?", q + n) != std::string_view::npos) return false;
+    return word_count_from(s, p, s.size()) < 12;
+  }
+  return false;
+}
+
+std::string take_spoken(std::string* pending, bool flush) {
+  const std::string& s = *pending;
+  std::string out;
+  std::size_t i = 0;
+  while (i < s.size()) {
+    // Newlines pass through: blank-line runs carry paragraph breaks that
+    // protect_paragraph_breaks turns into a display marker; single
+    // newlines flatten to a space later.
+    const std::size_t end = tool_span_end(s, i, flush);
+    if (end != std::string_view::npos) {
+      i = end;
+      // The writ line's terminator goes with the writ; a leftover newline
+      // would surface as a phantom paragraph break in the transcript.
+      if (i < s.size() && s[i] == '\n') ++i;
+      continue;
+    }
+    if (!flush && should_hold_suffix(s, i)) {
+      pending->erase(0, i);
+      return out;
+    }
+    out.push_back(s[i]);
+    ++i;
+  }
+  pending->clear();
+  return out;
+}
+
+// Blank-line runs become a sentinel that survives whitespace collapsing,
+// so the desk transcript keeps the model's paragraphing. Single newlines
+// still flatten to a space (speech never pauses for a line break).
+std::string protect_paragraph_breaks(std::string_view s) {
+  std::string out;
+  out.reserve(s.size());
+  std::size_t i = 0;
+  while (i < s.size()) {
+    if (s[i] == '\n') {
+      std::size_t k = i;
+      std::size_t newlines = 0;
+      while (k < s.size() && is_space(s[k])) {
+        if (s[k] == '\n') ++newlines;
+        ++k;
+      }
+      if (newlines >= 2) {
+        // Consecutive runs (writs dropped between blank lines) are one break.
+        if (out.empty() || out.back() != '\x1c') out.push_back('\x1c');
+        i = k;
+        continue;
+      }
+    }
+    out.push_back(s[i]);
+    ++i;
+  }
+  return out;
+}
+
+std::string restore_paragraph_breaks(std::string_view s) {
+  std::string out;
+  out.reserve(s.size() + 8);
+  for (char c : s) {
+    if (c == '\x1c') {
+      out += "\n\n";
+    } else {
+      out.push_back(c);
+    }
+  }
+  return out;
+}
+
+// Repair model spacing quirks before display and speech:
+//  - the model sometimes writes "sir , fetching" — no space before
+//    , ; : ! ?
+//  - a mashed sentence boundary ("forecast.The national…", the seam a
+//    dropped writ leaves behind) gets its space back — but only before
+//    an UPPERCASE letter, so "www.cnbc.com" keeps its shape.
+std::string tighten_punctuation(std::string_view s) {
+  std::string out;
+  out.reserve(s.size() + 8);
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    const char c = s[i];
+    if (c == ',' || c == ';' || c == ':' || c == '!' || c == '?') {
+      while (!out.empty() && out.back() == ' ') out.pop_back();
+      out.push_back(c);
+      continue;
+    }
+    if (c == '.') {
+      while (!out.empty() && out.back() == ' ') out.pop_back();
+      out.push_back(c);
+      continue;
+    }
+    if (std::isupper(static_cast<unsigned char>(c)) && !out.empty()) {
+      const char prev = out.back();
+      if (prev == '.' || prev == '!' || prev == '?') out.push_back(' ');
+    }
+    out.push_back(c);
+  }
+  return out;
+}
+
 }  // namespace
 
+std::string ToolSpeechGate::push(std::string_view delta) {
+  held_.append(delta.data(), delta.size());
+  return drain(false);
+}
+
+std::string ToolSpeechGate::flush() { return drain(true); }
+
+std::string ToolSpeechGate::drain(bool flush) { return take_spoken(&held_, flush); }
+
 std::string to_speakable(std::string_view text) {
-  std::string s(text);
+  ToolSpeechGate gate;
+  std::string s = gate.push(text);
+  s += gate.flush();
+  s = protect_paragraph_breaks(s);
   s = strip_fences(std::move(s));
   s = strip_math_delimiters(s);
   // Any remaining TeX commands (inline, no $).
@@ -856,9 +1315,12 @@ std::string to_speakable(std::string_view text) {
   s = strip_markdown(s);
   s = speak_symbols(s);
   s = expand_ordinals(s);
+  s = tighten_punctuation(s);
   s = collapse_ws(s);
+  // A trailing break belongs to the next `said`, not this one.
+  while (!s.empty() && s.back() == '\x1c') s.pop_back();
   s = ensure_spoken_stop(std::move(s));
-  return s;
+  return restore_paragraph_breaks(s);
 }
 
 }  // namespace intercom
