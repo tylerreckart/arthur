@@ -98,14 +98,18 @@ void parse_sse_buffer(std::string& buf,
     }
 
     auto event_depth = [&]() -> int {
-      if (j.contains("depth") && j["depth"].is_number_integer()) {
-        return j["depth"].get<int>();
+      if (j.contains("depth") && j["depth"].is_number()) {
+        return static_cast<int>(j["depth"].get<double>());
       }
       return 0;
     };
+    // Master text is stamped with depth 0. Delegated turns omit depth;
+    // treating that as the master is what read memory searches aloud.
+    const bool master_text =
+        j.contains("depth") && j["depth"].is_number() && event_depth() == 0;
 
     if (event_name == "text" && cbs.on_text_delta) {
-      if (event_depth() == 0 && j.contains("delta") && j["delta"].is_string()) {
+      if (master_text && j.contains("delta") && j["delta"].is_string()) {
         cbs.on_text_delta(j["delta"].get<std::string>());
       }
     } else if (event_name == "tool_call" && cbs.on_tool_call) {

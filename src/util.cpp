@@ -315,7 +315,19 @@ std::vector<std::string> coalesce_speech_sentences(
   std::vector<std::string> out;
   std::string chunk;
   for (const auto& sentence : sentences) {
-    const std::string clean = trim(sentence);
+    // A leading "\n\n" is a paragraph marker from flush_sentences. trim()
+    // would erase it and the transcript would lose the model's paragraphs,
+    // so lift the marker off before trimming and keep it in the chunk.
+    bool paragraph = false;
+    std::string_view sv = sentence;
+    while (!sv.empty() && (sv.front() == ' ' || sv.front() == '\t' || sv.front() == '\r')) {
+      sv.remove_prefix(1);
+    }
+    if (sv.substr(0, 2) == "\n\n") {
+      paragraph = true;
+      sv.remove_prefix(2);
+    }
+    const std::string clean = trim(sv);
     if (clean.empty()) continue;
     const std::size_t joined_size =
         chunk.empty() ? clean.size() : chunk.size() + 1 + clean.size();
@@ -323,7 +335,11 @@ std::vector<std::string> coalesce_speech_sentences(
       out.push_back(std::move(chunk));
       chunk.clear();
     }
-    if (!chunk.empty()) chunk.push_back(' ');
+    if (!chunk.empty()) {
+      chunk += paragraph ? "\n\n" : " ";
+    } else if (paragraph && !out.empty()) {
+      chunk += "\n\n";
+    }
     chunk += clean;
   }
   if (!chunk.empty()) out.push_back(std::move(chunk));
@@ -456,6 +472,11 @@ std::vector<std::string> flush_sentences(std::string& buf, bool final_flush,
 
   std::vector<std::string> out;
   std::size_t start = 0;
+  // True when the gap before the next emitted sentence crossed a blank
+  // line. The next chunk is prefixed with "\n\n" so the desk transcript
+  // keeps the model's paragraphing; to_speakable protects the break from
+  // whitespace collapsing, and TTS is unaffected.
+  bool paragraph_break = false;
   for (std::size_t i = 0; i < buf.size(); ++i) {
     const char c = buf[i];
     if (c == '.' || c == '!' || c == '?') {
@@ -465,19 +486,28 @@ std::vector<std::string> flush_sentences(std::string& buf, bool final_flush,
           buf[i + 1] == '"' || buf[i + 1] == '\'';
       if (boundary) {
         std::string sentence = trim(buf.substr(start, i - start + 1));
-        if (!sentence.empty()) out.push_back(std::move(sentence));
+        if (!sentence.empty()) {
+          if (paragraph_break && !out.empty()) sentence = "\n\n" + sentence;
+          out.push_back(std::move(sentence));
+        }
         start = i + 1;
+        std::size_t newlines = 0;
         while (start < buf.size() &&
                std::isspace(static_cast<unsigned char>(buf[start]))) {
+          if (buf[start] == '\n') ++newlines;
           ++start;
         }
+        paragraph_break = newlines >= 2;
       }
     }
   }
   if (final_flush) {
     std::string rest = trim(buf.substr(start));
     strip_leading_clause_punct(rest);
-    if (!rest.empty()) out.push_back(std::move(rest));
+    if (!rest.empty()) {
+      if (paragraph_break && !out.empty()) rest = "\n\n" + rest;
+      out.push_back(std::move(rest));
+    }
     buf.clear();
     return out;
   }
@@ -488,7 +518,11 @@ std::vector<std::string> flush_sentences(std::string& buf, bool final_flush,
     if (cut > 0) {
       std::string chunk = trim(buf.substr(0, cut));
       strip_trailing_clause_punct(chunk);
-      if (!chunk.empty()) out.push_back(std::move(chunk));
+      if (!chunk.empty()) {
+        if (paragraph_break && !out.empty()) chunk = "\n\n" + chunk;
+        out.push_back(std::move(chunk));
+        paragraph_break = false;
+      }
       const std::size_t next = skip_space_and_clause_punct(buf, cut);
       buf.erase(0, next);
     }

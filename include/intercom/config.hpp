@@ -54,9 +54,10 @@ struct FillerConfig {
   std::string api_base_url = "https://openrouter.ai/api/v1";
   std::string api_key;
   std::string model = "deepseek/deepseek-v4-flash";
-  // Speak a cached local backchannel this many ms after the turn starts
-  // (0 = disabled). High enough that a fast Arbiter reply skips filler.
-  int instant_ack_ms = 1100;
+    // Speak a cached local backchannel this many ms after the turn starts
+    // (0 = disabled). High enough that a fast Arbiter reply skips filler,
+    // low enough that the model's ~1.2s first token does not leave dead air.
+    int instant_ack_ms = 700;
   // After a tool_call, speak a cached tool ack this many ms later if no
   // local ack has been spoken yet (0 = immediately).
   int tool_ack_ms = 350;

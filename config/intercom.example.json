@@ -12,7 +12,7 @@
   "channels": 1,
   "fast_path": true,
   "ws_listen_port": 8093,
-  "early_flush_words": 0,
+  "early_flush_words": 8,
   "warm_prefix": true,
   "home": {
     "ha_base_url": "",

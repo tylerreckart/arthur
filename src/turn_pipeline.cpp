@@ -46,6 +46,7 @@ struct ArbiterRunState {
   std::string full_content;
   std::string stream_err;
   std::string speak_buf;
+  ToolSpeechGate speech_gate;
   std::string tool_name;
   int last_forming_ms = -1000;
   std::mutex speak_mu;
@@ -1807,7 +1808,18 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
 
   std::string conv_err;
   auto conv_future = std::async(std::launch::async, [&]() {
-    return ensure_conversation(device_id, &conv_err);
+    const auto conv_t0 = std::chrono::steady_clock::now();
+    const std::int64_t id = ensure_conversation(device_id, &conv_err);
+    const int conv_get_ms = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - conv_t0)
+            .count());
+    // A session read should be single-digit ms. Log the outliers so DB
+    // contention shows up in the latency trail instead of hiding in conv_ms.
+    if (conv_get_ms > 150) {
+      std::cerr << "intercom conv slow: " << conv_get_ms << "ms" << std::endl;
+    }
+    return id;
   });
 
   const std::int64_t conv = conv_future.get();
@@ -1839,7 +1851,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     }
     arb_state.got_first_delta.store(true);
     std::lock_guard<std::mutex> lk(arb_state.speak_mu);
-    arb_state.speak_buf += delta;
+    arb_state.speak_buf += arb_state.speech_gate.push(delta);
     const int now_ms = elapsed_now();
     if (now_ms - arb_state.last_forming_ms >= 80) {
       arb_state.last_forming_ms = now_ms;
@@ -2026,6 +2038,10 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     return finish(result);
   }
 
+  {
+    std::lock_guard<std::mutex> lk(arb_state.speak_mu);
+    arb_state.speak_buf += arb_state.speech_gate.flush();
+  }
   if (!drain_and_speak(true)) {
     result.error = err.empty() ? "tts failed" : err;
     emit_briefing_surface();

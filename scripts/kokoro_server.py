@@ -25,6 +25,22 @@ import numpy as np
 
 ENGINE = None
 LOCK = threading.Lock()
+# Monotonic request epoch: the newest /v1/tts/stream request supersedes
+# older in-flight ones at the next batch boundary (barge-in preemption).
+EPOCH = 0
+EPOCH_LOCK = threading.Lock()
+
+
+def bump_epoch() -> int:
+    global EPOCH
+    with EPOCH_LOCK:
+        EPOCH += 1
+        return EPOCH
+
+
+def current_epoch() -> int:
+    with EPOCH_LOCK:
+        return EPOCH
 DEFAULT_VOICE = "bm_lewis"
 VOICE = DEFAULT_VOICE
 VOICE_STYLE = DEFAULT_VOICE
@@ -216,21 +232,47 @@ def trim_silence(audio: np.ndarray, sample_rate: int) -> np.ndarray:
 
 
 def phoneme_batches(text: str) -> list[str]:
-    """Split below Kokoro's style-table edge; its native splitter may hit 510."""
-    phonemes = ENGINE.tokenizer.phonemize(prepare_text(text), LANG)
-    batches: list[str] = []
-    for native in ENGINE._split_phonemes(phonemes):
-        words = re.findall(r"\S+", native)
+    """Split below Kokoro's style-table edge; its native splitter may hit 510.
+
+    Batches break at sentence ends first, then commas, so streamed audio (and
+    barge-in preemption) react at clause granularity instead of whole
+    paragraphs. A ~64-token cap keeps any single inference under ~3s of
+    wall clock (RTF ~0.43), so a long sentence streams clause by clause
+    instead of stalling playback behind one giant batch."""
+    max_tokens = 64
+    count = lambda s: len(ENGINE.tokenizer.tokenize(s))
+
+    def fit(fragments: list[str]) -> list[str]:
+        out: list[str] = []
         current = ""
-        for word in words:
-            candidate = f"{current} {word}".strip()
-            if current and len(ENGINE.tokenizer.tokenize(candidate)) > 480:
-                batches.append(current)
-                current = word
+        for frag in fragments:
+            candidate = f"{current} {frag}".strip() if current else frag
+            if current and count(candidate) > max_tokens:
+                out.append(current)
+                current = frag
             else:
                 current = candidate
         if current:
-            batches.append(current)
+            out.append(current)
+        return out
+
+    phonemes = ENGINE.tokenizer.phonemize(prepare_text(text), LANG)
+    batches: list[str] = []
+    for native in ENGINE._split_phonemes(phonemes):
+        for sentence in re.split(r"(?<=[.!?])\s+", native.strip()):
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            if count(sentence) <= max_tokens:
+                batches.append(sentence)
+                continue
+            packed: list[str] = []
+            for clause in re.split(r"(?<=[,;:])\s+", sentence):
+                if count(clause) <= max_tokens:
+                    packed.append(clause)
+                else:
+                    packed.extend(fit(re.findall(r"\S+", clause)))
+            batches.extend(fit(packed))
     return batches
 
 
@@ -330,6 +372,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def _stream_pcm(self, text: str, speed: float) -> None:
+        my_epoch = bump_epoch()
         self.send_response(200)
         self.send_header("Content-Type", "audio/L16; rate=24000; channels=1")
         self.send_header("Transfer-Encoding", "chunked")
@@ -341,6 +384,12 @@ class Handler(BaseHTTPRequestHandler):
             # trimming exception there can otherwise leave the HTTP body open.
             with LOCK:
                 for audio, sample_rate in generate_parts(text, speed):
+                    if my_epoch != current_epoch():
+                        # Superseded by a newer request (barge-in): stop
+                        # generating stale audio so the live turn is not
+                        # queued behind it. Ending the body also unblocks
+                        # the old client instead of leaving it on the LOCK.
+                        break
                     pcm = np.clip(
                         np.asarray(audio) * 32767.0, -32768, 32767
                     ).astype(np.int16)
