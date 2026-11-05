@@ -392,8 +392,8 @@ are slightly warmer and more measured; tool-wait asides are quieter and briefer;
 warnings are firmer and leave a little more space. The adjustments are subtle
 speed, gain, and pause changes on top of the selected Kokoro voice.
 
-The default `kokoro.voice` is `bm_lewis` (language `en-gb`), matching Arthur's
-British persona. Other single names and weighted blends remain valid.
+The default `kokoro.voice` is `bm_lewis` (language `en-gb`), matching Arthur's 
+persona. Other single names and weighted blends remain valid.
 `left+right:weight` is still the two-way form (weight is the
 fraction of the right voice). N-way mixes use `name:weight+name:weight`;
 omitted weights are equal, and raw ratios such as `3:1:1` are normalized to

@@ -352,60 +352,22 @@ struct ArthurBead: View {
   private func mark(time: TimeInterval) -> some View {
     let listening = bead.listening
     let level = bead.level
-    let tail: CGFloat = (listening || bead.dripping)
-      ? 2.4 + CGFloat(level) * 3.4 + CGFloat(sin(time * 7.5)) * 0.55
-      : 0
     let breath = (bead.thinking || bead.speaking) ? (0.5 + 0.5 * sin(time * (bead.speaking ? 2.6 : 1.15))) : 0
-    let specX: CGFloat = listening
-      ? CGFloat(sin(time * 3.1)) * 0.06
-      : (bead.thinking || bead.speaking ? CGFloat(sin(time * 0.75)) * 0.20 : -0.16)
-    let specY: CGFloat = -0.24 + (bead.thinking ? CGFloat(cos(time * 0.65)) * 0.08 : 0)
-    let scale = listening ? 1 + 0.07 * level + 0.02 * CGFloat(sin(time * 5)) : 1
+    let drip = bead.dripping ? sin(time * 7.2) : 0
+    let scale = listening ? 1 + 0.035 * level + 0.012 * sin(time * 4.6) : 1
+    let stretch = 0.10 * drip
 
-    return ZStack {
-      if tail > 0.5 {
-        Capsule(style: .continuous)
-          .fill(Color.black)
-          .frame(width: max(3, diameter * 0.28), height: diameter * 0.34 + tail)
-          .offset(y: diameter * 0.34)
-          .blur(radius: 0.35)
-      }
-      Circle()
-        .fill(Color.black)
-        .overlay {
-          Circle()
-            .fill(
-              RadialGradient(
-                colors: [
-                  Color.white.opacity(0.22 + breath * 0.06),
-                  Color.white.opacity(0.05),
-                  Color.clear,
-                ],
-                center: UnitPoint(x: 0.5 + specX, y: 0.5 + specY),
-                startRadius: 0,
-                endRadius: diameter * 0.62
-              )
-            )
-        }
-        .overlay {
-          Circle()
-            .strokeBorder(
-              LinearGradient(
-                colors: [
-                  Color.white.opacity(0.22),
-                  Color.white.opacity(0.04),
-                  Color.white.opacity(listening ? 0.12 : 0.06),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-              ),
-              lineWidth: max(0.6, diameter * 0.045)
-            )
-        }
-        .shadow(color: Color.white.opacity(listening ? 0.35 : (bead.connected ? 0.16 : 0.06)), radius: listening ? 4 : 1.5)
-        .scaleEffect(scale)
-    }
-    .frame(width: diameter, height: diameter)
+    return ArthurMarkTile(
+      size: diameter,
+      glyphOpacity: 0.88 + 0.12 * breath + (listening ? 0.1 : 0),
+      rimOpacity: bead.connected ? 0.22 : 0.12,
+      shadows: diameter >= 20
+    )
+    .scaleEffect(x: scale * (1 - stretch), y: scale * (1 + stretch))
+    .shadow(
+      color: Color.white.opacity(listening ? 0.28 + 0.25 * level : 0),
+      radius: listening ? 4 : 0
+    )
   }
 }
 
@@ -587,7 +549,17 @@ private struct DropletCardBody: View {
   var body: some View {
     let content = session.content
     VStack(alignment: .leading, spacing: 14) {
-      HStack {
+      HStack(alignment: .center, spacing: 0) {
+        Button(action: { session.actions.open() }) {
+          ArthurGlyph()
+            .fill(Color.white.opacity(0.92))
+            .frame(width: 16, height: 16)
+            .frame(width: 24, height: 24)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open the conversation")
+        .accessibilityLabel("Open Arthur")
         Spacer(minLength: 0)
         Button(action: { session.actions.dismiss() }) {
           Image(systemName: "xmark")
@@ -618,22 +590,8 @@ private struct DropletCardBody: View {
         SpokenReply(text: content.reply)
       }
 
-      HStack {
-        Spacer(minLength: 0)
-        Button(action: { session.actions.open() }) {
-          Text("Open")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(Color.white.opacity(0.92))
-            .padding(.horizontal, 16)
-            .frame(height: 32)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Open the conversation")
-        .accessibilityLabel("Open Arthur")
-      }
     }
-    .padding(16)
+    .padding(24)
     .frame(width: DropletMetrics.cardWidth, alignment: .leading)
     .animation(.easeOut(duration: 0.28), value: content.reply)
     .simultaneousGesture(cardDrag)

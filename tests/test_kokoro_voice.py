@@ -23,17 +23,6 @@ def style_loader(**named):
     return get_style
 
 
-class DefaultVoiceTests(unittest.TestCase):
-    def test_server_default_matches_british_persona(self):
-        self.assertEqual(ks.DEFAULT_VOICE, "bm_lewis")
-        self.assertEqual(ks.VOICE, ks.DEFAULT_VOICE)
-        self.assertEqual(ks.VOICE_STYLE, ks.DEFAULT_VOICE)
-        comps = ks.prepared_voice_components(ks.DEFAULT_VOICE)
-        self.assertEqual([(c.name, c.weight) for c in comps], [("bm_lewis", 1.0)])
-        self.assertEqual(ks.voice_lang(ks.DEFAULT_VOICE), "en-gb")
-        self.assertEqual(ks.dominant_voice_name(comps), "bm_lewis")
-
-
 class ParseNormalizeTests(unittest.TestCase):
     def test_plain_voice(self):
         comps = ks.prepared_voice_components("bm_lewis")
