@@ -1355,3 +1355,36 @@ final class ScreenFrameView: NSView {
     onChange(rect)
   }
 }
+
+#if DEBUG
+private struct DropletCardPreview: View {
+  var content: DropletContent
+  @State private var session: DropletSession
+
+  init(content: DropletContent) {
+    self.content = content
+    let session = DropletSession()
+    session.content = content
+    session.openBegan = .distantPast
+    _session = State(initialValue: session)
+  }
+
+  var body: some View {
+    DropletCardBody(session: session)
+      .background(Color.black, in: RoundedRectangle(cornerRadius: DropletMetrics.corner, style: .continuous))
+      .preferredColorScheme(.dark)
+  }
+}
+
+#Preview("Droplet · ready") {
+  DropletCardPreview(content: .empty)
+}
+
+#Preview("Droplet · listening") {
+  DropletCardPreview(content: ArthurPreviews.listeningDroplet)
+}
+
+#Preview("Droplet · reply") {
+  DropletCardPreview(content: ArthurPreviews.replyDroplet)
+}
+#endif

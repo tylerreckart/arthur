@@ -1121,3 +1121,43 @@ struct SettingsView: View {
     return text
   }
 }
+
+#if DEBUG
+#Preview("Empty") {
+  ContentView()
+    .environment(AppModel.previewCanvas())
+    .frame(width: 520, height: 680)
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Conversation") {
+  ContentView()
+    .environment(
+      AppModel.previewCanvas(
+        discussion: [
+          DiscussionLine(fromYou: true, text: "What's on this evening?"),
+          DiscussionLine(
+            fromYou: false,
+            text: "Clear, and cooler than yesterday. Nothing else on the desk."
+          ),
+        ]
+      )
+    )
+    .frame(width: 520, height: 680)
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Listening") {
+  ContentView()
+    .environment(ArthurPreviews.listening)
+    .frame(width: 520, height: 680)
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Settings") {
+  SettingsView()
+    .environment(AppModel.previewCanvas())
+    .frame(width: 560, height: 680)
+    .preferredColorScheme(.dark)
+}
+#endif

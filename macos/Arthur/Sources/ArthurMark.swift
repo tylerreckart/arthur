@@ -280,3 +280,21 @@ enum BeadSnapshot {
     return image
   }
 }
+
+#if DEBUG
+#Preview("Menu bar glyph") {
+  ArthurGlyph()
+    .fill(Color.primary)
+    .frame(width: 16, height: 16)
+    .padding(14)
+}
+
+#Preview("Mark") {
+  HStack(spacing: 20) {
+    ArthurBead(bead: BeadState(), diameter: 16)
+    ArthurMarkTile(size: 72, shadows: false)
+  }
+  .padding(28)
+  .background(Color.black)
+}
+#endif

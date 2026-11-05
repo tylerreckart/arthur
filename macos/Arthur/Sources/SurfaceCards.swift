@@ -493,3 +493,18 @@ private struct GenericSurfaceCard: View {
     .arthurPlate(radius: compact ? 14 : 16)
   }
 }
+
+#if DEBUG
+#Preview("Surface card") {
+  SurfaceCard(
+    surface: ChatSurface(
+      kindRaw: SurfaceKind.generic.rawValue,
+      title: "This evening",
+      summary: "Clear, and cooler than yesterday."
+    )
+  )
+  .padding(24)
+  .frame(width: 400)
+  .preferredColorScheme(.dark)
+}
+#endif
