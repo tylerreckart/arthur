@@ -144,6 +144,36 @@ enum ConfigStore {
     }
   }
 
+  static func loadLibrary(deviceId: String) -> ConversationLibrary {
+    guard !deviceId.isEmpty,
+          let data = try? Data(contentsOf: libraryURL()),
+          let all = try? JSONDecoder().decode([String: ConversationLibrary].self, from: data),
+          var library = all[deviceId],
+          !library.conversations.isEmpty
+    else {
+      return ConversationLibrary.imported(lines: loadTranscript(deviceId: deviceId))
+    }
+    if !library.conversations.contains(where: { $0.id == library.activeId }) {
+      library.activeId = library.conversations[0].id
+    }
+    return library
+  }
+
+  static func saveLibrary(_ library: ConversationLibrary, deviceId: String) {
+    guard !deviceId.isEmpty else { return }
+    var all: [String: ConversationLibrary] = [:]
+    if let data = try? Data(contentsOf: libraryURL()),
+       let decoded = try? JSONDecoder().decode([String: ConversationLibrary].self, from: data) {
+      all = decoded
+    }
+    all[deviceId] = library
+    let dir = libraryURL().deletingLastPathComponent()
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    if let data = try? JSONEncoder().encode(all) {
+      try? data.write(to: libraryURL(), options: .atomic)
+    }
+  }
+
   static func loadSessions(dbPath: String) -> [DeviceSession] {
     var db: OpaquePointer?
     guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else {
@@ -215,6 +245,10 @@ enum ConfigStore {
 
   private static func transcriptURL() -> URL {
     supportDirectory().appendingPathComponent("transcripts.json")
+  }
+
+  private static func libraryURL() -> URL {
+    supportDirectory().appendingPathComponent("conversations.json")
   }
 
   private static func draftURL() -> URL {

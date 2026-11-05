@@ -39,6 +39,13 @@ class SessionStore {
   std::vector<DeviceSession> list() const;
   bool upsert(const DeviceSession& session, std::string* err);
 
+  // Conversations this device has opened. Resume refuses any other id.
+  bool remember_conversation(const std::string& device_id,
+                             std::int64_t conversation_id,
+                             std::string* err);
+  bool owns_conversation(const std::string& device_id,
+                         std::int64_t conversation_id) const;
+
  private:
   std::string db_path_;
   sqlite3* db_ = nullptr;

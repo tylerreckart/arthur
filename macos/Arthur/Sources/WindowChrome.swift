@@ -20,6 +20,12 @@ final class WindowTransparencyView: NSView {
     apply()
   }
 
+  override func layout() {
+    super.layout()
+    // The sidebar titlebar segment is created when the column opens.
+    paintTitlebar()
+  }
+
   func apply() {
     guard let window, window !== appliedWindow else { return }
     appliedWindow = window
@@ -34,6 +40,47 @@ final class WindowTransparencyView: NSView {
     window.contentView?.layer?.isOpaque = false
     window.contentView?.layer?.masksToBounds = false
     window.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
+    paintTitlebar()
+  }
+
+  /// The sidebar half of a split titlebar uses a lighter material than the
+  /// detail. Paint every titlebar segment the same black as the desk.
+  private func paintTitlebar() {
+    guard let window, let close = window.standardWindowButton(.closeButton) else { return }
+    var container: NSView? = close
+    while let view = container, view.frame.width < window.frame.width - 1 {
+      container = view.superview
+    }
+    guard let container else { return }
+    blacken(container)
+  }
+
+  private func blacken(_ view: NSView) {
+    let name = String(describing: type(of: view))
+    if let effect = view as? NSVisualEffectView {
+      // The material draws under sublayers. A black cover makes the sidebar
+      // segment match the detail. Only configure the effect once; resetting
+      // it on every layout pass restarts the sidebar animation.
+      let coverName = "arthur-titlebar-black"
+      if effect.layer?.sublayers?.contains(where: { $0.name == coverName }) != true {
+        effect.material = .titlebar
+        effect.blendingMode = .withinWindow
+        effect.state = .followsWindowActiveState
+        effect.wantsLayer = true
+        effect.layer?.backgroundColor = NSColor.black.cgColor
+        let cover = CALayer()
+        cover.name = coverName
+        cover.backgroundColor = NSColor.black.cgColor
+        cover.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        cover.frame = effect.bounds
+        effect.layer?.addSublayer(cover)
+      }
+      effect.layer?.sublayers?.first { $0.name == coverName }?.frame = effect.bounds
+    } else if name.contains("Titlebar") || name.contains("Toolbar") {
+      view.wantsLayer = true
+      view.layer?.backgroundColor = NSColor.black.cgColor
+    }
+    view.subviews.forEach(blacken)
   }
 }
 

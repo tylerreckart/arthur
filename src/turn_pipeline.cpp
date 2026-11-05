@@ -1262,6 +1262,7 @@ void TurnPipeline::warm_prefix() {
 std::int64_t TurnPipeline::ensure_conversation(const std::string& device_id, std::string* err) {
   if (auto existing = sessions_->get(device_id)) {
     if (existing->conversation_id > 0) {
+      sessions_->remember_conversation(device_id, existing->conversation_id, nullptr);
       return existing->conversation_id;
     }
   }
@@ -1270,13 +1271,65 @@ std::int64_t TurnPipeline::ensure_conversation(const std::string& device_id, std
     if (err && err->empty()) *err = "conversation create failed";
     return 0;
   }
+  if (!install_conversation(device_id, *id, false, err)) return 0;
+  sessions_->remember_conversation(device_id, *id, nullptr);
+  return *id;
+}
+
+std::int64_t TurnPipeline::begin_conversation(const std::string& device_id, std::string* err) {
+  if (auto existing = sessions_->get(device_id)) {
+    if (existing->conversation_id > 0) {
+      sessions_->remember_conversation(device_id, existing->conversation_id, nullptr);
+    }
+  }
+  auto id = arbiter_->create_conversation("intercom:" + device_id, err);
+  if (!id || *id <= 0) {
+    if (err && err->empty()) *err = "conversation create failed";
+    return 0;
+  }
+  if (!sessions_->remember_conversation(device_id, *id, err)) return 0;
+  if (!install_conversation(device_id, *id, true, err)) return 0;
+  return *id;
+}
+
+bool TurnPipeline::resume_conversation(const std::string& device_id,
+                                       std::int64_t conversation_id,
+                                       std::string* err) {
+  if (conversation_id <= 0) {
+    if (err) *err = "missing conversation";
+    return false;
+  }
+  const auto existing = sessions_->get(device_id);
+  const bool current = existing && existing->conversation_id == conversation_id;
+  if (!current && !sessions_->owns_conversation(device_id, conversation_id)) {
+    if (err) *err = "unknown conversation";
+    return false;
+  }
+  sessions_->remember_conversation(device_id, conversation_id, nullptr);
+  if (current) return true;
+  return install_conversation(device_id, conversation_id, true, err);
+}
+
+bool TurnPipeline::install_conversation(const std::string& device_id,
+                                        std::int64_t conversation_id,
+                                        bool clear_memory,
+                                        std::string* err) {
   DeviceSession s;
   if (auto existing = sessions_->get(device_id)) s = *existing;
   s.device_id = device_id;
-  s.conversation_id = *id;
+  s.conversation_id = conversation_id;
+  if (clear_memory) {
+    s.last_turn_id.clear();
+    s.last_user.clear();
+    s.last_spoken.clear();
+    s.last_fast_path_kind.clear();
+    s.last_fast_path_request.clear();
+    s.last_card.clear();
+    s.pending_intent.clear();
+    s.pending_at = 0;
+  }
   s.updated_at = now_unix();
-  if (!sessions_->upsert(s, err)) return 0;
-  return *id;
+  return sessions_->upsert(s, err);
 }
 
 bool TurnPipeline::cancel_turn(const std::string& turn_id, std::string* err) {

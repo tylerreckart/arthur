@@ -723,6 +723,13 @@ int main() {
       CHECK(restored->pending_intent == session.pending_intent);
       CHECK(restored->pending_at == session.pending_at);
     }
+    CHECK(migrated.remember_conversation("legacy-device", 77, &err));
+    CHECK(migrated.owns_conversation("legacy-device", 77));
+    CHECK(!migrated.owns_conversation("legacy-device", 78));
+    CHECK(!migrated.owns_conversation("other-device", 77));
+    CHECK(migrated.remember_conversation("legacy-device", 78, &err));
+    CHECK(migrated.owns_conversation("legacy-device", 78));
+    CHECK(migrated.remember_conversation("legacy-device", 77, &err));
     std::filesystem::remove(db_migrate);
   }
 

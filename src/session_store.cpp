@@ -94,6 +94,19 @@ bool SessionStore::open(std::string* err) {
       }
     }
   }
+  const char* owned_sql =
+      "CREATE TABLE IF NOT EXISTS device_conversations ("
+      "  device_id TEXT NOT NULL,"
+      "  conversation_id INTEGER NOT NULL,"
+      "  created_at INTEGER NOT NULL,"
+      "  PRIMARY KEY (device_id, conversation_id)"
+      ");";
+  errmsg = nullptr;
+  if (sqlite3_exec(db_, owned_sql, nullptr, nullptr, &errmsg) != SQLITE_OK) {
+    if (err) *err = errmsg ? errmsg : "create device_conversations failed";
+    sqlite3_free(errmsg);
+    return false;
+  }
   return true;
 }
 
@@ -219,6 +232,54 @@ bool SessionStore::upsert(const DeviceSession& session, std::string* err) {
     return false;
   }
   return true;
+}
+
+bool SessionStore::remember_conversation(const std::string& device_id,
+                                         std::int64_t conversation_id,
+                                         std::string* err) {
+  if (!db_) {
+    if (err) *err = "session store not open";
+    return false;
+  }
+  if (device_id.empty() || conversation_id <= 0) {
+    if (err) *err = "missing conversation";
+    return false;
+  }
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "INSERT OR IGNORE INTO device_conversations"
+      "(device_id, conversation_id, created_at) VALUES(?,?,?)";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  sqlite3_bind_text(stmt, 1, device_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(stmt, 2, conversation_id);
+  sqlite3_bind_int64(stmt, 3, now_unix());
+  const int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  return true;
+}
+
+bool SessionStore::owns_conversation(const std::string& device_id,
+                                     std::int64_t conversation_id) const {
+  if (!db_ || device_id.empty() || conversation_id <= 0) return false;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "SELECT 1 FROM device_conversations "
+      "WHERE device_id = ? AND conversation_id = ?";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    return false;
+  }
+  sqlite3_bind_text(stmt, 1, device_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(stmt, 2, conversation_id);
+  const bool owned = sqlite3_step(stmt) == SQLITE_ROW;
+  sqlite3_finalize(stmt);
+  return owned;
 }
 
 }  // namespace intercom

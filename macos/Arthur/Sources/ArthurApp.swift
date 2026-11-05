@@ -27,6 +27,10 @@ struct ArthurApp: App {
     .commands {
       CommandGroup(replacing: .newItem) {}
       CommandMenu("Arthur") {
+        Button("New Conversation") { model.newConversation() }
+          .keyboardShortcut("n", modifiers: [.command])
+          .disabled(!model.canStartConversation || model.conversationIsEmpty)
+        Divider()
         Button("Settings…") { model.settingsOpen = true }
           .keyboardShortcut(",", modifiers: [.command])
         Button("Ask Arthur") { model.focusComposer() }

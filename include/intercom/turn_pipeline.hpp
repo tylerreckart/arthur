@@ -87,6 +87,18 @@ class TurnPipeline {
 
   std::optional<DeviceSession> session_for(const std::string& device_id) const;
 
+  // Fresh Arbiter conversation for this device. Follow-up memory (the last
+  // card, pending intent, last utterance) is cleared so the next turn is empty.
+  // The previous conversation stays resumable.
+  std::int64_t begin_conversation(const std::string& device_id, std::string* err);
+
+  // Point the device at a conversation it already owns. The conversation
+  // currently stored on the session is always resumable. Switching to a
+  // different one clears follow-up memory.
+  bool resume_conversation(const std::string& device_id,
+                           std::int64_t conversation_id,
+                           std::string* err);
+
   // Create per-device conversations and send PREFIX WARM so a local model
   // caches Arthur's constitution before the first PTT. Best-effort.
   void warm_prefix();
@@ -98,6 +110,10 @@ class TurnPipeline {
 
  private:
   std::int64_t ensure_conversation(const std::string& device_id, std::string* err);
+  bool install_conversation(const std::string& device_id,
+                            std::int64_t conversation_id,
+                            bool clear_memory,
+                            std::string* err);
   void register_turn(std::shared_ptr<TurnHandle> h);
   void unregister_turn(const std::string& turn_id);
   std::shared_ptr<TurnHandle> find_turn(const std::string& turn_id);
