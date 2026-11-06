@@ -28,8 +28,11 @@ bool send_all(int fd, const void* data, std::size_t len) {
 
 }  // namespace
 
-DeviceHub::DeviceHub(std::shared_ptr<TtsProvider> tts, int max_queued)
-    : tts_(std::move(tts)), max_queued_(max_queued > 0 ? max_queued : 4) {}
+DeviceHub::DeviceHub(std::shared_ptr<TtsProvider> tts, int max_queued,
+                     std::shared_ptr<SessionStore> sessions)
+    : tts_(std::move(tts)),
+      sessions_(std::move(sessions)),
+      max_queued_(max_queued > 0 ? max_queued : 4) {}
 
 std::shared_ptr<DeviceHub::Conn> DeviceHub::get(const std::string& device_id) const {
   std::lock_guard<std::mutex> lk(mu_);
@@ -86,6 +89,7 @@ bool DeviceHub::busy(const std::string& device_id) const {
 }
 
 std::size_t DeviceHub::queued(const std::string& device_id) const {
+  if (sessions_) return sessions_->count_speakback(device_id);
   auto c = get(device_id);
   if (!c) return 0;
   std::lock_guard<std::mutex> lk(c->pending_mu);
@@ -148,18 +152,40 @@ bool DeviceHub::speak_on(const std::shared_ptr<Conn>& c, const std::string& text
 void DeviceHub::flush_pending(const std::string& device_id,
                               const std::shared_ptr<Conn>& c) {
   if (!c || c->fd < 0 || c->busy.load()) return;
+  bool idle = false;
+  if (!c->flushing.compare_exchange_strong(idle, true)) return;
+  struct ClearFlush {
+    Conn* conn;
+    ~ClearFlush() { conn->flushing.store(false); }
+  } clear{c.get()};
+
+  if (sessions_) {
+    for (;;) {
+      const auto items = sessions_->list_speakback(device_id);
+      if (items.empty()) return;
+      const auto& item = items.front();
+      std::cerr << "intercom speakback: flush queued for " << device_id << std::endl;
+      if (!speak_on(c, item.text, item.kind, item.run_id)) return;
+      std::string err;
+      if (!sessions_->remove_speakback(item.id, &err) && !err.empty()) {
+        std::cerr << "intercom speakback: drop queued failed: " << err << std::endl;
+        return;
+      }
+    }
+  }
+
   for (;;) {
-    std::string text;
+    PendingSpeak item;
     {
       std::lock_guard<std::mutex> lk(c->pending_mu);
       if (c->pending.empty()) return;
-      text = std::move(c->pending.front());
+      item = std::move(c->pending.front());
       c->pending.pop_front();
     }
     std::cerr << "intercom speakback: flush queued for " << device_id << std::endl;
-    if (!speak_on(c, text, "schedule", 0)) {
+    if (!speak_on(c, item.text, item.kind, item.run_id)) {
       std::lock_guard<std::mutex> lk(c->pending_mu);
-      c->pending.push_front(std::move(text));
+      c->pending.push_front(std::move(item));
       return;
     }
   }
@@ -169,25 +195,39 @@ bool DeviceHub::speak(const std::string& device_id, const std::string& text,
                       const std::string& kind, std::int64_t run_id) {
   if (text.empty()) return true;
   auto c = get(device_id);
-  if (!c || c->fd < 0 || c->busy.load()) {
-    if (!c) {
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it = conns_.find(device_id);
-      if (it == conns_.end()) {
-        c = std::make_shared<Conn>();
-        conns_[device_id] = c;
-      } else {
-        c = it->second;
-      }
+  if (c && c->fd >= 0 && !c->busy.load() && !c->flushing.load()) {
+    if (speak_on(c, text, kind, run_id)) return true;
+  }
+  if (!c) {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = conns_.find(device_id);
+    if (it == conns_.end()) {
+      c = std::make_shared<Conn>();
+      conns_[device_id] = c;
+    } else {
+      c = it->second;
     }
-    std::lock_guard<std::mutex> lk(c->pending_mu);
-    c->pending.push_back(text);
-    while (static_cast<int>(c->pending.size()) > max_queued_) c->pending.pop_front();
+  }
+  if (sessions_) {
+    std::string err;
+    const auto id = sessions_->enqueue_speakback(
+        device_id, text, kind, run_id, max_queued_, &err);
+    if (id <= 0) {
+      std::cerr << "intercom speakback: queue failed for " << device_id << ": "
+                << err << std::endl;
+      return false;
+    }
     std::cerr << "intercom speakback: queued for " << device_id
-              << " (offline or busy, n=" << c->pending.size() << ")" << std::endl;
+              << " (offline or busy, n=" << sessions_->count_speakback(device_id)
+              << ")" << std::endl;
     return true;
   }
-  return speak_on(c, text, kind, run_id);
+  std::lock_guard<std::mutex> lk(c->pending_mu);
+  c->pending.push_back(PendingSpeak{text, kind, run_id});
+  while (static_cast<int>(c->pending.size()) > max_queued_) c->pending.pop_front();
+  std::cerr << "intercom speakback: queued for " << device_id
+            << " (offline or busy, n=" << c->pending.size() << ")" << std::endl;
+  return true;
 }
 
 }  // namespace intercom

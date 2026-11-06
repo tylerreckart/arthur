@@ -38,6 +38,17 @@ class AudioSink {
   }
 };
 
+// Desk context attached to a turn. Empty until Phase 1 fills it. The pipeline
+// accepts it so later phases do not change this signature; it is not applied
+// to the model prompt yet.
+struct ClientContext {
+  struct Source {
+    std::string name;
+    std::string text;
+  };
+  std::vector<Source> sources;
+};
+
 struct TurnResult {
   std::string turn_id;
   std::string transcript;
@@ -46,6 +57,7 @@ struct TurnResult {
   std::string error;
   bool used_fast_path = false;
   std::string fast_path_kind;
+  int client_context_sources = 0;
 };
 
 struct TurnHandle {
@@ -79,7 +91,8 @@ class TurnPipeline {
                                 const std::string& transcript,
                                 AudioSink& sink,
                                 std::string turn_id = {},
-                                int stt_ms = -1);
+                                int stt_ms = -1,
+                                ClientContext client_context = {});
 
   // Make an accepted transport turn cancellable before its worker starts.
   void prepare_turn(const std::string& turn_id);

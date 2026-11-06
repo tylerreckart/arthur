@@ -1,5 +1,10 @@
 import Foundation
 
+/// Transcript window. Phase 6 replaces the cap with paging over the full history.
+enum DiscussionLimits {
+  static let visibleLineCap = 40
+}
+
 struct DiscussionLine: Identifiable, Equatable, Codable {
   let id: UUID
   let fromYou: Bool

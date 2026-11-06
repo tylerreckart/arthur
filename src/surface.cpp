@@ -284,6 +284,25 @@ nlohmann::json surface_to_json(const Surface& surface) {
     sources.push_back(std::move(s));
   }
   if (!sources.empty()) j["sources"] = std::move(sources);
+  if (!surface.actions.empty()) {
+    if (j.value("version", kSurfaceVersion) < kSurfaceActionVersion) {
+      j["version"] = kSurfaceActionVersion;
+    }
+    nlohmann::json actions = nlohmann::json::array();
+    for (const auto& action : surface.actions) {
+      if (action.id.empty() || action.label.empty() || action.kind.empty()) continue;
+      nlohmann::json row = {
+          {"id", action.id},
+          {"label", action.label},
+          {"kind", action.kind},
+      };
+      if (action.tool_call.is_object() && !action.tool_call.empty()) {
+        row["tool_call"] = action.tool_call;
+      }
+      actions.push_back(std::move(row));
+    }
+    if (!actions.empty()) j["actions"] = std::move(actions);
+  }
   return j;
 }
 
@@ -305,6 +324,21 @@ Surface surface_from_json(const nlohmann::json& j) {
       out.title = src.value("title", "");
       out.url = src.value("url", "");
       if (!out.title.empty() || !out.url.empty()) s.sources.push_back(std::move(out));
+    }
+  }
+  // Optional on every version. A missing or malformed list leaves the card.
+  if (j.contains("actions") && j["actions"].is_array()) {
+    for (const auto& raw : j["actions"]) {
+      if (!raw.is_object()) continue;
+      SurfaceAction action;
+      action.id = raw.value("id", "");
+      action.label = raw.value("label", "");
+      action.kind = raw.value("kind", "");
+      if (action.id.empty() || action.label.empty() || action.kind.empty()) continue;
+      if (raw.contains("tool_call") && raw["tool_call"].is_object()) {
+        action.tool_call = raw["tool_call"];
+      }
+      s.actions.push_back(std::move(action));
     }
   }
   return s;

@@ -1386,10 +1386,14 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
                                             const std::string& transcript,
                                             AudioSink& sink,
                                             std::string turn_id,
-                                            int stt_ms) {
+                                            int stt_ms,
+                                            ClientContext client_context) {
   TurnResult result;
   result.turn_id = turn_id.empty() ? make_turn_id() : std::move(turn_id);
   result.transcript = transcript;
+  // Phase 1 turns this into a private local-context block. Counted now so
+  // the argument is part of the stable signature and not a dead parameter.
+  result.client_context_sources = static_cast<int>(client_context.sources.size());
   // run_utterance registers before STT. Text-only transports arrive here
   // directly and need their handle created now.
   auto handle = find_turn(result.turn_id);

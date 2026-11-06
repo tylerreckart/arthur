@@ -9,6 +9,9 @@
 namespace intercom {
 
 inline constexpr int kSurfaceVersion = 1;
+// Cards that carry `actions` are version 2. Version 1 decoders ignore the
+// field; emitting it must not drop the turn.
+inline constexpr int kSurfaceActionVersion = 2;
 
 // Closed kinds for this slice. The desk maps anything else to generic.
 enum class SurfaceKind {
@@ -29,6 +32,15 @@ struct SurfaceSource {
   std::string url;
 };
 
+// Desk-side action. Phase 0 parses and round-trips these; nothing executes
+// them yet. `kind` is approve, edit, dismiss, or undo.
+struct SurfaceAction {
+  std::string id;
+  std::string label;
+  std::string kind;
+  nlohmann::json tool_call = nlohmann::json::object();
+};
+
 struct Surface {
   SurfaceKind kind = SurfaceKind::Generic;
   int version = kSurfaceVersion;
@@ -36,6 +48,7 @@ struct Surface {
   std::string summary;
   nlohmann::json payload = nlohmann::json::object();
   std::vector<SurfaceSource> sources;
+  std::vector<SurfaceAction> actions;
 };
 
 nlohmann::json surface_to_json(const Surface& surface);

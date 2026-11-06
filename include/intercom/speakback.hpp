@@ -53,7 +53,8 @@ class Speakback {
   bool replay_since(std::int64_t since);
   std::int64_t conversation_for(const NotificationEvent& ev);
   bool already_spoken(std::int64_t run_id);
-  void mark_spoken(std::int64_t run_id);
+  // False when this run was already recorded, including before a restart.
+  bool mark_spoken(std::int64_t run_id);
 
   SpeakbackConfig config_;
   std::string agent_;

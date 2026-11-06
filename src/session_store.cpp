@@ -26,6 +26,7 @@ SessionStore::~SessionStore() {
 }
 
 bool SessionStore::open(std::string* err) {
+  std::lock_guard<std::mutex> lk(mu_);
   try {
     std::filesystem::path p(db_path_);
     if (p.has_parent_path()) {
@@ -44,6 +45,7 @@ bool SessionStore::open(std::string* err) {
     }
     return false;
   }
+  sqlite3_busy_timeout(db_, 2000);
 
   const char* sql =
       "CREATE TABLE IF NOT EXISTS device_sessions ("
@@ -107,10 +109,32 @@ bool SessionStore::open(std::string* err) {
     sqlite3_free(errmsg);
     return false;
   }
+  const char* speak_sql =
+      "CREATE TABLE IF NOT EXISTS speakback_queue ("
+      "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "  device_id TEXT NOT NULL,"
+      "  text TEXT NOT NULL,"
+      "  kind TEXT NOT NULL DEFAULT 'schedule',"
+      "  run_id INTEGER NOT NULL DEFAULT 0,"
+      "  created_at INTEGER NOT NULL"
+      ");"
+      "CREATE INDEX IF NOT EXISTS speakback_queue_device "
+      "  ON speakback_queue(device_id, id);"
+      "CREATE TABLE IF NOT EXISTS spoken_runs ("
+      "  run_id INTEGER PRIMARY KEY,"
+      "  spoken_at INTEGER NOT NULL"
+      ");";
+  errmsg = nullptr;
+  if (sqlite3_exec(db_, speak_sql, nullptr, nullptr, &errmsg) != SQLITE_OK) {
+    if (err) *err = errmsg ? errmsg : "create speakback tables failed";
+    sqlite3_free(errmsg);
+    return false;
+  }
   return true;
 }
 
 std::optional<DeviceSession> SessionStore::get(const std::string& device_id) const {
+  std::lock_guard<std::mutex> lk(mu_);
   if (!db_) return std::nullopt;
   sqlite3_stmt* stmt = nullptr;
   const char* sql =
@@ -149,6 +173,7 @@ std::optional<DeviceSession> SessionStore::get(const std::string& device_id) con
 }
 
 std::vector<DeviceSession> SessionStore::list() const {
+  std::lock_guard<std::mutex> lk(mu_);
   std::vector<DeviceSession> out;
   if (!db_) return out;
   sqlite3_stmt* stmt = nullptr;
@@ -186,6 +211,7 @@ std::vector<DeviceSession> SessionStore::list() const {
 }
 
 bool SessionStore::upsert(const DeviceSession& session, std::string* err) {
+  std::lock_guard<std::mutex> lk(mu_);
   if (!db_) {
     if (err) *err = "session store not open";
     return false;
@@ -237,6 +263,7 @@ bool SessionStore::upsert(const DeviceSession& session, std::string* err) {
 bool SessionStore::remember_conversation(const std::string& device_id,
                                          std::int64_t conversation_id,
                                          std::string* err) {
+  std::lock_guard<std::mutex> lk(mu_);
   if (!db_) {
     if (err) *err = "session store not open";
     return false;
@@ -267,6 +294,7 @@ bool SessionStore::remember_conversation(const std::string& device_id,
 
 bool SessionStore::owns_conversation(const std::string& device_id,
                                      std::int64_t conversation_id) const {
+  std::lock_guard<std::mutex> lk(mu_);
   if (!db_ || device_id.empty() || conversation_id <= 0) return false;
   sqlite3_stmt* stmt = nullptr;
   const char* sql =
@@ -280,6 +308,200 @@ bool SessionStore::owns_conversation(const std::string& device_id,
   const bool owned = sqlite3_step(stmt) == SQLITE_ROW;
   sqlite3_finalize(stmt);
   return owned;
+}
+
+namespace {
+
+const char* column_text(sqlite3_stmt* stmt, int index) {
+  const auto* text = sqlite3_column_text(stmt, index);
+  return text ? reinterpret_cast<const char*>(text) : "";
+}
+
+}  // namespace
+
+bool SessionStore::has_spoken_run(std::int64_t run_id) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_ || run_id <= 0) return false;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql = "SELECT 1 FROM spoken_runs WHERE run_id = ?";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+  sqlite3_bind_int64(stmt, 1, run_id);
+  const bool found = sqlite3_step(stmt) == SQLITE_ROW;
+  sqlite3_finalize(stmt);
+  return found;
+}
+
+bool SessionStore::mark_spoken_run(std::int64_t run_id, std::string* err) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_) {
+    if (err) *err = "session store not open";
+    return false;
+  }
+  if (run_id <= 0) return true;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "INSERT OR IGNORE INTO spoken_runs(run_id, spoken_at) VALUES(?,?)";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  sqlite3_bind_int64(stmt, 1, run_id);
+  sqlite3_bind_int64(stmt, 2, now_unix());
+  const int rc = sqlite3_step(stmt);
+  const int inserted = sqlite3_changes(db_);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  char* errmsg = nullptr;
+  const char* trim =
+      "DELETE FROM spoken_runs WHERE run_id NOT IN ("
+      "  SELECT run_id FROM spoken_runs ORDER BY spoken_at DESC, run_id DESC LIMIT 256"
+      ")";
+  if (sqlite3_exec(db_, trim, nullptr, nullptr, &errmsg) != SQLITE_OK) {
+    if (err) *err = errmsg ? errmsg : "spoken run trim failed";
+    sqlite3_free(errmsg);
+    return false;
+  }
+  return inserted == 1;
+}
+
+std::int64_t SessionStore::enqueue_speakback(const std::string& device_id,
+                                             const std::string& text,
+                                             const std::string& kind,
+                                             std::int64_t run_id,
+                                             int max_queued,
+                                             std::string* err) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_) {
+    if (err) *err = "session store not open";
+    return 0;
+  }
+  if (device_id.empty() || text.empty()) {
+    if (err) *err = "missing speakback utterance";
+    return 0;
+  }
+  const int cap = max_queued > 0 ? max_queued : 4;
+  char* errmsg = nullptr;
+  if (sqlite3_exec(db_, "BEGIN IMMEDIATE", nullptr, nullptr, &errmsg) != SQLITE_OK) {
+    if (err) *err = errmsg ? errmsg : "speakback begin failed";
+    sqlite3_free(errmsg);
+    return 0;
+  }
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "INSERT INTO speakback_queue(device_id, text, kind, run_id, created_at) "
+      "VALUES(?,?,?,?,?)";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+    return 0;
+  }
+  const std::string stored_kind = kind.empty() ? "schedule" : kind;
+  sqlite3_bind_text(stmt, 1, device_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 2, text.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 3, stored_kind.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(stmt, 4, run_id);
+  sqlite3_bind_int64(stmt, 5, now_unix());
+  const int rc = sqlite3_step(stmt);
+  const std::int64_t id = sqlite3_last_insert_rowid(db_);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    if (err) *err = sqlite3_errmsg(db_);
+    sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+    return 0;
+  }
+  sqlite3_stmt* trim = nullptr;
+  const char* trim_sql =
+      "DELETE FROM speakback_queue WHERE device_id = ? AND id NOT IN ("
+      "  SELECT id FROM speakback_queue WHERE device_id = ? ORDER BY id DESC LIMIT ?"
+      ")";
+  if (sqlite3_prepare_v2(db_, trim_sql, -1, &trim, nullptr) != SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+    return 0;
+  }
+  sqlite3_bind_text(trim, 1, device_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(trim, 2, device_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(trim, 3, cap);
+  const int trim_rc = sqlite3_step(trim);
+  sqlite3_finalize(trim);
+  if (trim_rc != SQLITE_DONE) {
+    if (err) *err = sqlite3_errmsg(db_);
+    sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+    return 0;
+  }
+  if (sqlite3_exec(db_, "COMMIT", nullptr, nullptr, &errmsg) != SQLITE_OK) {
+    if (err) *err = errmsg ? errmsg : "speakback commit failed";
+    sqlite3_free(errmsg);
+    sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+    return 0;
+  }
+  return id;
+}
+
+std::vector<SpeakbackItem> SessionStore::list_speakback(
+    const std::string& device_id) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  std::vector<SpeakbackItem> out;
+  if (!db_ || device_id.empty()) return out;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "SELECT id, device_id, text, kind, run_id, created_at "
+      "FROM speakback_queue WHERE device_id = ? ORDER BY id ASC";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return out;
+  sqlite3_bind_text(stmt, 1, device_id.c_str(), -1, SQLITE_TRANSIENT);
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    SpeakbackItem item;
+    item.id = sqlite3_column_int64(stmt, 0);
+    item.device_id = column_text(stmt, 1);
+    item.text = column_text(stmt, 2);
+    item.kind = column_text(stmt, 3);
+    item.run_id = sqlite3_column_int64(stmt, 4);
+    item.created_at = sqlite3_column_int64(stmt, 5);
+    out.push_back(std::move(item));
+  }
+  sqlite3_finalize(stmt);
+  return out;
+}
+
+std::size_t SessionStore::count_speakback(const std::string& device_id) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_ || device_id.empty()) return 0;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql = "SELECT COUNT(*) FROM speakback_queue WHERE device_id = ?";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
+  sqlite3_bind_text(stmt, 1, device_id.c_str(), -1, SQLITE_TRANSIENT);
+  std::size_t count = 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    count = static_cast<std::size_t>(sqlite3_column_int64(stmt, 0));
+  }
+  sqlite3_finalize(stmt);
+  return count;
+}
+
+bool SessionStore::remove_speakback(std::int64_t id, std::string* err) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_) {
+    if (err) *err = "session store not open";
+    return false;
+  }
+  if (id <= 0) return false;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql = "DELETE FROM speakback_queue WHERE id = ?";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  sqlite3_bind_int64(stmt, 1, id);
+  const int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  return true;
 }
 
 }  // namespace intercom

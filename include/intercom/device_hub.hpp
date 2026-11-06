@@ -1,5 +1,6 @@
 #pragma once
 
+#include "intercom/session_store.hpp"
 #include "intercom/tts.hpp"
 
 #include <atomic>
@@ -16,11 +17,13 @@
 
 namespace intercom {
 
-// Live WebSocket connections keyed by device_id, plus a tiny in-memory
-// queue for speak-back while the device is offline or mid-PTT.
+// Live WebSocket connections keyed by device_id, plus a speak-back queue
+// for while the device is offline or mid-PTT. When a SessionStore is
+// attached the queue is durable across process restarts.
 class DeviceHub {
  public:
-  explicit DeviceHub(std::shared_ptr<TtsProvider> tts, int max_queued = 4);
+  explicit DeviceHub(std::shared_ptr<TtsProvider> tts, int max_queued = 4,
+                     std::shared_ptr<SessionStore> sessions = nullptr);
 
   void attach(const std::string& device_id, int fd);
   void detach(const std::string& device_id, int fd);
@@ -42,11 +45,18 @@ class DeviceHub {
                    std::string_view payload);
 
  private:
+  struct PendingSpeak {
+    std::string text;
+    std::string kind;
+    std::int64_t run_id = 0;
+  };
+
   struct Conn {
     int fd = -1;
     std::atomic<bool> busy{false};
+    std::atomic<bool> flushing{false};
     std::mutex write_mu;
-    std::deque<std::string> pending;
+    std::deque<PendingSpeak> pending;
     std::mutex pending_mu;
   };
 
@@ -58,6 +68,7 @@ class DeviceHub {
   void flush_pending(const std::string& device_id, const std::shared_ptr<Conn>& c);
 
   std::shared_ptr<TtsProvider> tts_;
+  std::shared_ptr<SessionStore> sessions_;
   int max_queued_ = 4;
   mutable std::mutex mu_;
   std::unordered_map<std::string, std::shared_ptr<Conn>> conns_;
