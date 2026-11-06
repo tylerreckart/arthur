@@ -352,6 +352,12 @@ target_link_libraries(test_voiceprint PRIVATE
 )
 add_test(NAME test_voiceprint COMMAND test_voiceprint)
 
+add_executable(test_desk_proxy tests/test_desk_proxy.cpp)
+target_include_directories(test_desk_proxy PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME test_desk_proxy COMMAND test_desk_proxy)
+
 add_executable(test_speak_queue tests/test_speak_queue.cpp)
 target_include_directories(test_speak_queue PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include

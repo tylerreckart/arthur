@@ -1,4 +1,5 @@
 #include "intercom/arbiter_client.hpp"
+#include "intercom/desk_proxy.hpp"
 #include "intercom/clock.hpp"
 #include "intercom/util.hpp"
 
@@ -563,6 +564,53 @@ bool ArbiterClient::stream_notifications(
     return false;
   }
   return true;
+}
+
+ArbiterHttpResult ArbiterClient::exchange(const std::string& method,
+                                          const std::string& path_and_query,
+                                          const std::string& body) const {
+  ArbiterHttpResult out;
+  if (!desk_proxy_allowed(method, path_and_query)) {
+    out.status = 403;
+    out.body = R"({"error":"not a desk route"})";
+    return out;
+  }
+  auto parsed = parse_base_url(base_url_);
+  if (!parsed) {
+    out.status = 502;
+    out.body = R"({"error":"arbiter unavailable"})";
+    return out;
+  }
+  auto cli = make_client(*parsed);
+  cli->set_connection_timeout(5, 0);
+  cli->set_read_timeout(20, 0);
+  httplib::Headers headers = {
+      {"Authorization", "Bearer " + token_},
+      {"Content-Type", "application/json"},
+  };
+  const std::string path = parsed->path_prefix + std::string(path_and_query);
+  httplib::Result res;
+  if (method == "GET") {
+    res = cli->Get(path, headers);
+  } else if (method == "POST") {
+    res = cli->Post(path, headers, body, "application/json");
+  } else if (method == "PATCH") {
+    res = cli->Patch(path, headers, body, "application/json");
+  } else if (method == "DELETE") {
+    res = cli->Delete(path, headers);
+  } else {
+    out.status = 405;
+    out.body = R"({"error":"method not allowed"})";
+    return out;
+  }
+  if (!res) {
+    out.status = 502;
+    out.body = R"({"error":"arbiter unavailable"})";
+    return out;
+  }
+  out.status = res->status;
+  out.body = res->body.empty() ? "{}" : res->body;
+  return out;
 }
 
 bool ArbiterClient::health_reachable(std::string* detail) const {

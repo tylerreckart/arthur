@@ -36,6 +36,22 @@ final class AppModel {
   var healthOK = false
   var healthDetail = "not connected"
   var discussion: [DiscussionLine] = []
+  /// Lines kept on screen. The saved conversation holds the rest.
+  var historyShown = DiscussionLimits.visibleLineCap
+  var historyQuery = ""
+  var historyFocus: UUID?
+  var memoryOpen = false
+  var memoryQuery = ""
+  var memoryFacts: [MemoryFact] = []
+  var memoryUndo: MemoryFact?
+  var editingMemory = false
+  var memoryEditTitle = ""
+  var memoryEditContent = ""
+  var deskSchedules: [DeskSchedule] = []
+  var deskTodos: [DeskTodo] = []
+  var reschedulePhrases: [Int: String] = [:]
+  var deskStatus = ""
+  private var editingMemoryId = 0
   var work: WorkState = .none
   var youSaid = ""
   var formingText = ""
@@ -714,6 +730,8 @@ final class AppModel {
         draft = action.label
       }
       composerFocusToken += 1
+    case "desk":
+      performDesk(action)
     default:
       break
     }
@@ -1276,9 +1294,6 @@ final class AppModel {
       fromYou: true, text: trimmed, id: hearingLineId, speakerName: pendingSpeaker)
     if let arthurIdx = discussion.indices.last, !discussion[arthurIdx].fromYou, arthurTurnIsLive {
       discussion.insert(line, at: arthurIdx)
-      if discussion.count > DiscussionLimits.visibleLineCap {
-        discussion.removeFirst(discussion.count - DiscussionLimits.visibleLineCap)
-      }
       persistTranscript()
     } else {
       appendDiscussion(fromYou: true, text: trimmed, id: hearingLineId, speakerName: pendingSpeaker)
@@ -1369,9 +1384,6 @@ final class AppModel {
         speakerName: fromYou ? speakerName : ""
       )
     )
-    if discussion.count > DiscussionLimits.visibleLineCap {
-      discussion.removeFirst(discussion.count - DiscussionLimits.visibleLineCap)
-    }
     persistTranscript()
   }
 
@@ -1446,6 +1458,39 @@ final class AppModel {
     conversations.sorted { $0.updatedAt > $1.updatedAt }
   }
 
+  var historyHits: [HistoryHit] {
+    HistorySearch.hits(in: conversations.map { item in
+      HistoryThread(
+        id: item.id,
+        title: item.title,
+        updatedAt: item.updatedAt,
+        lines: item.lines.map { HistoryLine(id: $0.id, text: $0.text) }
+      )
+    }, query: historyQuery)
+  }
+
+  var visibleDiscussion: [DiscussionLine] {
+    let shown = min(max(historyShown, 0), discussion.count)
+    if shown >= discussion.count { return discussion }
+    return Array(discussion.suffix(shown))
+  }
+
+  var canRevealEarlier: Bool { discussion.count > visibleDiscussion.count }
+
+  func revealEarlier() {
+    historyShown += DiscussionLimits.visibleLineCap
+  }
+
+  func openHistory(_ hit: HistoryHit) {
+    if hit.conversationId != activeConversationId {
+      openConversation(hit.conversationId)
+    }
+    guard hit.conversationId == activeConversationId else { return }
+    historyShown = HistorySearch.shownCount(total: discussion.count, focusIndex: hit.lineIndex)
+    historyFocus = hit.lineId
+    historyQuery = ""
+  }
+
   func newConversation() {
     guard canStartConversation else { return }
     captureActiveLines()
@@ -1454,6 +1499,8 @@ final class AppModel {
     let item = DeskConversation.empty(needsFreshServer: true)
     conversations.insert(item, at: 0)
     activeConversationId = item.id
+    historyShown = DiscussionLimits.visibleLineCap
+    historyFocus = nil
     discussion = []
     formingText = ""
     hearingText = ""
@@ -1476,6 +1523,8 @@ final class AppModel {
     }
     guard let item = conversations.first(where: { $0.id == id }) else { return }
     activeConversationId = id
+    historyShown = DiscussionLimits.visibleLineCap
+    historyFocus = nil
     discussion = item.lines
     formingText = ""
     hearingText = ""
@@ -1819,6 +1868,212 @@ final class AppModel {
   private func applyWake() {
     audio.onWake = { [weak self] in self?.wakeHeard() }
     resumeWake()
+  }
+
+  func loadDesk() {
+    let query = memoryQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    Task {
+      let path = query.isEmpty
+        ? "/v1/desk/memory/entries?limit=50"
+        : "/v1/desk/memory/entries?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)&limit=50"
+      if let (data, code) = await householdCall(path, method: "GET", body: nil), code == 200 {
+        memoryFacts = DeskLibrary.facts(from: data)
+      }
+      if let (data, code) = await householdCall("/v1/desk/schedules?status=active", method: "GET", body: nil),
+         code == 200 {
+        deskSchedules = DeskLibrary.schedules(from: data)
+      }
+      if let (data, code) = await householdCall("/v1/desk/todos", method: "GET", body: nil), code == 200 {
+        deskTodos = DeskLibrary.todos(from: data)
+      }
+    }
+  }
+
+  func beginMemoryEdit(_ fact: MemoryFact) {
+    editingMemory = true
+    editingMemoryId = fact.id
+    memoryEditTitle = fact.title
+    memoryEditContent = fact.content
+  }
+
+  func saveMemoryEdit() {
+    let title = memoryEditTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard editingMemoryId > 0, !title.isEmpty else { return }
+    let action = SurfaceAction(
+      id: "memory-\(editingMemoryId)",
+      label: "Save",
+      kind: "desk",
+      toolCall: .object([
+        "resource": .string("memory"),
+        "op": .string("edit"),
+        "id": .number(Double(editingMemoryId)),
+        "title": .string(title),
+        "content": .string(memoryEditContent),
+      ])
+    )
+    resolveSurfaceAction(action)
+  }
+
+  func removeMemory(_ fact: MemoryFact) {
+    resolveSurfaceAction(SurfaceAction(
+      id: "memory-\(fact.id)",
+      label: "Remove",
+      kind: "desk",
+      toolCall: .object([
+        "resource": .string("memory"),
+        "op": .string("delete"),
+        "id": .number(Double(fact.id)),
+      ])
+    ))
+  }
+
+  func restoreMemory() {
+    guard memoryUndo != nil else { return }
+    resolveSurfaceAction(SurfaceAction(
+      id: "memory-undo",
+      label: "Undo",
+      kind: "desk",
+      toolCall: .object([
+        "resource": .string("memory"),
+        "op": .string("restore"),
+      ])
+    ))
+  }
+
+  func reschedule(_ item: DeskSchedule) {
+    let phrase = (reschedulePhrases[item.id] ?? item.phrase)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !phrase.isEmpty else { return }
+    resolveSurfaceAction(SurfaceAction(
+      id: "schedule-\(item.id)",
+      label: "Reschedule",
+      kind: "desk",
+      toolCall: .object([
+        "resource": .string("schedule"),
+        "op": .string("reschedule"),
+        "id": .number(Double(item.id)),
+        "phrase": .string(phrase),
+        "message": .string(item.message),
+      ])
+    ))
+  }
+
+  func finishSchedule(_ id: Int, status: String) {
+    resolveSurfaceAction(SurfaceAction(
+      id: "schedule-\(id)",
+      label: status == "completed" ? "Complete" : "Cancel",
+      kind: "desk",
+      toolCall: .object([
+        "resource": .string("schedule"),
+        "op": .string(status),
+        "id": .number(Double(id)),
+      ])
+    ))
+  }
+
+  func finishTodo(_ id: Int, status: String) {
+    resolveSurfaceAction(SurfaceAction(
+      id: "todo-\(id)",
+      label: status == "completed" ? "Complete" : "Cancel",
+      kind: "desk",
+      toolCall: .object([
+        "resource": .string("todo"),
+        "op": .string(status),
+        "id": .number(Double(id)),
+      ])
+    ))
+  }
+
+  private func performDesk(_ action: SurfaceAction) {
+    let call = action.toolCall.object
+    let resource = call["resource"]?.displayString ?? ""
+    let op = call["op"]?.displayString ?? ""
+    let id = call["id"]?.intValue ?? 0
+    Task {
+      switch (resource, op) {
+      case ("memory", "delete"):
+        guard let fact = memoryFacts.first(where: { $0.id == id }) else { return }
+        guard let (_, code) = await householdCall(
+          "/v1/desk/memory/entries/\(id)", method: "DELETE", body: nil), code == 200
+        else {
+          deskStatus = "Could not remove that fact."
+          return
+        }
+        memoryUndo = fact
+        editingMemory = false
+        deskStatus = "Removed. Arthur will not use it."
+        loadDesk()
+      case ("memory", "restore"):
+        guard let fact = memoryUndo,
+              let body = try? JSONSerialization.data(withJSONObject: DeskLibrary.restoreBody(fact)),
+              let (_, code) = await householdCall("/v1/desk/memory/entries", method: "POST", body: body),
+              code == 200 || code == 201
+        else {
+          deskStatus = "Could not put that fact back."
+          return
+        }
+        memoryUndo = nil
+        deskStatus = "Restored."
+        loadDesk()
+      case ("memory", "edit"):
+        let body: [String: String] = [
+          "title": call["title"]?.displayString ?? "",
+          "content": call["content"]?.displayString ?? "",
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body),
+              let (_, code) = await householdCall(
+                "/v1/desk/memory/entries/\(id)", method: "PATCH", body: data),
+              code == 200
+        else {
+          deskStatus = "Could not save that fact."
+          return
+        }
+        editingMemory = false
+        deskStatus = "Saved."
+        loadDesk()
+      case ("schedule", "reschedule"):
+        let created: [String: String] = [
+          "schedule": call["phrase"]?.displayString ?? "",
+          "message": call["message"]?.displayString ?? "",
+          "agent": "arthur",
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: created),
+              let (_, code) = await householdCall("/v1/desk/schedules", method: "POST", body: data),
+              code == 200 || code == 201
+        else {
+          deskStatus = "Could not reschedule that."
+          return
+        }
+        let cancel = try? JSONSerialization.data(withJSONObject: ["status": "canceled"])
+        _ = await householdCall("/v1/desk/schedules/\(id)", method: "PATCH", body: cancel)
+        deskStatus = "Rescheduled."
+        loadDesk()
+      case ("schedule", "completed"), ("schedule", "canceled"):
+        guard let data = try? JSONSerialization.data(withJSONObject: ["status": op]),
+              let (_, code) = await householdCall(
+                "/v1/desk/schedules/\(id)", method: "PATCH", body: data),
+              code == 200
+        else {
+          deskStatus = "Could not update that reminder."
+          return
+        }
+        deskStatus = op == "completed" ? "Completed." : "Canceled."
+        loadDesk()
+      case ("todo", "completed"), ("todo", "canceled"):
+        guard let data = try? JSONSerialization.data(withJSONObject: ["status": op]),
+              let (_, code) = await householdCall(
+                "/v1/desk/todos/\(id)", method: "PATCH", body: data),
+              code == 200
+        else {
+          deskStatus = "Could not update that todo."
+          return
+        }
+        deskStatus = op == "completed" ? "Completed." : "Canceled."
+        loadDesk()
+      default:
+        break
+      }
+    }
   }
 
   func loadHousehold() {

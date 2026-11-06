@@ -494,6 +494,28 @@ calendar text are not written into `last_user`, `heard`, or the session
 transcript. Follow-up memory for a confident speaker is stored beside the
 device session so one person's card does not become the household's.
 
+## Memory desk
+
+The Mac does not hold the Arbiter token. These routes use the device bearer
+and `X-Device-Id`, then Intercom forwards them to Arbiter. Only memory
+entries, schedules, and todos are reachable. The request body is not logged.
+
+`GET /v1/desk/memory/entries` lists or searches (`q`) active facts.
+`POST /v1/desk/memory/entries` puts a removed fact back.
+`PATCH /v1/desk/memory/entries/:id` edits the title or content.
+`DELETE /v1/desk/memory/entries/:id` removes the fact, so the next `/mem`
+search does not return it.
+
+`GET /v1/desk/schedules` and `POST /v1/desk/schedules` list and create
+reminders. `PATCH /v1/desk/schedules/:id` with `{"status":"canceled"}` or
+`"completed"` stops one. Reschedule creates the new phrase, then cancels
+the old row. `GET /v1/desk/todos` and `PATCH /v1/desk/todos/:id` complete
+or cancel an open todo the same way.
+
+The desk transcript keeps every saved line. The window shows the latest 40
+and an Earlier control reveals the previous page. Sidebar search matches
+the text in `conversations.json`.
+
 ## Speak-back (scheduled reminders)
 
 When `speakback.enabled` is true (default), Intercom subscribes to Arbiter's
