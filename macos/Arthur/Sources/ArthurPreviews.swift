@@ -46,6 +46,28 @@ enum ArthurPreviews {
     ]
   }
 
+  static var thinkingDroplet: DropletContent {
+    var content = DropletContent.empty
+    content.stage = .thinking
+    content.title = "Thinking"
+    content.subtitle = "Looking something up."
+    content.you = "What's on tomorrow?"
+    content.canCancel = true
+    return content
+  }
+
+  static var approvalDroplet: DropletContent {
+    var content = DropletContent.empty
+    content.stage = .ready
+    content.noteTitle = "Add calendar event"
+    content.noteBody = "Dentist tomorrow at 9am — approve to add it."
+    content.approveLabel = "Approve"
+    content.attentionCount = 1
+    content.attentionTitle = "Add calendar event"
+    content.attentionSummary = "Dentist tomorrow at 9am"
+    return content
+  }
+
   static var replyDroplet: DropletContent {
     var content = DropletContent.empty
     content.stage = .replying

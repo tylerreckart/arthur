@@ -20,10 +20,10 @@ struct SurfaceCard: View {
         }
       }
       if !surface.actions.isEmpty {
-        SurfaceActionRow(actions: shownActions)
+        SurfaceActionRow(actions: shownActions, cardTitle: surface.title)
       }
     }
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: .contain)
     .accessibilityLabel(accessibility)
   }
 
@@ -68,6 +68,7 @@ struct SurfaceCard: View {
 private struct SurfaceActionRow: View {
   @Environment(AppModel.self) private var model
   let actions: [SurfaceAction]
+  var cardTitle: String = "" 
 
   var body: some View {
     HStack(spacing: 8) {
@@ -75,6 +76,7 @@ private struct SurfaceActionRow: View {
         Button(action.label) {
           model.resolveSurfaceAction(action)
         }
+        .accessibilityLabel(cardTitle.isEmpty ? action.label : "\(action.label), \(cardTitle)")
         .buttonStyle(.plain)
         .font(.system(size: 12, weight: .semibold))
         .padding(.horizontal, 10)

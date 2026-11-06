@@ -51,7 +51,15 @@ final class AppModel {
   var deskTodos: [DeskTodo] = []
   var reschedulePhrases: [Int: String] = [:]
   var deskStatus = ""
-  private var editingMemoryId = 0
+  var deskLoadState: DeskLoadState = .idle
+  var activityOpen = false
+  var pendingWriteTitle = ""
+  var pendingWriteSummary = ""
+  var rescheduleDates: [Int: Date] = [:]
+  var sidebarNotice = ""
+  var householdEnrollOpen = false
+  var teachCancelled = false
+  var editingMemoryId = 0
   var work: WorkState = .none
   var youSaid = ""
   var formingText = ""
@@ -78,8 +86,6 @@ final class AppModel {
   var errorText = ""
   var composerFocusToken = 0
   var composerFocused = false
-  /// The droplet card's field is first responder. Space must type.
-  var deskFieldFocused = false
   var turnModality: TurnModality = .none
   var conversationId: Int64 = 0
   var conversations: [DeskConversation] = []
@@ -761,12 +767,14 @@ final class AppModel {
 
   private func presentMac(_ card: MacDesk.WriteCard?) {
     guard let card else { return }
+    pendingWriteTitle = card.title; pendingWriteSummary = card.summary
     pendingWritePhase = card.phase
     pendingWriteId = card.phase == "approve" || card.phase == "undo" ? card.id : nil
     showWrite(id: card.id, title: card.title, summary: card.summary, phase: card.phase)
   }
 
   private func presentWrite(_ proposal: CalendarDesk.WriteProposal) {
+    pendingWriteTitle = proposal.title; pendingWriteSummary = proposal.summary
     pendingWritePhase = proposal.phase
     pendingWriteId = proposal.phase == "approve" || proposal.phase == "undo" ? proposal.id : nil
     showWrite(id: proposal.id, title: proposal.title, summary: proposal.summary, phase: proposal.phase)
@@ -813,6 +821,46 @@ final class AppModel {
       return
     }
     attachSurface(surface, turnId: turnId)
+  }
+
+  var activityJobs: [JobItem] {
+    ActivityBuilder.jobs(
+      pendingTitle: pendingWriteTitle, pendingSummary: pendingWriteSummary,
+      pendingLabel: pendingWriteLabel,
+      isRunning: phase == .thinking || phase == .speaking, workLine: work.line,
+      canCancel: canCancel, errorText: errorText,
+      isOffline: phase == .disconnected || phase == .connecting,
+      schedules: deskSchedules, todos: deskTodos,
+      speakBackTitle: speakBack?.title ?? "", speakBackMessage: speakBack?.live == true ? (speakBack?.message ?? "") : "")
+  }
+  var attentionCount: Int { ActivityBuilder.attentionCount(activityJobs) }
+  var mostUrgentJob: JobItem? { ActivityBuilder.mostUrgent(activityJobs) }
+
+  func reconnect() {
+    errorText = ""
+    connect()
+    pollHealth()
+  }
+
+  func performJobAction(_ job: JobItem, primary: Bool) {
+    switch job.kind {
+    case .approval:
+      if primary { resolvePendingWrite() }
+      else if let id = pendingWriteId { resolveWrite(id: id, granted: false, via: "card") }
+    case .turn: if primary { cancelTurn() }
+    case .error:
+      if primary {
+        if phase == .disconnected || phase == .connecting { reconnect() }
+        else { let msg = errorText; errorText = ""; if !msg.isEmpty { deskStatus = "Retried — if it fails again it will appear here." }; reconnect() }
+      } else { dismissError() }
+    case .schedule:
+      guard let id = Int(job.id.dropFirst("schedule-".count)) else { return }
+      if primary { finishSchedule(id, status: "completed") } else { finishSchedule(id, status: "canceled") }
+    case .todo:
+      guard let id = Int(job.id.dropFirst("todo-".count)) else { return }
+      if primary { finishTodo(id, status: "completed") } else { finishTodo(id, status: "canceled") }
+    case .speakBack: if !primary { dismissSpeakBack() }
+    }
   }
 
   func refreshMicrophones() {
@@ -1068,6 +1116,10 @@ final class AppModel {
   func sendDraft() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { return }
+    if phase == .disconnected || phase == .connecting {
+      errorText = "Arthur is offline — your message was not sent. Reconnect, then send again."
+      return
+    }
     if phase == .speaking || phase == .thinking {
       sendTurnCancel()
       audio.interruptPlayback()
@@ -1095,7 +1147,10 @@ final class AppModel {
   }
 
   private func commitDraft(_ text: String, context: DeskContext) {
-    guard canSend else { return }
+    guard canSend else {
+      if errorText.isEmpty { errorText = "Arthur can't send right now — check the connection in Activity." }
+      return
+    }
     let context = turnContext(calendar: context)
     sentToken = stagedToken
     turnModality = .text
@@ -1492,7 +1547,11 @@ final class AppModel {
   }
 
   func newConversation() {
-    guard canStartConversation else { return }
+    guard canStartConversation else {
+      sidebarNotice = "Finish or stop the current turn before starting a new conversation."
+      return
+    }
+    sidebarNotice = "" 
     captureActiveLines()
     guard !conversationIsEmpty else { return }
     conversations.removeAll { $0.id != activeConversationId && $0.lines.isEmpty }
@@ -1513,7 +1572,11 @@ final class AppModel {
 
   func openConversation(_ id: UUID) {
     guard id != activeConversationId else { return }
-    guard canStartConversation else { return }
+    guard canStartConversation else {
+      sidebarNotice = "Finish or stop the current turn before switching conversations."
+      return
+    }
+    sidebarNotice = "" 
     guard conversations.contains(where: { $0.id == id }) else { return }
     captureActiveLines()
     let previous = activeConversationId
@@ -1871,21 +1934,25 @@ final class AppModel {
   }
 
   func loadDesk() {
+    deskLoadState = .loading
     let query = memoryQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     Task {
+      var anyOK = false; var anyFail = false
       let path = query.isEmpty
         ? "/v1/desk/memory/entries?limit=50"
         : "/v1/desk/memory/entries?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)&limit=50"
       if let (data, code) = await householdCall(path, method: "GET", body: nil), code == 200 {
-        memoryFacts = DeskLibrary.facts(from: data)
-      }
+        memoryFacts = DeskLibrary.facts(from: data); anyOK = true
+      } else { anyFail = true }
       if let (data, code) = await householdCall("/v1/desk/schedules?status=active", method: "GET", body: nil),
          code == 200 {
-        deskSchedules = DeskLibrary.schedules(from: data)
-      }
+        deskSchedules = DeskLibrary.schedules(from: data); anyOK = true
+      } else { anyFail = true }
       if let (data, code) = await householdCall("/v1/desk/todos", method: "GET", body: nil), code == 200 {
-        deskTodos = DeskLibrary.todos(from: data)
-      }
+        deskTodos = DeskLibrary.todos(from: data); anyOK = true
+      } else { anyFail = true }
+      deskLoadState = anyOK ? .loaded : .failed("Could not reach Arthur. Check the connection, then retry.")
+      if anyOK && anyFail { deskStatus = "Some sections could not load." }
     }
   }
 
@@ -1941,8 +2008,13 @@ final class AppModel {
   }
 
   func reschedule(_ item: DeskSchedule) {
-    let phrase = (reschedulePhrases[item.id] ?? item.phrase)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let phrase: String
+    if let date = rescheduleDates[item.id] {
+      phrase = ReschedulePhrase.phrase(for: date)
+    } else {
+      phrase = (reschedulePhrases[item.id] ?? item.phrase)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
     guard !phrase.isEmpty else { return }
     resolveSurfaceAction(SurfaceAction(
       id: "schedule-\(item.id)",
@@ -2080,6 +2152,13 @@ final class AppModel {
     Task { await reloadHousehold() }
   }
 
+  func cancelTeach() {
+    teachCancelled = true
+    teaching = false
+    householdStatus = "Enrollment canceled."
+    resumeWake()
+  }
+
   func teachVoice() {
     let name = teachName.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !name.isEmpty, !teaching else { return }
@@ -2087,6 +2166,7 @@ final class AppModel {
       householdStatus = "Finish the current turn first."
       return
     }
+    teachCancelled = false
     teaching = true
     teachPhrase = 0
     householdStatus = ""
@@ -2117,6 +2197,7 @@ final class AppModel {
       return
     }
     for index in 0..<HouseholdRoster.phrases.count {
+      if teachCancelled { return }
       teachPhrase = index
       let pcm = await recordEnrollment()
       guard let pcm else {
@@ -2367,7 +2448,6 @@ final class AppModel {
 
   private func handlePushToTalk(_ event: NSEvent) -> NSEvent? {
     guard event.keyCode == 49 else { return event }
-    if deskFieldFocused { return event }
     // The configured global chord is consumed above so Space-only PTT
     // and the hotkey do not both fire.
     if pttHotkey.matches(event) { return event }
@@ -2529,6 +2609,7 @@ final class AppModel {
     model.quietTextMode = false
     model.micGranted = true
     model.draft = draft
+    model.deskLoadState = .loaded
     model.sidebarOpen = sidebarOpen
     if history.isEmpty {
       var item = DeskConversation.empty()
