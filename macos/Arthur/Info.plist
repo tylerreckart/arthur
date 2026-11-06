@@ -15,5 +15,9 @@
 	<string>Arthur reads today’s and tomorrow’s events on this Mac when you allow it, to answer questions about your schedule.</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Arthur reads today’s and tomorrow’s events on this Mac when you allow it, to answer questions about your schedule.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Arthur adds or completes a reminder on this Mac only after you approve it.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Arthur adds or completes a reminder on this Mac only after you approve it.</string>
 </dict>
 </plist>

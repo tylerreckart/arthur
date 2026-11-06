@@ -11,8 +11,7 @@ enum SurfaceKind: String, Codable, Hashable {
   case markets
 }
 
-/// Optional desk action. Phase 0 only decodes these; the card UI does not
-/// offer them until a later phase. Unknown or incomplete rows are skipped.
+/// Optional desk action. Unknown or incomplete rows are skipped.
 struct SurfaceAction: Equatable, Codable, Hashable, Identifiable {
   var id: String
   var label: String
@@ -131,7 +130,7 @@ struct ChatSurface: Equatable, Codable, Identifiable, Hashable {
     guard case .object(let obj) = payload else { return [] }
     let skip: Set<String> = [
       "hours", "days", "forecast", "body", "markdown", "text", "html",
-      "items", "instruments",
+      "items", "instruments", "proposal_id",
     ]
     var out: [(String, String)] = []
     for key in obj.keys.sorted() {

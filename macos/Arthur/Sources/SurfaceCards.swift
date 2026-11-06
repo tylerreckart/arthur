@@ -8,18 +8,28 @@ struct SurfaceCard: View {
   var preferCompact = false
 
   var body: some View {
-    Group {
-      if preferCompact {
-        compact
-      } else {
-        ViewThatFits(in: .horizontal) {
-          full
+    VStack(alignment: .leading, spacing: 8) {
+      Group {
+        if preferCompact {
           compact
+        } else {
+          ViewThatFits(in: .horizontal) {
+            full
+            compact
+          }
         }
+      }
+      if !surface.actions.isEmpty {
+        SurfaceActionRow(actions: shownActions)
       }
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibility)
+  }
+
+  private var shownActions: [SurfaceAction] {
+    if !preferCompact { return surface.actions }
+    return surface.actions.filter { $0.kind == "approve" || $0.kind == "undo" }
   }
 
   @ViewBuilder
@@ -52,6 +62,31 @@ struct SurfaceCard: View {
     let title = surface.title.isEmpty ? "Card" : surface.title
     if surface.summary.isEmpty { return title }
     return "\(title), \(surface.summary)"
+  }
+}
+
+private struct SurfaceActionRow: View {
+  @Environment(AppModel.self) private var model
+  let actions: [SurfaceAction]
+
+  var body: some View {
+    HStack(spacing: 8) {
+      ForEach(actions) { action in
+        Button(action.label) {
+          model.resolveSurfaceAction(action)
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 12, weight: .semibold))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .foregroundStyle(fills(action) ? Color.black : Color.white.opacity(0.92))
+        .background(fills(action) ? Color.white.opacity(0.92) : Color.white.opacity(0.08), in: Capsule())
+      }
+    }
+  }
+
+  private func fills(_ action: SurfaceAction) -> Bool {
+    action.kind == "approve" || action.kind == "undo"
   }
 }
 

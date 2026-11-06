@@ -67,6 +67,7 @@ struct DropletContent: Equatable {
   var reply: String
   var noteTitle: String
   var noteBody: String
+  var approveLabel: String
   var level: Double
   var speak: Double
   var canTalk: Bool
@@ -85,6 +86,7 @@ struct DropletContent: Equatable {
     reply: "",
     noteTitle: "",
     noteBody: "",
+    approveLabel: "",
     level: 0,
     speak: 0,
     canTalk: false,
@@ -181,6 +183,7 @@ struct DropletContent: Equatable {
       reply: clip(reply, 700),
       noteTitle: surface?.title ?? "",
       noteBody: surface?.summary ?? "",
+      approveLabel: model.pendingWriteLabel,
       level: model.inputLevel,
       speak: speak,
       canTalk: model.canTalk,
@@ -212,6 +215,7 @@ struct DropletActions {
   var open: () -> Void = {}
   var dismiss: () -> Void = {}
   var send: (String) -> Void = { _ in }
+  var approve: () -> Void = {}
   var fieldFocus: (Bool) -> Void = { _ in }
   var hover: (Bool) -> Void = { _ in }
   var setAcceptsHits: (Bool) -> Void = { _ in }
@@ -588,6 +592,17 @@ private struct DropletCardBody: View {
         }
       } else {
         SpokenReply(text: content.reply)
+      }
+
+      if !content.approveLabel.isEmpty {
+        Button(content.approveLabel) { session.actions.approve() }
+          .buttonStyle(.plain)
+          .font(.system(size: 13, weight: .semibold))
+          .padding(.horizontal, 12)
+          .padding(.vertical, 7)
+          .foregroundStyle(Color.black)
+          .background(Color.white.opacity(0.92), in: Capsule())
+          .accessibilityLabel(content.approveLabel)
       }
 
     }

@@ -92,6 +92,72 @@ final class ArthurCalendarTests: XCTestCase {
     XCTAssertEqual(result?["isError"] as? Bool, false)
   }
 
+  func testClockPhraseReadsAfternoon() {
+    XCTAssertEqual(ClockPhrase.minuteOfDay("16:00"), 16 * 60)
+    XCTAssertEqual(ClockPhrase.minuteOfDay("4:00 PM"), 16 * 60)
+    XCTAssertEqual(ClockPhrase.minuteOfDay("4pm"), 16 * 60)
+    XCTAssertEqual(ClockPhrase.minuteOfDay("12:00 AM"), 0)
+    XCTAssertNil(ClockPhrase.minuteOfDay("tomorrow"))
+  }
+
+  func testAuditRecordsTheWriteWithoutTheArguments() throws {
+    let args = ["title": "Design review", "to": "16:00"]
+    let line = ActionAudit.line(
+      at: Date(timeIntervalSince1970: 0),
+      tool: "calendar.move",
+      args: args,
+      approvedBy: "card",
+      result: "done"
+    )
+    XCTAssertTrue(line.contains("\"tool\":\"calendar.move\""))
+    XCTAssertTrue(line.contains(ActionAudit.hashArgs(args)))
+    XCTAssertFalse(line.contains("Design review"))
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("arthur-audit-\(UUID().uuidString).jsonl")
+    ActionAudit.append(tool: "calendar.move", args: args, approvedBy: "", result: "pending", to: url)
+    ActionAudit.append(tool: "calendar.move", args: args, approvedBy: "voice", result: "done", to: url)
+    ActionAudit.append(tool: "calendar.move", args: args, approvedBy: "undo", result: "undone", to: url)
+    let rows = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+    XCTAssertEqual(rows.count, 3)
+    XCTAssertTrue(rows[0].contains("pending"))
+    XCTAssertTrue(rows[1].contains("done"))
+    XCTAssertTrue(rows[2].contains("undone"))
+  }
+
+  func testWriteToolStaysPending() {
+    let host = LocalToolHost(
+      act: { name, args in
+        XCTAssertEqual(name, "calendar.move")
+        XCTAssertEqual(args["to"] as? String, "16:00")
+        return "Pending approval. Nothing has changed."
+      },
+      calendarText: { _ in "unused" }
+    )
+    let listed = host.respond(to: [
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "tools/list",
+    ])
+    let tools = (listed?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
+    let names = tools?.compactMap { $0["name"] as? String } ?? []
+    XCTAssertTrue(names.contains("calendar.move"))
+    XCTAssertTrue(names.contains("reminders.complete"))
+
+    let called = host.respond(to: [
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "tools/call",
+      "params": [
+        "name": "calendar.move",
+        "arguments": ["to": "16:00", "title": "Design review"],
+      ],
+    ])
+    let result = called?["result"] as? [String: Any]
+    let content = result?["content"] as? [[String: Any]]
+    XCTAssertEqual(content?.first?["text"] as? String, "Pending approval. Nothing has changed.")
+    XCTAssertEqual(result?["isError"] as? Bool, false)
+  }
+
   func testToolHostDropsNotifications() {
     let host = LocalToolHost { _ in "unused" }
     let response = host.respond(to: [

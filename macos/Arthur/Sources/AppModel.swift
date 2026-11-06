@@ -119,6 +119,15 @@ final class AppModel {
       publishCalendarPolicy()
     }
   }
+  private var pendingWriteId: String?
+  private var pendingWritePhase = ""
+  var pendingWriteLabel: String {
+    switch pendingWritePhase {
+    case "approve": return "Approve"
+    case "undo": return "Undo"
+    default: return ""
+    }
+  }
   /// Empty follows the system default microphone.
   var microphoneID = "" {
     didSet {
@@ -401,10 +410,16 @@ final class AppModel {
   private func startLocalCalendar() {
     guard !previewCanvas else { return }
     publishCalendarPolicy()
+    CalendarDesk.onProposal = { [weak self] proposal in
+      self?.presentWrite(proposal)
+    }
     let token = LocalMcpToken.load()
     let server = LocalMcpServer(
       token: token,
-      tools: LocalToolHost { day in CalendarDesk.toolText(day: day) }
+      tools: LocalToolHost(
+        act: { tool, args in CalendarDesk.propose(tool: tool, args: args) },
+        calendarText: { day in CalendarDesk.toolText(day: day) }
+      )
     )
     server.start { [weak self] port in
       Task { @MainActor in
@@ -424,6 +439,83 @@ final class AppModel {
       return
     }
     upsertMcp(server)
+  }
+
+  func resolveSurfaceAction(_ action: SurfaceAction) {
+    switch action.kind {
+    case "approve":
+      applyWrite(CalendarDesk.resolve(id: action.id, granted: true, via: "card"))
+    case "dismiss":
+      applyWrite(CalendarDesk.resolve(id: action.id, granted: false, via: "card"))
+    case "undo":
+      applyWrite(CalendarDesk.resolve(id: action.id, granted: true, via: "undo"))
+    case "edit":
+      if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        draft = action.label
+      }
+      composerFocusToken += 1
+    default:
+      break
+    }
+  }
+
+  func resolvePendingWrite() {
+    guard let id = pendingWriteId else { return }
+    if pendingWritePhase == "undo" {
+      applyWrite(CalendarDesk.resolve(id: id, granted: true, via: "undo"))
+    } else {
+      applyWrite(CalendarDesk.resolve(id: id, granted: true, via: "card"))
+    }
+  }
+
+  private func applyWrite(_ proposal: CalendarDesk.WriteProposal?) {
+    guard let proposal else { return }
+    presentWrite(proposal)
+  }
+
+  private func presentWrite(_ proposal: CalendarDesk.WriteProposal) {
+    pendingWritePhase = proposal.phase
+    pendingWriteId = proposal.phase == "approve" || proposal.phase == "undo" ? proposal.id : nil
+    let actions: [SurfaceAction]
+    switch proposal.phase {
+    case "approve":
+      actions = [
+        SurfaceAction(id: proposal.id, label: "Approve", kind: "approve"),
+        SurfaceAction(id: proposal.id, label: "Not now", kind: "dismiss"),
+      ]
+      client.sendArmApproval(id: proposal.id)
+    case "undo":
+      actions = [SurfaceAction(id: proposal.id, label: "Undo", kind: "undo")]
+      client.sendClearApproval()
+    default:
+      actions = []
+      client.sendClearApproval()
+    }
+    let surface = ChatSurface(
+      kindRaw: "generic",
+      version: 2,
+      title: proposal.title,
+      summary: proposal.summary,
+      payload: .object(["proposal_id": .string(proposal.id)]),
+      actions: actions
+    )
+    upsertProposalSurface(surface, id: proposal.id)
+  }
+
+  private func upsertProposalSurface(_ surface: ChatSurface, id: String) {
+    for index in discussion.indices {
+      var line = discussion[index]
+      guard let slot = line.surfaces.firstIndex(where: {
+        $0.payload.object["proposal_id"]?.displayString == id
+      }) else { continue }
+      var next = surface
+      next.id = line.surfaces[slot].id
+      line.surfaces[slot] = next
+      discussion[index] = line
+      persistTranscript()
+      return
+    }
+    attachSurface(surface, turnId: turnId)
   }
 
   func refreshMicrophones() {
@@ -1241,6 +1333,8 @@ final class AppModel {
       if speakBack?.live == true { noteSpeakBackSaid(text) }
     case .surface(let turnId, let surface):
       attachSurface(surface, turnId: turnId)
+    case .approval(let id, let granted):
+      applyWrite(CalendarDesk.resolve(id: id, granted: granted, via: "voice"))
     case .forming(let text):
       if formingText.isEmpty {
         formingLineId = UUID()

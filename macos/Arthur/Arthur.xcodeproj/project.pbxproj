@@ -12,6 +12,7 @@
 		A10000000000000000000028 /* Notebook.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000026 /* Notebook.swift */; };
 		A10000000000000000000034 /* CalendarAgenda.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000032 /* CalendarAgenda.swift */; };
 		A10000000000000000000035 /* LocalToolHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000033 /* LocalToolHost.swift */; };
+		A10000000000000000000037 /* ActionGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000036 /* ActionGate.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +25,7 @@
 		A10000000000000000000026 /* Notebook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notebook.swift; sourceTree = "<group>"; };
 		A10000000000000000000032 /* CalendarAgenda.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarAgenda.swift; sourceTree = "<group>"; };
 		A10000000000000000000033 /* LocalToolHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalToolHost.swift; sourceTree = "<group>"; };
+		A10000000000000000000036 /* ActionGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionGate.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -94,6 +96,7 @@
 				A10000000000000000000026 /* Notebook.swift */,
 				A10000000000000000000032 /* CalendarAgenda.swift */,
 				A10000000000000000000033 /* LocalToolHost.swift */,
+				A10000000000000000000036 /* ActionGate.swift */,
 			);
 			name = TestSupport;
 			path = Sources;
@@ -211,6 +214,7 @@
 				A10000000000000000000028 /* Notebook.swift in Sources */,
 				A10000000000000000000034 /* CalendarAgenda.swift in Sources */,
 				A10000000000000000000035 /* LocalToolHost.swift in Sources */,
+				A10000000000000000000037 /* ActionGate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

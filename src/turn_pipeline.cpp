@@ -1332,6 +1332,31 @@ bool TurnPipeline::install_conversation(const std::string& device_id,
   return sessions_->upsert(s, err);
 }
 
+bool TurnPipeline::arm_approval(const std::string& device_id, const std::string& id) {
+  if (device_id.empty() || id.empty() || id.size() > 64) return false;
+  for (unsigned char c : id) {
+    if (!(std::isalnum(c) || c == '-' || c == '_')) return false;
+  }
+  std::lock_guard<std::mutex> lk(approval_mu_);
+  DeviceSession s;
+  if (auto existing = sessions_->get(device_id)) s = *existing;
+  s.device_id = device_id;
+  s.pending_intent = make_approval_intent(id);
+  s.pending_at = now_unix();
+  s.updated_at = s.pending_at;
+  return sessions_->upsert(s, nullptr);
+}
+
+bool TurnPipeline::clear_approval(const std::string& device_id) {
+  std::lock_guard<std::mutex> lk(approval_mu_);
+  auto existing = sessions_->get(device_id);
+  if (!existing || !is_approval_intent(existing->pending_intent)) return true;
+  existing->pending_intent.clear();
+  existing->pending_at = 0;
+  existing->updated_at = now_unix();
+  return sessions_->upsert(*existing, nullptr);
+}
+
 bool TurnPipeline::cancel_turn(const std::string& turn_id, std::string* err) {
   auto h = find_turn(turn_id);
   if (!h) {
@@ -1520,6 +1545,73 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     return ok;
   };
 
+  bool resolved_approval = false;
+  auto save_session = [&](DeviceSession s) {
+    std::lock_guard<std::mutex> lk(approval_mu_);
+    if (!resolved_approval && !is_approval_intent(s.pending_intent)) {
+      if (auto live = sessions_->get(device_id)) {
+        if (is_approval_intent(live->pending_intent) && live->pending_at > 0 &&
+            now_unix() - live->pending_at <= 180) {
+          s.pending_intent = live->pending_intent;
+          s.pending_at = live->pending_at;
+        }
+      }
+    }
+    if (s.updated_at <= 0) s.updated_at = now_unix();
+    sessions_->upsert(s, &err);
+  };
+
+  if (prior_session && is_approval_intent(prior_session->pending_intent) &&
+      prior_session->pending_at > 0) {
+    const bool fresh = now_unix() - prior_session->pending_at <= 180;
+    const std::string approval_id = approval_id_from_intent(prior_session->pending_intent);
+    const auto decision = fresh ? classify_approval(result.transcript) : ApprovalDecision::Other;
+    if (fresh && decision != ApprovalDecision::Other) {
+      resolved_approval = true;
+      nlohmann::json body = {
+          {"id", approval_id},
+          {"granted", decision == ApprovalDecision::Yes},
+      };
+      sink.event("approval", body.dump());
+      const char* line = decision == ApprovalDecision::Yes ? "All right." : "All right, I won't.";
+      result.used_fast_path = true;
+      result.fast_path_kind = "approval";
+      path_name = "fast";
+      pending_kind = "fast";
+      result.conversation_id = prior_session->conversation_id;
+      if (!speak(line)) {
+        result.error = err.empty() ? "tts failed" : err;
+      } else {
+        result.ok = true;
+      }
+      DeviceSession s = *prior_session;
+      s.last_turn_id = result.turn_id;
+      s.last_user = result.transcript;
+      s.last_spoken = line;
+      s.pending_intent.clear();
+      s.pending_at = 0;
+      s.updated_at = now_unix();
+      save_session(s);
+      return finish(result);
+    }
+    {
+      std::lock_guard<std::mutex> lk(approval_mu_);
+      if (auto live = sessions_->get(device_id)) {
+        if (live->pending_intent == prior_session->pending_intent) {
+          live->pending_intent.clear();
+          live->pending_at = 0;
+          live->updated_at = now_unix();
+          sessions_->upsert(*live, &err);
+          if (fresh) {
+            sink.event("approval",
+                       nlohmann::json{{"id", approval_id}, {"granted", false}, {"reason", "replaced"}}
+                           .dump());
+          }
+        }
+      }
+    }
+  }
+
   std::string card_note;
   std::string card_follow_kind;
   std::string card_follow_request;
@@ -1568,7 +1660,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
           s.pending_at = prior_session->pending_at;
         }
         s.updated_at = now_unix();
-        sessions_->upsert(s, &err);
+        save_session(s);
       }
       return finish(result);
       }
@@ -1676,7 +1768,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       s.last_fast_path_request = routing_transcript;
       s.last_card = carried_card;
       s.updated_at = now_unix();
-      sessions_->upsert(s, &err);
+      save_session(s);
     }
     return finish(result);
   }
@@ -1751,7 +1843,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
         s.pending_at = now_unix();
       }
       s.updated_at = now_unix();
-      sessions_->upsert(s, &err);
+      save_session(s);
     }
     return finish(result);
   }
@@ -1800,7 +1892,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
         s.pending_at = now_unix();
       }
       s.updated_at = now_unix();
-      sessions_->upsert(s, &err);
+      save_session(s);
     }
     return finish(result);
   }
@@ -2141,7 +2233,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     s.last_fast_path_request = card_follow_request;
   }
   s.updated_at = now_unix();
-  sessions_->upsert(s, &err);
+  save_session(s);
 
   if (!arb_state.streamed) {
     result.error =

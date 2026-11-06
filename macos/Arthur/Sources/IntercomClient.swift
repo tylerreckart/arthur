@@ -12,6 +12,7 @@ enum IntercomEvent {
   case said(String)
   case forming(String)
   case surface(turnId: String, surface: ChatSurface)
+  case approval(id: String, granted: Bool)
   case working(String)
   case status(String)
   case error(String)
@@ -105,6 +106,11 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
     sendJSON(["type": "context", "context": context.wire])
   }
   func sendCancel() { sendJSON(["type": "cancel"]) }
+  func sendArmApproval(id: String) {
+    guard !id.isEmpty else { return }
+    sendJSON(["type": "arm_approval", "id": id])
+  }
+  func sendClearApproval() { sendJSON(["type": "clear_approval"]) }
   func sendCancel(
     turnId: String,
     host: String,
@@ -301,6 +307,11 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
       if let decoded = ChatSurface.decodeEvent(json) {
         emit(.surface(turnId: decoded.turnId, surface: decoded.surface))
       }
+    case "approval":
+      emit(.approval(
+        id: json["id"] as? String ?? "",
+        granted: json["granted"] as? Bool ?? false
+      ))
     case "working":
       emit(.working(json["tool"] as? String ?? json["text"] as? String ?? ""))
     case "status":

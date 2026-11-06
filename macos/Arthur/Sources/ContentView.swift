@@ -1076,7 +1076,7 @@ struct SettingsView: View {
         } header: {
           Text("This Mac")
         } footer: {
-          Text("Today and tomorrow stay on this Mac. Arthur does not read the list aloud unless you ask. Restart arbiter --api once after Arthur first writes the calendar tool.")
+          Text("Today and tomorrow stay on this Mac. Arthur does not read the list aloud unless you ask. A change waits until you approve it. Restart arbiter --api once after Arthur first writes the calendar tool.")
         }
 
         McpSettingsSection()

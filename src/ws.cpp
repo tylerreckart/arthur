@@ -227,7 +227,7 @@ class SocketAudioSink : public AudioSink {
       j["tool"] = value;
     } else if (t == "status") {
       j["phase"] = value;
-    } else if (t == "surface") {
+    } else if (t == "surface" || t == "approval") {
       try {
         auto extra = nlohmann::json::parse(value.empty() ? "{}" : value);
         if (extra.is_object()) {
@@ -692,6 +692,17 @@ void WsServer::handle_client(int fd) {
         continue;
       }
       const std::string type = j.value("type", "");
+      if (type == "arm_approval") {
+        const std::string id = j.value("id", "");
+        if (!deps_.pipeline->arm_approval(device_id, id)) {
+          send_text({{"type", "error"}, {"error", "could not arm approval"}});
+        }
+        continue;
+      }
+      if (type == "clear_approval") {
+        deps_.pipeline->clear_approval(device_id);
+        continue;
+      }
       if (type == "context") {
         pending_context = j.contains("context") ? client_context_from_json(j["context"])
                                                 : client_context_from_json(j);
