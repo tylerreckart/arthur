@@ -1,6 +1,7 @@
 #include "intercom/config.hpp"
 #include "intercom/util.hpp"
 
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -35,6 +36,25 @@ double require_number(const nlohmann::json& j, const char* key, double def) {
     throw std::runtime_error(std::string("config field '") + key + "' must be a number");
   }
   return j[key].get<double>();
+}
+
+int require_minute(const nlohmann::json& j, const char* key, int def) {
+  if (!j.contains(key) || j[key].is_null()) return def;
+  int minute = def;
+  if (j[key].is_number_integer()) {
+    minute = j[key].get<int>();
+  } else if (j[key].is_string()) {
+    int hour = -1;
+    int mins = -1;
+    const std::string text = j[key].get<std::string>();
+    if (std::sscanf(text.c_str(), "%d:%d", &hour, &mins) != 2) return def;
+    minute = hour * 60 + mins;
+  } else {
+    throw std::runtime_error(std::string("config field '") + key +
+                             "' must be an integer or HH:MM");
+  }
+  if (minute < 0 || minute >= 24 * 60) return def;
+  return minute;
 }
 
 bool require_bool(const nlohmann::json& j, const char* key, bool def) {
@@ -278,6 +298,17 @@ Config Config::load(const std::string& path) {
     c.speakback.max_queued = require_int(s, "max_queued", c.speakback.max_queued);
     c.speakback.speak_failures =
         require_bool(s, "speak_failures", c.speakback.speak_failures);
+    c.speakback.quiet_hours =
+        require_bool(s, "quiet_hours", c.speakback.quiet_hours);
+    c.speakback.quiet_start_minute =
+        require_minute(s, "quiet_start", c.speakback.quiet_start_minute);
+    c.speakback.quiet_end_minute =
+        require_minute(s, "quiet_end", c.speakback.quiet_end_minute);
+    c.speakback.briefing = require_bool(s, "briefing", c.speakback.briefing);
+    c.speakback.briefing_minute =
+        require_minute(s, "briefing_at", c.speakback.briefing_minute);
+    c.speakback.briefing_grace_minutes = require_int(
+        s, "briefing_grace_minutes", c.speakback.briefing_grace_minutes);
   }
 
   if (c.device_token.empty() && c.devices.empty()) {

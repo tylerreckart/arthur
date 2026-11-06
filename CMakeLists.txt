@@ -333,6 +333,13 @@ if(APPLE)
 endif()
 add_test(NAME test_speakback COMMAND test_speakback)
 
+add_executable(test_speak_queue tests/test_speak_queue.cpp)
+target_include_directories(test_speak_queue PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_speak_queue PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME test_speak_queue COMMAND test_speak_queue)
+
 add_executable(test_local_context
   tests/test_local_context.cpp
   src/local_context.cpp

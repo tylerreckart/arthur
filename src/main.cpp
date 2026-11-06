@@ -3,6 +3,7 @@
 #include "intercom/device_hub.hpp"
 #include "intercom/filler_client.hpp"
 #include "intercom/http_server.hpp"
+#include "intercom/morning.hpp"
 #include "intercom/session_store.hpp"
 #include "intercom/speakback.hpp"
 #include "intercom/stt_whisper.hpp"
@@ -94,14 +95,21 @@ int main(int argc, char** argv) {
 
   auto hub = std::make_shared<intercom::DeviceHub>(
       tts, config.speakback.max_queued, sessions);
+  hub->set_quiet(config.speakback.quiet_hours, config.speakback.quiet_start_minute,
+                 config.speakback.quiet_end_minute);
   intercom::Speakback speakback(config.speakback, config.agent, arbiter, sessions, hub);
   speakback.start();
+  intercom::MorningBriefing briefing(hub, sessions, config.speakback, [pipeline]() {
+    return pipeline->compose_spoken_briefing();
+  });
+  briefing.start();
 
   intercom::ServerDeps deps;
   deps.config = config;
   deps.pipeline = pipeline;
   deps.hub = hub;
   intercom::run_http_server(std::move(deps));
+  briefing.stop();
   speakback.stop();
   return 0;
 }

@@ -31,6 +31,8 @@ enum ConfigStore {
   private static let calendarSharingKey = "arthur.calendarSharing"
   private static let seesFrontKey = "arthur.seesFront"
   private static let screenLookKey = "arthur.screenLook"
+  private static let wakeWordKey = "arthur.wakeWord"
+  private static let wakeFalseAcceptsKey = "arthur.wakeFalseAccepts"
   private static let macToolsKey = "arthur.macTools"
 
   static func load() -> ClientConfig {
@@ -148,6 +150,20 @@ enum ConfigStore {
 
   static func saveScreenLook(_ on: Bool) {
     UserDefaults.standard.set(on, forKey: screenLookKey)
+  }
+
+  static func loadWakeWord() -> Bool {
+    UserDefaults.standard.bool(forKey: wakeWordKey)
+  }
+
+  static func saveWakeWord(_ on: Bool) {
+    UserDefaults.standard.set(on, forKey: wakeWordKey)
+  }
+
+  static func bumpWakeFalseAccepts() -> Int {
+    let count = UserDefaults.standard.integer(forKey: wakeFalseAcceptsKey) + 1
+    UserDefaults.standard.set(count, forKey: wakeFalseAcceptsKey)
+    return count
   }
 
   static func loadMacTools() -> Bool {

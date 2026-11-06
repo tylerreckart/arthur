@@ -100,6 +100,12 @@
     "enabled": true,
     "reconnect_ms": 2000,
     "max_queued": 4,
-    "speak_failures": false
+    "speak_failures": false,
+    "quiet_hours": true,
+    "quiet_start": "22:00",
+    "quiet_end": "07:00",
+    "briefing": true,
+    "briefing_at": "07:30",
+    "briefing_grace_minutes": 20
   }
 }

@@ -3,6 +3,7 @@
 #include "intercom/clock.hpp"
 #include "intercom/home_client.hpp"
 #include "intercom/speakable.hpp"
+#include "intercom/speak_queue.hpp"
 #include "intercom/surface.hpp"
 #include "intercom/util.hpp"
 #include "intercom/warm.hpp"
@@ -1172,6 +1173,48 @@ std::string with_correction_note(const DeviceSession& prior,
 }
 
 }  // namespace
+
+std::string TurnPipeline::compose_spoken_briefing() {
+  std::string joined = briefing_clock_line();
+  if (!config_.fast_path) return joined;
+
+  auto weather_future = std::async(std::launch::async, [this]() -> std::optional<FastPathResult> {
+    if (config_.home.configured() && !config_.home.weather_entity.empty()) {
+      if (auto fp = fast_path_.try_handle("what's the weather")) {
+        if (fp->kind == "weather" && fp->context_valid && !fp->reply.empty()) return fp;
+      }
+    }
+    const std::string place = trim(config_.weather.default_place);
+    if (!place.empty()) {
+      if (auto fp = fast_path_.try_handle("what's the weather in " + place)) {
+        if (fp->kind == "weather" && fp->context_valid && !fp->reply.empty()) return fp;
+      }
+    }
+    return std::nullopt;
+  });
+  auto news_future = std::async(std::launch::async, [this]() -> std::optional<FastPathResult> {
+    if (auto fp = fast_path_.try_handle("what's in the news")) {
+      if (fp->kind == "news" && fp->context_valid && !fp->reply.empty()) return fp;
+    }
+    return std::nullopt;
+  });
+  auto markets_future = std::async(std::launch::async, [this]() -> std::optional<FastPathResult> {
+    if (auto fp = fast_path_.try_handle("how's the market")) {
+      if (fp->kind == "markets" && fp->context_valid && !fp->reply.empty()) return fp;
+    }
+    return std::nullopt;
+  });
+
+  auto piece = [](std::optional<FastPathResult> section, const char* gap) {
+    if (!section || section->reply.empty()) return std::string(gap);
+    return understate(std::move(section->reply));
+  };
+  joined = morning_briefing_line(
+      joined, piece(weather_future.get(), "No weather just now."),
+      piece(news_future.get(), "No headlines just now."),
+      piece(markets_future.get(), "No market snapshot just now."));
+  return joined;
+}
 
 TurnPipeline::TurnPipeline(Config config,
                            std::shared_ptr<SttProvider> stt,

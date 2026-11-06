@@ -74,10 +74,18 @@ struct SpeakbackConfig {
   bool enabled = true;
   // After the SSE stream drops, wait this long before reconnect + runs poll.
   int reconnect_ms = 2000;
-  // Cap of in-memory utterances queued per offline/busy device.
+  // Cap of utterances queued per offline or busy device.
   int max_queued = 4;
   // Speak a short courtesy line on run.failed (never the raw error_message).
   bool speak_failures = false;
+  // Hold queued speech across this local window. 22:00–07:00 wraps midnight.
+  bool quiet_hours = true;
+  int quiet_start_minute = 22 * 60;
+  int quiet_end_minute = 7 * 60;
+  // Unprompted morning briefing. 07:30 sits after quiet hours end.
+  bool briefing = true;
+  int briefing_minute = 7 * 60 + 30;
+  int briefing_grace_minutes = 20;
 };
 
 struct Config {

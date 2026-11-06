@@ -23,5 +23,7 @@
 	<string>Arthur takes one screenshot when you tap Look, and attaches it to your next question.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Arthur creates a Mail draft only after you approve it, and can delete that draft if you undo.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Arthur listens on this Mac for the name “Arthur” when Wake word is on. Push to talk does not use speech recognition.</string>
 </dict>
 </plist>

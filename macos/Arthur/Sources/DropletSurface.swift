@@ -161,6 +161,10 @@ struct DropletContent: Equatable {
         default:
           if !model.deskCue.isEmpty {
             subtitle = model.deskCue
+          } else if model.wakeWord && model.wakeMuted {
+            subtitle = "Microphone muted"
+          } else if model.wakeWord {
+            subtitle = "Listening for Arthur"
           } else {
             subtitle = "Hold the droplet to talk · \(hotkey)"
           }

@@ -112,6 +112,11 @@ class TurnPipeline {
   // caches Arthur's constitution before the first PTT. Best-effort.
   void warm_prefix();
 
+  // Clock, weather, news, and markets, the same pieces as a spoken briefing,
+  // built now so a scheduled enqueue is fresh after an overnight restart.
+  // Nothing is written to the session.
+  std::string compose_spoken_briefing();
+
   const Config& config() const { return config_; }
   SttProvider& stt() { return *stt_; }
   TtsProvider& tts() { return *tts_; }
