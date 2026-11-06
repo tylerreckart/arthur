@@ -154,6 +154,23 @@ enum McpRegistryStore {
     return out
   }
 
+  /// Register Arthur's loopback calendar server without touching the other entries.
+  static func upsertArthur(url: String, token: String) throws {
+    var servers = load(from: defaultPath)
+    let server = McpServer.hosted(
+      name: "arthur",
+      url: url,
+      headers: ["Authorization": "Bearer \(token)"]
+    )
+    if let index = servers.firstIndex(where: { $0.name == "arthur" }) {
+      if servers[index] == server { return }
+      servers[index] = server
+    } else {
+      servers.append(server)
+    }
+    try save(servers, to: defaultPath)
+  }
+
   static func save(_ servers: [McpServer], to path: String) throws {
     var enabled: [String: Any] = [:]
     var disabled: [String: Any] = [:]

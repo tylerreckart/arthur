@@ -110,6 +110,15 @@ final class AppModel {
       ConfigStore.saveQuietTextMode(quietTextMode)
     }
   }
+  /// Off until the user opts in. The session choice lives only in memory.
+  var calendarSharing: CalendarSharing = .off {
+    didSet {
+      guard oldValue != calendarSharing else { return }
+      guard !previewCanvas else { return }
+      ConfigStore.saveCalendarSharing(calendarSharing)
+      publishCalendarPolicy()
+    }
+  }
   /// Empty follows the system default microphone.
   var microphoneID = "" {
     didSet {
@@ -151,6 +160,19 @@ final class AppModel {
   /// Set only by `previewCanvas`. Skips notebook, draft, and quiet-mode writes
   /// so the Xcode canvas cannot clobber the running desk.
   private var previewCanvas = false
+  private var sessionCalendarAllowed = false {
+    didSet {
+      guard oldValue != sessionCalendarAllowed else { return }
+      publishCalendarPolicy()
+    }
+  }
+  /// A calendar confirm dialog is up. A second press must not start another one.
+  private var preparingTalk = false
+  /// True from the press that opened a confirm dialog until that press releases.
+  private var talkPointerDown = false
+  /// The release after a dialog arms hands-free instead of sending a truncated turn.
+  private var releaseArmsHandsFree = false
+  private var localMcp: LocalMcpServer?
 
   init() {
     config = ConfigStore.load()
@@ -162,12 +184,14 @@ final class AppModel {
     audio.soundEnabled = soundOn
     pttHotkey = PTTHotkey.load()
     quietTextMode = ConfigStore.loadQuietTextMode()
+    calendarSharing = ConfigStore.loadCalendarSharing()
     microphoneID = ConfigStore.loadMicrophoneID()
     audio.preferredDeviceID = microphoneID
     transcriptDeviceId = config.deviceId
     loadLibrary(deviceId: transcriptDeviceId)
     draft = ConfigStore.loadDraft()
     loadMcpRegistry()
+    publishCalendarPolicy()
     refreshSessionContinuity(initial: true)
     client.onEvent = { [weak self] event in
       // Already on the main queue. A MainActor task does not run during
@@ -209,6 +233,7 @@ final class AppModel {
       Task { @MainActor in self?.pollHealth() }
     }
     pollHealth()
+    startLocalCalendar()
     if activeObserver == nil {
       activeObserver = NotificationCenter.default.addObserver(
         forName: NSApplication.didBecomeActiveNotification,
@@ -221,6 +246,8 @@ final class AppModel {
   }
 
   func stop() {
+    localMcp?.stop()
+    localMcp = nil
     wantsSocket = false
     healthTimer?.invalidate()
     healthTimer = nil
@@ -339,6 +366,66 @@ final class AppModel {
     mcpProbes = probes
   }
 
+  private func publishCalendarPolicy() {
+    CalendarDesk.configure(sharing: calendarSharing, sessionAllowed: sessionCalendarAllowed)
+  }
+
+  private var calendarReadyWithoutPrompt: Bool {
+    switch calendarSharing {
+    case .off:
+      return true
+    case .always:
+      return CalendarDesk.hasAccess
+    case .session:
+      return sessionCalendarAllowed && CalendarDesk.hasAccess
+    case .ask:
+      return false
+    }
+  }
+
+  private func immediateCalendarContext() -> DeskContext {
+    switch calendarSharing {
+    case .off:
+      return DeskContext.calendar(CalendarAgenda.unavailable(
+        "The user turned calendar sharing off in Arthur's settings."
+      ))
+    case .always, .session:
+      return CalendarDesk.agendaNow()
+    case .ask:
+      return DeskContext.calendar(CalendarAgenda.unavailable(
+        "The user has not shared the calendar for this turn."
+      ))
+    }
+  }
+
+  private func startLocalCalendar() {
+    guard !previewCanvas else { return }
+    publishCalendarPolicy()
+    let token = LocalMcpToken.load()
+    let server = LocalMcpServer(
+      token: token,
+      tools: LocalToolHost { day in CalendarDesk.toolText(day: day) }
+    )
+    server.start { [weak self] port in
+      Task { @MainActor in
+        self?.registerArthurCalendar(port: port, token: token)
+      }
+    }
+    localMcp = server
+  }
+
+  private func registerArthurCalendar(port: UInt16, token: String) {
+    let server = McpServer.hosted(
+      name: "arthur",
+      url: "http://127.0.0.1:\(port)/mcp",
+      headers: ["Authorization": "Bearer \(token)"]
+    )
+    if let existing = mcpServers.first(where: { $0.name == server.name }), existing == server {
+      return
+    }
+    upsertMcp(server)
+  }
+
   func refreshMicrophones() {
     micGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     microphones = AudioIO.availableInputs()
@@ -379,6 +466,7 @@ final class AppModel {
   }
 
   func talkReleased() {
+    talkPointerDown = false
     // The key-up that follows a tap arms hands-free inside pttUp. A later
     // key-up must not end that open listen.
     if handsFree { return }
@@ -406,9 +494,39 @@ final class AppModel {
       errorText = "Microphone access is off."
       return
     }
+    guard !preparingTalk else { return }
+    talkPointerDown = true
+    if calendarReadyWithoutPrompt {
+      client.sendContext(immediateCalendarContext())
+      beginListening()
+      return
+    }
+    preparingTalk = true
+    let sharing = calendarSharing
+    let sessionAllowed = sessionCalendarAllowed
+    Task {
+      let (context, allowSession) = await CalendarDesk.context(
+        sharing: sharing,
+        sessionAllowed: sessionAllowed,
+        interactive: true
+      )
+      preparingTalk = false
+      if allowSession { sessionCalendarAllowed = true }
+      guard canSend, micGranted else { return }
+      client.sendContext(context)
+      if talkPointerDown {
+        releaseArmsHandsFree = true
+        beginListening()
+      } else {
+        beginListening(handsFree: true)
+      }
+    }
+  }
+
+  private func beginListening(handsFree open: Bool = false) {
     do {
       pcmBytes = 0
-      handsFree = false
+      handsFree = open
       endpoint.reset()
       expectingReply = false
       typedThisTurn = false
@@ -432,7 +550,13 @@ final class AppModel {
   }
 
   func pttUp() {
+    talkPointerDown = false
     guard holding else { return }
+    if releaseArmsHandsFree {
+      releaseArmsHandsFree = false
+      handsFree = true
+      return
+    }
     let elapsed = Date().timeIntervalSince(pttStarted ?? Date())
     if handsFree {
       finishUtterance()
@@ -504,10 +628,34 @@ final class AppModel {
       audio.interruptPlayback()
     }
     guard canSend else { return }
+    guard !preparingTalk else { return }
+    if calendarReadyWithoutPrompt {
+      commitDraft(text, context: immediateCalendarContext())
+      return
+    }
+    preparingTalk = true
+    let sharing = calendarSharing
+    let sessionAllowed = sessionCalendarAllowed
+    Task {
+      let (context, allowSession) = await CalendarDesk.context(
+        sharing: sharing,
+        sessionAllowed: sessionAllowed,
+        interactive: true
+      )
+      preparingTalk = false
+      if allowSession { sessionCalendarAllowed = true }
+      commitDraft(text, context: context)
+    }
+  }
+
+  private func commitDraft(_ text: String, context: DeskContext) {
+    guard canSend else { return }
     turnModality = .text
     youSaid = text
     appendDiscussion(fromYou: true, text: text)
-    draft = ""
+    if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text {
+      draft = ""
+    }
     formingText = ""
     resetSpeechSync()
     resetArthurReplyKey()
@@ -517,7 +665,7 @@ final class AppModel {
     setWork(.findingWords)
     become(.thinking)
     lastSurface = .desk
-    client.sendText(text)
+    client.sendText(text, context: context)
   }
 
   /// Send a line from the droplet without discarding a draft sitting in the window.

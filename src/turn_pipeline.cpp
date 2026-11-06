@@ -1355,7 +1355,8 @@ TurnResult TurnPipeline::run_utterance(const std::string& device_id,
                                        int sample_rate,
                                        int channels,
                                        AudioSink& sink,
-                                       std::string turn_id) {
+                                       std::string turn_id,
+                                       ClientContext client_context) {
   if (turn_id.empty()) turn_id = make_turn_id();
   // Register before one-shot STT so an accepted turn can be cancelled while
   // Whisper is still transcribing it.
@@ -1379,7 +1380,8 @@ TurnResult TurnPipeline::run_utterance(const std::string& device_id,
               << " error=" << result.error << std::endl;
     return result;
   }
-  return run_text_utterance(device_id, transcript, sink, std::move(turn_id), stt_ms);
+  return run_text_utterance(
+      device_id, transcript, sink, std::move(turn_id), stt_ms, std::move(client_context));
 }
 
 TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
@@ -1391,8 +1393,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   TurnResult result;
   result.turn_id = turn_id.empty() ? make_turn_id() : std::move(turn_id);
   result.transcript = transcript;
-  // Phase 1 turns this into a private local-context block. Counted now so
-  // the argument is part of the stable signature and not a dead parameter.
+  // Context is private metadata. It is never the heard line or last_user.
   result.client_context_sources = static_cast<int>(client_context.sources.size());
   // run_utterance registers before STT. Text-only transports arrive here
   // directly and need their handle created now.
@@ -1410,6 +1411,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   int conv_ms = -1;
   int first_sentence_ms = -1;
   int first_answer_ms = -1;
+  int ctx_ms = 0;
   std::atomic<int> arbiter_ttft_ms{-1};
   const char* ttfa_kind = "";
   const char* pending_kind = "answer";
@@ -1429,7 +1431,9 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
               << " first_sentence_ms=" << first_sentence_ms
               << " kokoro_ms=" << kokoro_first_ms << " kokoro_total_ms=" << kokoro_total_ms
               << " ttfa_ms=" << ttfa_ms << " ttfa_kind=" << (ttfa_kind[0] ? ttfa_kind : "-")
-              << " first_answer_ms=" << first_answer_ms;
+              << " first_answer_ms=" << first_answer_ms
+              << " ctx_sources=" << result.client_context_sources
+              << " ctx_ms=" << ctx_ms;
     if (!r.error.empty()) std::cerr << " error=" << r.error;
     std::cerr << std::endl;
     return r;
@@ -1815,6 +1819,16 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       !prior_session->last_user.empty() && !prior_session->last_spoken.empty() &&
       is_contextual_followup(result.transcript)) {
     arbiter_message = with_fast_path_context(*prior_session, result.transcript);
+  }
+
+  {
+    const auto ctx_t0 = std::chrono::steady_clock::now();
+    if (!client_context.sources.empty()) {
+      arbiter_message = with_local_context(client_context, arbiter_message);
+    }
+    ctx_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - ctx_t0)
+                                  .count());
   }
 
   // Medium-confidence (or high-confidence fetch miss) news/markets: let

@@ -1,4 +1,5 @@
 #include "intercom/http_server.hpp"
+#include "intercom/local_context.hpp"
 #include "intercom/pcm_stream.hpp"
 #include "intercom/util.hpp"
 #include "intercom/ws.hpp"
@@ -93,7 +94,8 @@ void start_streaming_turn(httplib::Response& res,
                           const std::string& device_id,
                           const std::string& transcript,
                           const std::string& turn_id,
-                          int stt_ms) {
+                          int stt_ms,
+                          ClientContext client_context = {}) {
   auto state = std::make_shared<StreamingTurnState>();
   state->result.turn_id = turn_id;
   state->result.transcript = transcript;
@@ -128,10 +130,11 @@ void start_streaming_turn(httplib::Response& res,
       });
 
   auto pipeline = deps.pipeline;
-  std::thread([state, pipeline, device_id, transcript, turn_id, stt_ms]() {
+  std::thread([state, pipeline, device_id, transcript, turn_id, stt_ms,
+               client_context = std::move(client_context)]() {
     StreamingAudioSink audio(state->stream);
-    TurnResult result =
-        pipeline->run_text_utterance(device_id, transcript, audio, turn_id, stt_ms);
+    TurnResult result = pipeline->run_text_utterance(
+        device_id, transcript, audio, turn_id, stt_ms, client_context);
     {
       std::lock_guard<std::mutex> lk(state->result_mu);
       state->result = std::move(result);
@@ -282,11 +285,13 @@ void run_http_server(ServerDeps deps) {
       return;
     }
     std::string transcript;
+    ClientContext context;
     try {
       auto j = nlohmann::json::parse(req.body.empty() ? "{}" : req.body);
       if (j.contains("text") && j["text"].is_string()) {
         transcript = j["text"].get<std::string>();
       }
+      if (j.contains("context")) context = client_context_from_json(j["context"]);
     } catch (...) {
       res.status = 400;
       res.set_content(R"({"error":"invalid json"})", "application/json");
@@ -299,7 +304,7 @@ void run_http_server(ServerDeps deps) {
     }
 
     const std::string turn_id = intercom::make_turn_id();
-    start_streaming_turn(res, deps, device_id, transcript, turn_id, -1);
+    start_streaming_turn(res, deps, device_id, transcript, turn_id, -1, std::move(context));
   });
 
   std::cout << "intercom listening on http://" << deps.config.listen_host << ":"

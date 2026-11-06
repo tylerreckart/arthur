@@ -11,5 +11,9 @@
 	<true/>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>Arthur can notify you when a scheduled reminder is spoken and the window is in the background.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Arthur reads today’s and tomorrow’s events on this Mac when you allow it, to answer questions about your schedule.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Arthur reads today’s and tomorrow’s events on this Mac when you allow it, to answer questions about your schedule.</string>
 </dict>
 </plist>

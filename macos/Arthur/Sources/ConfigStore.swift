@@ -28,6 +28,7 @@ enum ConfigStore {
   private static let pttModifiersKey = "arthur.pttModifierFlags"
   private static let quietTextKey = "arthur.quietTextMode"
   private static let microphoneKey = "arthur.microphoneID"
+  private static let calendarSharingKey = "arthur.calendarSharing"
 
   static func load() -> ClientConfig {
     let path = resolvedConfigPath()
@@ -119,6 +120,15 @@ enum ConfigStore {
 
   static func saveMicrophoneID(_ id: String) {
     UserDefaults.standard.set(id, forKey: microphoneKey)
+  }
+
+  static func loadCalendarSharing() -> CalendarSharing {
+    let raw = UserDefaults.standard.string(forKey: calendarSharingKey) ?? ""
+    return CalendarSharing(rawValue: raw) ?? .off
+  }
+
+  static func saveCalendarSharing(_ sharing: CalendarSharing) {
+    UserDefaults.standard.set(sharing.rawValue, forKey: calendarSharingKey)
   }
 
   static func loadTranscript(deviceId: String) -> [DiscussionLine] {

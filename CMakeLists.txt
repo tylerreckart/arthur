@@ -52,6 +52,7 @@ add_executable(intercom
   src/markets_client.cpp
   src/http_fetch.cpp
   src/clock.cpp
+  src/local_context.cpp
   src/turn_pipeline.cpp
   src/http_server.cpp
   src/ws.cpp
@@ -224,6 +225,7 @@ add_executable(test_sentence_tts
   src/markets_client.cpp
   src/http_fetch.cpp
   src/clock.cpp
+  src/local_context.cpp
   src/arbiter_client.cpp
   src/filler_client.cpp
 )
@@ -263,6 +265,7 @@ add_executable(test_ws_stream
   src/markets_client.cpp
   src/http_fetch.cpp
   src/clock.cpp
+  src/local_context.cpp
   src/arbiter_client.cpp
   src/filler_client.cpp
   src/device_hub.cpp
@@ -293,6 +296,7 @@ add_executable(test_speakback
   src/util.cpp
   src/speakable.cpp
   src/clock.cpp
+  src/local_context.cpp
   src/ws.cpp
   src/audio_dsp.cpp
   src/config.cpp
@@ -324,6 +328,16 @@ if(APPLE)
   target_compile_definitions(test_speakback PRIVATE CPPHTTPLIB_USE_POLL)
 endif()
 add_test(NAME test_speakback COMMAND test_speakback)
+
+add_executable(test_local_context
+  tests/test_local_context.cpp
+  src/local_context.cpp
+)
+target_include_directories(test_local_context PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_local_context PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME test_local_context COMMAND test_local_context)
 
 find_program(Python3_EXECUTABLE NAMES python3 python)
 if(Python3_EXECUTABLE)

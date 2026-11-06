@@ -196,9 +196,15 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 | Client | Meaning |
 |--------|---------|
 | binary frames | PCM s16le appended while the mic is open |
-| `{"type":"end"}` | Run STT on any PCM not already finished, and speak the reply |
-| `{"type":"text","text":"…"}` | Skip STT |
+| `{"type":"end"}` | Run STT on any PCM not already finished, and speak the reply. An optional `context` object is attached to that turn |
+| `{"type":"text","text":"…"}` | Skip STT. Optional `context` is attached to that turn and is not the heard line |
+| `{"type":"context","context":{…}}` | Remember desk context for the next utterance on this socket. Replaced by a later context frame, and consumed when the turn starts |
 | `{"type":"cancel"}` | Cancel the current turn if one is active |
+
+`context` is `{sources:[{name,text}]}`. Intercom prepends it to the Arbiter
+message as a private `LOCAL CONTEXT` block. It is not the heard line, and it
+is not written to the session row. Empty and malformed context is ignored.
+Clients that never send it are unchanged.
 
 | Server | Meaning |
 |--------|---------|

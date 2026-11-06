@@ -10,6 +10,8 @@
 		A10000000000000000000008 /* arthur.icon in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000007 /* arthur.icon */; };
 		A10000000000000000000027 /* ChatSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000025 /* ChatSurface.swift */; };
 		A10000000000000000000028 /* Notebook.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000026 /* Notebook.swift */; };
+		A10000000000000000000034 /* CalendarAgenda.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000032 /* CalendarAgenda.swift */; };
+		A10000000000000000000035 /* LocalToolHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000033 /* LocalToolHost.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,6 +22,8 @@
 		A10000000000000000000024 /* ArthurTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ArthurTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000025 /* ChatSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSurface.swift; sourceTree = "<group>"; };
 		A10000000000000000000026 /* Notebook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notebook.swift; sourceTree = "<group>"; };
+		A10000000000000000000032 /* CalendarAgenda.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarAgenda.swift; sourceTree = "<group>"; };
+		A10000000000000000000033 /* LocalToolHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalToolHost.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -88,6 +92,8 @@
 			children = (
 				A10000000000000000000025 /* ChatSurface.swift */,
 				A10000000000000000000026 /* Notebook.swift */,
+				A10000000000000000000032 /* CalendarAgenda.swift */,
+				A10000000000000000000033 /* LocalToolHost.swift */,
 			);
 			name = TestSupport;
 			path = Sources;
@@ -203,6 +209,8 @@
 			files = (
 				A10000000000000000000027 /* ChatSurface.swift in Sources */,
 				A10000000000000000000028 /* Notebook.swift in Sources */,
+				A10000000000000000000034 /* CalendarAgenda.swift in Sources */,
+				A10000000000000000000035 /* LocalToolHost.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
