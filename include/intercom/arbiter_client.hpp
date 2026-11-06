@@ -43,6 +43,12 @@ struct ScheduleInfo {
   std::string message;
 };
 
+// A forwarded Arbiter response. The desk proxy never logs the body.
+struct ArbiterHttpResult {
+  int status = 0;
+  std::string body;
+};
+
 NotificationEvent parse_notification_json(std::string_view data);
 ScheduleInfo parse_schedule_json(std::string_view body);
 
@@ -86,6 +92,10 @@ class ArbiterClient {
       std::atomic<bool>* cancel_flag, std::string* err) const;
 
   bool health_reachable(std::string* detail) const;
+
+  // Device-token routes call this. The path must pass desk_proxy_allowed.
+  ArbiterHttpResult exchange(const std::string& method, const std::string& path_and_query,
+                             const std::string& body) const;
 
  private:
   bool post_turn(std::int64_t conversation_id,

@@ -57,6 +57,13 @@ struct ContentView: View {
               .help(model.soundOn ? "Mute Arthur" : "Unmute Arthur")
 
               Button {
+                model.memoryOpen = true
+              } label: {
+                Label("Memory", systemImage: "text.book.closed")
+              }
+              .help("Memory, schedules, and todos")
+
+              Button {
                 model.settingsOpen = true
               } label: {
                 Label("Settings", systemImage: "gearshape")
@@ -90,6 +97,10 @@ struct ContentView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
             .padding(.top, 2)
+          }
+          .sheet(isPresented: $model.memoryOpen) {
+            MemoryDesk()
+              .environment(model)
           }
           .sheet(isPresented: $model.settingsOpen) {
             SettingsView()
@@ -155,9 +166,15 @@ struct ContentView: View {
     } else {
       ScrollViewReader { proxy in
         ScrollView {
-          // VStack (not LazyVStack): the notebook caps at 40 lines, and
-          // lazy identity / estimated heights fight pinning and fade.
+          // The saved conversation is complete. This window pages from the
+          // latest lines so a long thread does not remount the whole history.
           VStack(alignment: .leading, spacing: 20) {
+            if model.canRevealEarlier {
+              Button("Earlier") { model.revealEarlier() }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+            }
             ForEach(transcriptClusters) { cluster in
               TranscriptClusterView(
                 cluster: cluster,
@@ -170,6 +187,11 @@ struct ContentView: View {
                 }
               )
               .fadeUnderHeader()
+              .background {
+                ForEach(cluster.lineIds, id: \.self) { lineId in
+                  Color.clear.frame(height: 0).id(lineId)
+                }
+              }
               .onAppear { knownClusterIDs.insert(cluster.id) }
             }
             if showWorkTrail {
@@ -185,6 +207,10 @@ struct ContentView: View {
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(followLiveEdge ? .bottom : nil, for: .sizeChanges)
         .onAppear { seedClusterIDsIfNeeded() }
+        .onChange(of: model.historyFocus) { _, focus in
+          guard let focus else { return }
+          proxy.scrollTo(focus, anchor: .center)
+        }
         .onChange(of: model.discussion.count) {
           pinToLiveEdgeIfFollowing(proxy)
         }
@@ -229,7 +255,7 @@ struct ContentView: View {
 
   private var transcriptClusters: [TranscriptCluster] {
     var clusters: [TranscriptCluster] = []
-    for line in model.discussion {
+    for line in model.visibleDiscussion {
       if var last = clusters.last, last.fromYou == line.fromYou {
         let splitArthurTurn = !line.fromYou
           && !last.turnId.isEmpty
@@ -239,6 +265,7 @@ struct ContentView: View {
         if !splitArthurTurn && !splitSpeaker {
           last.texts.append(line.text)
           last.surfaces.append(contentsOf: line.surfaces)
+          last.lineIds.append(line.id)
           clusters[clusters.count - 1] = last
           continue
         }
@@ -250,7 +277,8 @@ struct ContentView: View {
           texts: [line.text],
           turnId: line.turnId,
           surfaces: line.surfaces,
-          speakerName: line.speakerName
+          speakerName: line.speakerName,
+          lineIds: [line.id]
         )
       )
     }
@@ -836,6 +864,7 @@ private struct TranscriptCluster: Identifiable {
   var turnId = ""
   var surfaces: [ChatSurface] = []
   var speakerName = ""
+  var lineIds: [UUID] = []
   var liveLast = false
 }
 

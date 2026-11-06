@@ -16,6 +16,8 @@
 		A10000000000000000000039 /* LocalDesk.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000038 /* LocalDesk.swift */; };
 		A10000000000000000000041 /* WakePhrase.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000040 /* WakePhrase.swift */; };
 		A10000000000000000000043 /* HouseholdRoster.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000042 /* HouseholdRoster.swift */; };
+		A10000000000000000000045 /* HistorySearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000044 /* HistorySearch.swift */; };
+		A10000000000000000000047 /* DeskLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000046 /* DeskLibrary.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +34,8 @@
 		A10000000000000000000038 /* LocalDesk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDesk.swift; sourceTree = "<group>"; };
 		A10000000000000000000040 /* WakePhrase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakePhrase.swift; sourceTree = "<group>"; };
 		A10000000000000000000042 /* HouseholdRoster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HouseholdRoster.swift; sourceTree = "<group>"; };
+		A10000000000000000000044 /* HistorySearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistorySearch.swift; sourceTree = "<group>"; };
+		A10000000000000000000046 /* DeskLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeskLibrary.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -106,6 +110,8 @@
 				A10000000000000000000038 /* LocalDesk.swift */,
 				A10000000000000000000040 /* WakePhrase.swift */,
 				A10000000000000000000042 /* HouseholdRoster.swift */,
+				A10000000000000000000044 /* HistorySearch.swift */,
+				A10000000000000000000046 /* DeskLibrary.swift */,
 			);
 			name = TestSupport;
 			path = Sources;
@@ -227,6 +233,8 @@
 				A10000000000000000000039 /* LocalDesk.swift in Sources */,
 				A10000000000000000000041 /* WakePhrase.swift in Sources */,
 				A10000000000000000000043 /* HouseholdRoster.swift in Sources */,
+				A10000000000000000000045 /* HistorySearch.swift in Sources */,
+				A10000000000000000000047 /* DeskLibrary.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

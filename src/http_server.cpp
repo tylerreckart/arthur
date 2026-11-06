@@ -1,4 +1,5 @@
 #include "intercom/http_server.hpp"
+#include "intercom/desk_proxy.hpp"
 #include "intercom/local_context.hpp"
 #include "intercom/pcm_stream.hpp"
 #include "intercom/speak_queue.hpp"
@@ -9,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <iostream>
@@ -82,6 +84,62 @@ std::string bearer_token(const httplib::Request& req) {
     return auth.substr(prefix.size());
   }
   return {};
+}
+
+bool device_authorized(const ServerDeps& deps, const httplib::Request& req);
+
+std::string desk_query(const httplib::Request& req, bool* ok) {
+  *ok = true;
+  if (req.params.empty()) return {};
+  std::string query = "?";
+  bool first = true;
+  for (const auto& item : req.params) {
+    const auto& key = item.first;
+    if (key != "q" && key != "limit" && key != "status" && key != "conversation_id") {
+      *ok = false;
+      return {};
+    }
+    std::string value;
+    for (unsigned char c : item.second) {
+      if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == ',' || c == ':') {
+        value.push_back(static_cast<char>(c));
+      } else if (c == ' ') {
+        value += "%20";
+      } else {
+        *ok = false;
+        return {};
+      }
+      if (value.size() > 240) {
+        *ok = false;
+        return {};
+      }
+    }
+    if (!first) query += "&";
+    first = false;
+    query += key + "=" + value;
+  }
+  return query;
+}
+
+void proxy_desk(const ServerDeps& deps, const httplib::Request& req, httplib::Response& res,
+                const std::string& method, const std::string& path) {
+  if (!device_authorized(deps, req)) {
+    res.status = 401;
+    res.set_content(R"({"error":"unauthorized"})", "application/json");
+    return;
+  }
+  bool query_ok = true;
+  const std::string query = desk_query(req, &query_ok);
+  if (!query_ok || !desk_proxy_allowed(method, path)) {
+    res.status = 400;
+    res.set_content(R"({"error":"unsupported desk request"})", "application/json");
+    return;
+  }
+  const auto result = deps.pipeline->arbiter().exchange(method, path + query, req.body);
+  std::cerr << "intercom desk " << method << " " << path << " status=" << result.status
+            << std::endl;
+  res.status = result.status == 0 ? 502 : result.status;
+  res.set_content(result.body.empty() ? "{}" : result.body, "application/json");
 }
 
 bool device_authorized(const ServerDeps& deps, const httplib::Request& req) {
@@ -504,6 +562,38 @@ void run_http_server(ServerDeps deps) {
              }
              res.set_content(R"({"stored":true})", "application/json");
            });
+
+  svr.Get("/v1/desk/memory/entries", [&](const httplib::Request& req, httplib::Response& res) {
+    proxy_desk(deps, req, res, "GET", "/v1/memory/entries");
+  });
+  svr.Post("/v1/desk/memory/entries", [&](const httplib::Request& req, httplib::Response& res) {
+    proxy_desk(deps, req, res, "POST", "/v1/memory/entries");
+  });
+  svr.Patch(R"(/v1/desk/memory/entries/(\d+))",
+            [&](const httplib::Request& req, httplib::Response& res) {
+              proxy_desk(deps, req, res, "PATCH", "/v1/memory/entries/" + req.matches[1].str());
+            });
+  svr.Delete(R"(/v1/desk/memory/entries/(\d+))",
+             [&](const httplib::Request& req, httplib::Response& res) {
+               proxy_desk(deps, req, res, "DELETE", "/v1/memory/entries/" + req.matches[1].str());
+             });
+  svr.Get("/v1/desk/schedules", [&](const httplib::Request& req, httplib::Response& res) {
+    proxy_desk(deps, req, res, "GET", "/v1/schedules");
+  });
+  svr.Post("/v1/desk/schedules", [&](const httplib::Request& req, httplib::Response& res) {
+    proxy_desk(deps, req, res, "POST", "/v1/schedules");
+  });
+  svr.Patch(R"(/v1/desk/schedules/(\d+))",
+            [&](const httplib::Request& req, httplib::Response& res) {
+              proxy_desk(deps, req, res, "PATCH", "/v1/schedules/" + req.matches[1].str());
+            });
+  svr.Get("/v1/desk/todos", [&](const httplib::Request& req, httplib::Response& res) {
+    proxy_desk(deps, req, res, "GET", "/v1/todos");
+  });
+  svr.Patch(R"(/v1/desk/todos/(\d+))",
+            [&](const httplib::Request& req, httplib::Response& res) {
+              proxy_desk(deps, req, res, "PATCH", "/v1/todos/" + req.matches[1].str());
+            });
 
   std::cout << "intercom listening on http://" << deps.config.listen_host << ":"
             << deps.config.listen_port << std::endl;

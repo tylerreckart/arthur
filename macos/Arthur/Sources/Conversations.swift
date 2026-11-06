@@ -49,6 +49,54 @@ struct ConversationSidebar: View {
 
   var body: some View {
     @Bindable var model = model
+    VStack(spacing: 0) {
+      TextField("Search", text: $model.historyQuery)
+        .textFieldStyle(.plain)
+        .font(.system(size: 13))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+      searchList
+    }
+    .background(Color.black)
+    .navigationTitle("Conversations")
+    .toolbarTitleDisplayMode(.inline)
+    .toolbarBackground(Color.black, for: .windowToolbar)
+    .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
+    .navigationSplitViewColumnWidth(min: 196, ideal: 232, max: 280)
+  }
+
+  @ViewBuilder
+  private var searchList: some View {
+    if model.historyQuery.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 {
+      List {
+        ForEach(model.historyHits) { hit in
+          Button {
+            model.openHistory(hit)
+          } label: {
+            VStack(alignment: .leading, spacing: 3) {
+              Text(hit.title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.92))
+                .lineLimit(1)
+              Text(hit.snippet)
+                .font(.system(size: 11))
+                .foregroundStyle(ArthurTheme.whisper)
+                .lineLimit(2)
+            }
+            .padding(.vertical, 4)
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("\(hit.title), \(hit.snippet)")
+        }
+      }
+      .listStyle(.sidebar)
+      .scrollContentBackground(.hidden)
+    } else {
+      conversationList
+    }
+  }
+
+  private var conversationList: some View {
     List(selection: selection) {
       ForEach(model.listedConversations) { item in
         VStack(alignment: .leading, spacing: 3) {
@@ -67,12 +115,6 @@ struct ConversationSidebar: View {
     }
     .listStyle(.sidebar)
     .scrollContentBackground(.hidden)
-    .navigationTitle("Conversations")
-    .toolbarTitleDisplayMode(.inline)
-    .toolbarBackground(Color.black, for: .windowToolbar)
-    .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
-    .navigationSplitViewColumnWidth(min: 196, ideal: 232, max: 280)
-    .background(Color.black)
   }
 
   private var selection: Binding<UUID?> {
