@@ -1067,6 +1067,18 @@ struct SettingsView: View {
           Text(pttHotkeyFooter)
         }
 
+        Section {
+          Picker("Calendar", selection: $model.calendarSharing) {
+            ForEach(CalendarSharing.allCases, id: \.self) { choice in
+              Text(choice.settingsLabel).tag(choice)
+            }
+          }
+        } header: {
+          Text("This Mac")
+        } footer: {
+          Text("Today and tomorrow stay on this Mac. Arthur does not read the list aloud unless you ask. Restart arbiter --api once after Arthur first writes the calendar tool.")
+        }
+
         McpSettingsSection()
 
         if !model.mcpSaveError.isEmpty {

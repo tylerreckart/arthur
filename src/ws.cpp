@@ -1,6 +1,7 @@
 #include "intercom/ws.hpp"
 #include "intercom/audio_dsp.hpp"
 #include "intercom/device_hub.hpp"
+#include "intercom/local_context.hpp"
 #include "intercom/util.hpp"
 
 #include <nlohmann/json.hpp>
@@ -544,6 +545,20 @@ void WsServer::handle_client(int fd) {
   endpoint_cfg.sample_rate = deps_.config.sample_rate > 0 ? deps_.config.sample_rate : 24000;
   UtteranceEndpoint endpoint(endpoint_cfg);
   bool ignore_empty_end = false;
+  ClientContext pending_context;
+  auto take_context = [&](const nlohmann::json* frame) {
+    ClientContext inline_ctx;
+    if (frame && frame->contains("context")) {
+      inline_ctx = client_context_from_json((*frame)["context"]);
+    }
+    if (!inline_ctx.sources.empty()) {
+      pending_context = {};
+      return inline_ctx;
+    }
+    ClientContext taken = std::move(pending_context);
+    pending_context = {};
+    return taken;
+  };
   // Set only after the energy detector starts a turn. Silence after that cut
   // is not a new utterance, and the matching end must not run the audio again.
   bool suppress_tail = false;
@@ -573,13 +588,14 @@ void WsServer::handle_client(int fd) {
     auto turn_pcm = std::move(pcm);
     pcm.clear();
     const std::string turn_id = active_turn;
+    ClientContext turn_context = take_context(nullptr);
     turn_future = std::async(std::launch::async,
         [this, fd, hub, device_id, turn_id, turn_pcm = std::move(turn_pcm),
-         &direct_send_mu]() {
+         turn_context = std::move(turn_context), &direct_send_mu]() {
           SocketAudioSink sink(fd, hub, device_id, &direct_send_mu);
           auto result = deps_.pipeline->run_utterance(
               device_id, turn_pcm, deps_.config.sample_rate,
-              deps_.config.channels, sink, turn_id);
+              deps_.config.channels, sink, turn_id, turn_context);
           if (result.turn_id.empty()) result.turn_id = turn_id;
           return result;
         });
@@ -676,6 +692,11 @@ void WsServer::handle_client(int fd) {
         continue;
       }
       const std::string type = j.value("type", "");
+      if (type == "context") {
+        pending_context = j.contains("context") ? client_context_from_json(j["context"])
+                                                : client_context_from_json(j);
+        continue;
+      }
       if (type == "cancel") {
         if (!active_turn.empty()) {
           std::string err;
@@ -747,11 +768,13 @@ void WsServer::handle_client(int fd) {
           active_turn = turn_id;
           deps_.pipeline->prepare_turn(turn_id);
           send_text({{"type", "accept"}, {"turn_id", turn_id}});
+          ClientContext turn_context = take_context(&j);
           turn_future = std::async(std::launch::async,
-              [this, fd, hub, device_id, turn_id, text, &direct_send_mu]() {
+              [this, fd, hub, device_id, turn_id, text, turn_context = std::move(turn_context),
+               &direct_send_mu]() {
                 SocketAudioSink sink(fd, hub, device_id, &direct_send_mu);
                 return deps_.pipeline->run_text_utterance(
-                    device_id, text, sink, turn_id, -1);
+                    device_id, text, sink, turn_id, -1, turn_context);
               });
         } else {
           submit_pcm(false);

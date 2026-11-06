@@ -25,6 +25,7 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
   private var pingTimer: DispatchSourceTimer?
   private var generation = 0
   private let callbackQueue = DispatchQueue(label: "run.intercom.arthur.ws")
+  private let sendQueue = DispatchQueue(label: "run.intercom.arthur.ws.send")
   var onEvent: ((IntercomEvent) -> Void)?
 
   var isConnected: Bool {
@@ -99,6 +100,10 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
   }
 
   func sendEnd() { sendJSON(["type": "end"]) }
+  func sendContext(_ context: DeskContext) {
+    guard !context.isEmpty else { return }
+    sendJSON(["type": "context", "context": context.wire])
+  }
   func sendCancel() { sendJSON(["type": "cancel"]) }
   func sendCancel(
     turnId: String,
@@ -122,7 +127,13 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
     request.timeoutInterval = 2
     URLSession.shared.dataTask(with: request).resume()
   }
-  func sendText(_ text: String) { sendJSON(["type": "text", "text": text]) }
+  func sendText(_ text: String, context: DeskContext? = nil) {
+    var object: [String: Any] = ["type": "text", "text": text]
+    if let context, !context.isEmpty {
+      object["context"] = context.wire
+    }
+    sendJSON(object)
+  }
 
   func sendNewConversation(bind: String) {
     sendJSON(["type": "new_conversation", "bind": bind])
@@ -141,9 +152,17 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
     let gen = generation
     let task = self.task
     lock.unlock()
-    task?.send(message) { [weak self] error in
-      guard let self, let error, !self.isCancellation(error) else { return }
-      self.fail(gen, "\(failure): \(error.localizedDescription)")
+    guard let task else { return }
+    // One queue keeps a context frame ahead of the PCM that follows it.
+    sendQueue.async { [weak self] in
+      let sem = DispatchSemaphore(value: 0)
+      task.send(message) { error in
+        if let self, let error, !self.isCancellation(error) {
+          self.fail(gen, "\(failure): \(error.localizedDescription)")
+        }
+        sem.signal()
+      }
+      sem.wait()
     }
   }
 

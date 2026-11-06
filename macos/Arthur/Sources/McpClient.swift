@@ -144,6 +144,30 @@ func mcpUserMessage(_ error: Error) -> String {
 }
 
 enum McpClient {
+  /// One `tools/call` against an HTTP MCP server. Used for Arthur's loopback calendar tool.
+  static func callTool(
+    urlString: String,
+    name: String,
+    arguments: [String: Any] = [:],
+    headers: [String: String] = [:]
+  ) async throws -> String {
+    let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let url = URL(string: trimmed),
+          let scheme = url.scheme?.lowercased(),
+          scheme == "http" || scheme == "https",
+          url.host != nil
+    else { throw McpClientError.invalidURL }
+    let http = HttpMcpTransport(endpoint: url, headers: headers)
+    _ = try await initialize(http)
+    try await http.notify(method: "notifications/initialized", params: [:])
+    let result = try await http.request(
+      method: "tools/call",
+      params: ["name": name, "arguments": arguments]
+    )
+    await http.close()
+    return McpFraming.textContent(from: result)
+  }
+
   static func probeRemote(
     urlString: String,
     headers: [String: String],
@@ -417,6 +441,14 @@ private enum McpFraming {
       return clip(message, limit: 180)
     }
     return clip(trimmed.replacingOccurrences(of: "\n", with: " "), limit: 180)
+  }
+
+  static func textContent(from result: [String: Any]) -> String {
+    let chunks = result["content"] as? [[String: Any]] ?? []
+    return chunks.compactMap { item -> String? in
+      guard (item["type"] as? String) == "text" else { return nil }
+      return item["text"] as? String
+    }.joined(separator: "\n")
   }
 
   static func tools(from result: [String: Any]) -> [McpToolInfo] {

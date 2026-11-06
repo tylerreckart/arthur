@@ -1,6 +1,7 @@
 #pragma once
 
 #include "intercom/arbiter_client.hpp"
+#include "intercom/local_context.hpp"
 #include "intercom/config.hpp"
 #include "intercom/fast_path.hpp"
 #include "intercom/filler_client.hpp"
@@ -38,17 +39,6 @@ class AudioSink {
   }
 };
 
-// Desk context attached to a turn. Empty until Phase 1 fills it. The pipeline
-// accepts it so later phases do not change this signature; it is not applied
-// to the model prompt yet.
-struct ClientContext {
-  struct Source {
-    std::string name;
-    std::string text;
-  };
-  std::vector<Source> sources;
-};
-
 struct TurnResult {
   std::string turn_id;
   std::string transcript;
@@ -82,7 +72,8 @@ class TurnPipeline {
                            int sample_rate,
                            int channels,
                            AudioSink& sink,
-                           std::string turn_id = {});
+                           std::string turn_id = {},
+                           ClientContext client_context = {});
 
   // Same as run_utterance after STT — used when the transport already has text
   // (HTTP sets X-Transcript before streaming PCM; WS can feed partials later).
