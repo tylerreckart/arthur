@@ -68,19 +68,30 @@ void Speakback::stop() {
 
 bool Speakback::already_spoken(std::int64_t run_id) {
   if (run_id <= 0) return false;
+  if (sessions_) return sessions_->has_spoken_run(run_id);
   std::lock_guard<std::mutex> lk(mu_);
   return spoken_runs_.count(run_id) != 0;
 }
 
-void Speakback::mark_spoken(std::int64_t run_id) {
-  if (run_id <= 0) return;
+bool Speakback::mark_spoken(std::int64_t run_id) {
+  if (run_id <= 0) return true;
+  if (sessions_) {
+    std::string err;
+    const bool fresh = sessions_->mark_spoken_run(run_id, &err);
+    if (!fresh && !err.empty()) {
+      std::cerr << "intercom speakback: mark run " << run_id << ": " << err
+                << std::endl;
+    }
+    return fresh;
+  }
   std::lock_guard<std::mutex> lk(mu_);
-  if (!spoken_runs_.insert(run_id).second) return;
+  if (!spoken_runs_.insert(run_id).second) return false;
   spoken_order_.push_back(run_id);
   while (spoken_order_.size() > 256) {
     spoken_runs_.erase(spoken_order_.front());
     spoken_order_.pop_front();
   }
+  return true;
 }
 
 std::int64_t Speakback::conversation_for(const NotificationEvent& ev) {
@@ -127,7 +138,7 @@ void Speakback::handle_event(NotificationEvent ev) {
               << " conv=" << conv << " task=" << ev.task_id << std::endl;
     return;
   }
-  mark_spoken(ev.run_id);
+  if (!mark_spoken(ev.run_id)) return;
   for (const auto& device_id : devices) {
     std::cerr << "intercom speakback: speaking run " << ev.run_id << " to "
               << device_id << std::endl;

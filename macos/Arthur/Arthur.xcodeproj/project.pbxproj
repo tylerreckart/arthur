@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000008 /* arthur.icon in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000007 /* arthur.icon */; };
+		A10000000000000000000027 /* ChatSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000025 /* ChatSurface.swift */; };
+		A10000000000000000000028 /* Notebook.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000026 /* Notebook.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -15,6 +17,9 @@
 		A10000000000000000000007 /* arthur.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = arthur.icon; sourceTree = "<group>"; };
 		A10000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1000000000000000000000A /* Arthur.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Arthur.entitlements; sourceTree = "<group>"; };
+		A10000000000000000000024 /* ArthurTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ArthurTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000025 /* ChatSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSurface.swift; sourceTree = "<group>"; };
+		A10000000000000000000026 /* Notebook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notebook.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -23,10 +28,22 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		A10000000000000000000020 /* Tests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Tests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A1000000000000000000000C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1000000000000000000002A /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -40,6 +57,8 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000003 /* Sources */,
+				A10000000000000000000031 /* TestSupport */,
+				A10000000000000000000020 /* Tests */,
 				A10000000000000000000005 /* Assets */,
 				A10000000000000000000009 /* Info.plist */,
 				A1000000000000000000000A /* Arthur.entitlements */,
@@ -59,8 +78,19 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000006 /* Arthur.app */,
+				A10000000000000000000024 /* ArthurTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000031 /* TestSupport */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000025 /* ChatSurface.swift */,
+				A10000000000000000000026 /* Notebook.swift */,
+			);
+			name = TestSupport;
+			path = Sources;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -88,6 +118,27 @@
 			productReference = A10000000000000000000006 /* Arthur.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A10000000000000000000021 /* ArthurTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1000000000000000000002D /* Build configuration list for PBXNativeTarget "ArthurTests" */;
+			buildPhases = (
+				A10000000000000000000029 /* Sources */,
+				A1000000000000000000002A /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000020 /* Tests */,
+			);
+			name = ArthurTests;
+			packageProductDependencies = (
+			);
+			productName = ArthurTests;
+			productReference = A10000000000000000000024 /* ArthurTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -100,6 +151,10 @@
 				TargetAttributes = {
 					A10000000000000000000002 = {
 						CreatedOnToolsVersion = 26.2;
+					};
+					A10000000000000000000021 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = A10000000000000000000002;
 					};
 				};
 			};
@@ -118,6 +173,7 @@
 			projectRoot = "";
 			targets = (
 				A10000000000000000000002 /* Arthur */,
+				A10000000000000000000021 /* ArthurTests */,
 			);
 		};
 /* End PBXProject section */
@@ -138,6 +194,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000029 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000027 /* ChatSurface.swift in Sources */,
+				A10000000000000000000028 /* Notebook.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -332,6 +397,40 @@
 			};
 			name = Release;
 		};
+		A1000000000000000000002B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.TylerReckart.ArthurTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A1000000000000000000002C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.TylerReckart.ArthurTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -349,6 +448,15 @@
 			buildConfigurations = (
 				A10000000000000000000013 /* Debug */,
 				A10000000000000000000014 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1000000000000000000002D /* Build configuration list for PBXNativeTarget "ArthurTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1000000000000000000002B /* Debug */,
+				A1000000000000000000002C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

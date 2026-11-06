@@ -363,8 +363,10 @@ synthesizes `result_summary` and pushes `{type:speak,text}` + `{type:said}`
 another PTT. `{type:said}` is the same spoken line Kokoro hears, so desk
 clients can show it without treating the event as a user turn. Mid-PTT
 utterances are queued (up to `speakback.max_queued`) and flushed when the
-device is idle again. Offline devices are queued in memory the same way;
-there is no durable disk queue.
+device is idle again. Offline devices are queued in the session database
+the same way, so a reminder accepted before Intercom exits is spoken on
+the next attach. Spoken run ids are stored there too, and a restart does
+not speak the same run twice.
 
 STT is still one-shot at `end` (Whisper is not streaming — there are no
 word-level partials while the mic is down). After Whisper, Intercom emits
@@ -438,7 +440,7 @@ Config (`speakback` in `intercom.json`):
 |-------|---------|---------|
 | `enabled` | `true` | Subscribe and speak |
 | `reconnect_ms` | `2000` | Pause after SSE drop before reconnect + runs poll |
-| `max_queued` | `4` | In-memory utterances per offline or busy device (drop oldest) |
+| `max_queued` | `4` | Queued utterances per offline or busy device (drop oldest). Persisted in the session database |
 | `speak_failures` | `false` | Speak a courtesy line on `run.failed` |
 
 How to test a reminder:

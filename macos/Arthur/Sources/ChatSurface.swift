@@ -11,6 +11,22 @@ enum SurfaceKind: String, Codable, Hashable {
   case markets
 }
 
+/// Optional desk action. Phase 0 only decodes these; the card UI does not
+/// offer them until a later phase. Unknown or incomplete rows are skipped.
+struct SurfaceAction: Equatable, Codable, Hashable, Identifiable {
+  var id: String
+  var label: String
+  var kind: String
+  var toolCall: JSONValue
+
+  init(id: String, label: String, kind: String, toolCall: JSONValue = .object([:])) {
+    self.id = id
+    self.label = label
+    self.kind = kind
+    self.toolCall = toolCall
+  }
+}
+
 struct SurfaceSource: Equatable, Codable, Hashable, Identifiable {
   var title: String
   var url: String
@@ -37,13 +53,14 @@ struct ChatSurface: Equatable, Codable, Identifiable, Hashable {
   var summary: String
   var payload: JSONValue
   var sources: [SurfaceSource]
+  var actions: [SurfaceAction]
 
   var kind: SurfaceKind {
     SurfaceKind(rawValue: kindRaw) ?? .generic
   }
 
   enum CodingKeys: String, CodingKey {
-    case id, kind, version, title, summary, payload, sources
+    case id, kind, version, title, summary, payload, sources, actions
   }
 
   init(
@@ -53,7 +70,8 @@ struct ChatSurface: Equatable, Codable, Identifiable, Hashable {
     title: String,
     summary: String,
     payload: JSONValue = .object([:]),
-    sources: [SurfaceSource] = []
+    sources: [SurfaceSource] = [],
+    actions: [SurfaceAction] = []
   ) {
     self.id = id
     self.kindRaw = kindRaw
@@ -62,6 +80,7 @@ struct ChatSurface: Equatable, Codable, Identifiable, Hashable {
     self.summary = summary
     self.payload = payload
     self.sources = sources
+    self.actions = actions
   }
 
   init(from decoder: Decoder) throws {
@@ -73,6 +92,7 @@ struct ChatSurface: Equatable, Codable, Identifiable, Hashable {
     summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
     payload = try c.decodeIfPresent(JSONValue.self, forKey: .payload) ?? .object([:])
     sources = try c.decodeIfPresent([SurfaceSource].self, forKey: .sources) ?? []
+    actions = try c.decodeIfPresent([SurfaceAction].self, forKey: .actions) ?? []
   }
 
   func encode(to encoder: Encoder) throws {
@@ -84,6 +104,7 @@ struct ChatSurface: Equatable, Codable, Identifiable, Hashable {
     try c.encode(summary, forKey: .summary)
     try c.encode(payload, forKey: .payload)
     if !sources.isEmpty { try c.encode(sources, forKey: .sources) }
+    if !actions.isEmpty { try c.encode(actions, forKey: .actions) }
   }
 
   func isDuplicate(of other: ChatSurface) -> Bool {
@@ -149,6 +170,18 @@ struct ChatSurface: Equatable, Codable, Identifiable, Hashable {
       version = 1
     }
     var sources: [SurfaceSource] = []
+    var actions: [SurfaceAction] = []
+    if let rows = json["actions"] as? [Any] {
+      for row in rows {
+        guard let obj = row as? [String: Any] else { continue }
+        let id = obj["id"] as? String ?? ""
+        let label = obj["label"] as? String ?? ""
+        let kind = obj["kind"] as? String ?? ""
+        guard !id.isEmpty, !label.isEmpty, !kind.isEmpty else { continue }
+        let toolCall = JSONValue.fromAny(obj["tool_call"] ?? [:])
+        actions.append(SurfaceAction(id: id, label: label, kind: kind, toolCall: toolCall))
+      }
+    }
     if let rows = json["sources"] as? [[String: Any]] {
       for row in rows {
         let title = row["title"] as? String ?? ""
@@ -164,7 +197,8 @@ struct ChatSurface: Equatable, Codable, Identifiable, Hashable {
       title: json["title"] as? String ?? "",
       summary: json["summary"] as? String ?? "",
       payload: JSONValue.fromAny(json["payload"] ?? [:]),
-      sources: sources
+      sources: sources,
+      actions: actions
     )
   }
 

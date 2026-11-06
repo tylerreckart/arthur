@@ -132,10 +132,47 @@ int main() {
       {"title", "Holdings"},
       {"summary", "Up today"},
       {"payload", {{"aapl", 1}}},
+      {"actions", "not-a-list"},
   });
   CHECK(unknown.kind == intercom::SurfaceKind::Generic);
   CHECK(unknown.title == "Holdings");
   CHECK(unknown.summary == "Up today");
+  CHECK(unknown.actions.empty());
+
+  intercom::Surface actionable = back;
+  intercom::SurfaceAction approve;
+  approve.id = "move-1";
+  approve.label = "Approve";
+  approve.kind = "approve";
+  approve.tool_call = {{"name", "calendar.move"}, {"event", "three"}};
+  actionable.actions.push_back(approve);
+  intercom::SurfaceAction broken;
+  broken.label = "missing id";
+  actionable.actions.push_back(broken);
+  const auto action_wire = intercom::surface_to_json(actionable);
+  CHECK(action_wire.value("version", 0) == intercom::kSurfaceActionVersion);
+  CHECK(action_wire.contains("actions"));
+  CHECK(action_wire["actions"].size() == 1);
+  CHECK(action_wire["actions"][0].value("kind", "") == "approve");
+  auto action_back = intercom::surface_from_json(action_wire);
+  CHECK(action_back.actions.size() == 1);
+  if (!action_back.actions.empty()) {
+    CHECK(action_back.actions[0].id == "move-1");
+    CHECK(action_back.actions[0].tool_call.value("name", "") == "calendar.move");
+  }
+  auto v1_with_actions = intercom::surface_from_json(nlohmann::json{
+      {"kind", "generic"},
+      {"version", 1},
+      {"title", "Move it"},
+      {"actions", nlohmann::json::array({
+          nlohmann::json{{"id", "a"}, {"label", "Approve"}, {"kind", "approve"}},
+          nlohmann::json{{"id", ""}, {"label", "nope"}, {"kind", "dismiss"}},
+          "skip",
+      })},
+  });
+  CHECK(v1_with_actions.version == 1);
+  CHECK(v1_with_actions.actions.size() == 1);
+  CHECK(v1_with_actions.title == "Move it");
 
   auto empty = intercom::weather_from_ha_state(std::string_view{R"({"state":"unknown"})"});
   CHECK(!empty.ok);

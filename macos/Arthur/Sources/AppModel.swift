@@ -689,7 +689,9 @@ final class AppModel {
     let line = DiscussionLine(fromYou: true, text: trimmed, id: hearingLineId)
     if let arthurIdx = discussion.indices.last, !discussion[arthurIdx].fromYou, arthurTurnIsLive {
       discussion.insert(line, at: arthurIdx)
-      if discussion.count > 40 { discussion.removeFirst(discussion.count - 40) }
+      if discussion.count > DiscussionLimits.visibleLineCap {
+        discussion.removeFirst(discussion.count - DiscussionLimits.visibleLineCap)
+      }
       persistTranscript()
     } else {
       appendDiscussion(fromYou: true, text: trimmed, id: hearingLineId)
@@ -773,8 +775,8 @@ final class AppModel {
         turnId: fromYou ? "" : (turnId ?? bindArthurReplyKey())
       )
     )
-    if discussion.count > 40 {
-      discussion.removeFirst(discussion.count - 40)
+    if discussion.count > DiscussionLimits.visibleLineCap {
+      discussion.removeFirst(discussion.count - DiscussionLimits.visibleLineCap)
     }
     persistTranscript()
   }

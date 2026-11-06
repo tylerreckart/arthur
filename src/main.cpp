@@ -92,7 +92,8 @@ int main(int argc, char** argv) {
       config, stt, tts, arbiter, sessions, filler);
   pipeline->warm_prefix();
 
-  auto hub = std::make_shared<intercom::DeviceHub>(tts, config.speakback.max_queued);
+  auto hub = std::make_shared<intercom::DeviceHub>(
+      tts, config.speakback.max_queued, sessions);
   intercom::Speakback speakback(config.speakback, config.agent, arbiter, sessions, hub);
   speakback.start();
 

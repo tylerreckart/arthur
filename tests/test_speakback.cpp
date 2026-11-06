@@ -3,11 +3,16 @@
 #include "intercom/session_store.hpp"
 #include "intercom/speakback.hpp"
 #include "intercom/tts.hpp"
+#include "intercom/ws.hpp"
+
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -22,6 +27,29 @@ void expect(bool cond, const char* expr, const char* file, int line) {
 }
 
 #define CHECK(cond) expect((cond), #cond, __FILE__, __LINE__)
+
+std::string read_available(int fd) {
+  std::string buf;
+  char tmp[4096];
+  for (;;) {
+    const ssize_t n = ::recv(fd, tmp, sizeof(tmp), MSG_DONTWAIT);
+    if (n <= 0) break;
+    buf.append(tmp, static_cast<std::size_t>(n));
+  }
+  return buf;
+}
+
+bool frames_contain(std::string raw, const std::string& needle) {
+  std::string_view view(raw);
+  while (!view.empty()) {
+    std::size_t consumed = 0;
+    const auto frame = intercom::decode_ws_frame(view, &consumed);
+    if (!frame || consumed == 0) break;
+    view.remove_prefix(consumed);
+    if (frame->payload.find(needle) != std::string::npos) return true;
+  }
+  return false;
+}
 
 class SilentTts : public intercom::TtsProvider {
  public:
@@ -214,6 +242,96 @@ int main() {
     speakback.handle_event(ours);
     CHECK(hub->queued("speaker-1") == 2);
 
+    std::filesystem::remove(db);
+  }
+
+  {
+    const auto db =
+        std::filesystem::temp_directory_path() / "intercom_speakback_durable.db";
+    std::filesystem::remove(db);
+    {
+      auto sessions = std::make_shared<intercom::SessionStore>(db.string());
+      std::string err;
+      CHECK(sessions->open(&err));
+      intercom::DeviceSession row;
+      row.device_id = "speaker-1";
+      row.conversation_id = 7;
+      CHECK(sessions->upsert(row, &err));
+
+      auto tts = std::make_shared<SilentTts>();
+      auto hub = std::make_shared<intercom::DeviceHub>(tts, 2, sessions);
+      CHECK(hub->speak("speaker-1", "one", "schedule", 0));
+      CHECK(hub->speak("speaker-1", "two", "schedule", 0));
+      CHECK(hub->speak("speaker-1", "three", "schedule", 0));
+      CHECK(hub->queued("speaker-1") == 2);
+      const auto kept = sessions->list_speakback("speaker-1");
+      CHECK(kept.size() == 2);
+      if (kept.size() == 2) {
+        CHECK(kept[0].text == "two");
+        CHECK(kept[1].text == "three");
+      }
+      sessions->remove_speakback(kept[0].id, &err);
+      sessions->remove_speakback(kept[1].id, &err);
+
+      auto arbiter = std::make_shared<FakeArbiter>();
+      intercom::SpeakbackConfig cfg;
+      cfg.enabled = true;
+      intercom::Speakback speakback(cfg, "arthur", arbiter, sessions, hub);
+      intercom::NotificationEvent done;
+      done.kind = "run.completed";
+      done.task_id = 17;
+      done.run_id = 42;
+      done.status = "succeeded";
+      done.agent_id = "arthur";
+      done.result_summary = "Time to leave, sir.";
+      done.started_at = 100;
+      speakback.handle_event(done);
+      CHECK(hub->queued("speaker-1") == 1);
+      CHECK(sessions->has_spoken_run(42));
+      speakback.handle_event(done);
+      CHECK(hub->queued("speaker-1") == 1);
+    }
+
+    auto sessions = std::make_shared<intercom::SessionStore>(db.string());
+    std::string err;
+    CHECK(sessions->open(&err));
+    CHECK(sessions->has_spoken_run(42));
+    CHECK(sessions->count_speakback("speaker-1") == 1);
+    const auto queued = sessions->list_speakback("speaker-1");
+    CHECK(queued.size() == 1);
+    if (!queued.empty()) {
+      CHECK(queued[0].text == "Time to leave, sir.");
+      CHECK(queued[0].run_id == 42);
+    }
+
+    auto tts = std::make_shared<SilentTts>();
+    auto hub = std::make_shared<intercom::DeviceHub>(tts, 4, sessions);
+    CHECK(hub->queued("speaker-1") == 1);
+    int fds[2] = {-1, -1};
+    CHECK(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    hub->attach("speaker-1", fds[0]);
+    const std::string raw = read_available(fds[1]);
+    CHECK(frames_contain(raw, "Time to leave, sir."));
+    CHECK(tts->calls == 1);
+    CHECK(hub->queued("speaker-1") == 0);
+
+    auto arbiter = std::make_shared<FakeArbiter>();
+    intercom::SpeakbackConfig cfg;
+    cfg.enabled = true;
+    intercom::Speakback again(cfg, "arthur", arbiter, sessions, hub);
+    intercom::NotificationEvent done;
+    done.kind = "run.completed";
+    done.task_id = 17;
+    done.run_id = 42;
+    done.status = "succeeded";
+    done.agent_id = "arthur";
+    done.result_summary = "Time to leave, sir.";
+    again.handle_event(done);
+    CHECK(hub->queued("speaker-1") == 0);
+    CHECK(tts->calls == 1);
+
+    if (fds[0] >= 0) ::close(fds[0]);
+    if (fds[1] >= 0) ::close(fds[1]);
     std::filesystem::remove(db);
   }
 
