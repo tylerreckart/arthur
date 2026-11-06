@@ -1,6 +1,8 @@
 import AVFoundation
+import CoreAudio
 import CoreMedia
 import Foundation
+import Speech
 
 struct MicInput: Identifiable, Hashable {
   var id: String
@@ -21,6 +23,8 @@ final class AudioIO: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
   private(set) var activeDeviceName = "microphone"
   /// Empty follows the system default input.
   var preferredDeviceID = ""
+  /// Fires on the main queue when the leading name is heard.
+  var onWake: (() -> Void)?
 
   private let session = AVCaptureSession()
   private let micOutput = AVCaptureAudioDataOutput()
@@ -255,8 +259,70 @@ final class AudioIO: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     let peak = max(copyPeak, listPeak)
     if peak > capturePeak { capturePeak = peak }
     guard copied == noErr else { return }
+    wakeLock.lock()
+    let wanted = wakeWanted
+    let gate = wakeGate
+    let request = speechRequest
+    wakeLock.unlock()
+    if wanted && !gate {
+      request?.append(buffer)
+      return
+    }
     guard let pcm = pcm16(from: buffer) else { return }
     onCapture?(pcm)
+  }
+
+  /// Hardware mute on the default input. An app-level mute is separate and
+  /// is cleared when a turn the user started is already underway.
+  static func inputHardwareMuted() -> Bool {
+    var device = AudioDeviceID(0)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    var address = AudioObjectPropertyAddress(
+      mSelector: kAudioHardwarePropertyDefaultInputDevice,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain
+    )
+    let system = AudioObjectID(kAudioObjectSystemObject)
+    guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &device) == noErr,
+          device != 0 else { return false }
+    var muted: UInt32 = 0
+    size = UInt32(MemoryLayout<UInt32>.size)
+    address.mSelector = kAudioDevicePropertyMute
+    address.mScope = kAudioDevicePropertyScopeInput
+    guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &muted) == noErr else {
+      return false
+    }
+    return muted != 0
+  }
+
+  func setWakeWanted(_ on: Bool) {
+    wakeLock.lock()
+    wakeWanted = on
+    let gate = wakeGate
+    let running = capturing
+    let hearing = speechRequest != nil
+    wakeLock.unlock()
+    if !on {
+      stopWakeRecognizer()
+      if !gate { stopCapture() }
+      return
+    }
+    if gate { return }
+    if running && hearing { return }
+    if running {
+      startWakeRecognizer()
+      return
+    }
+    beginWakeIfIdle()
+  }
+
+  /// `send` means the open capture belongs to a turn and should reach Intercom.
+  func armWakeGate(_ send: Bool) {
+    wakeLock.lock()
+    wakeGate = send
+    if !send { wakeFired = false }
+    wakeLock.unlock()
+    if send { stopWakeRecognizer() }
   }
 
   /// Peak from the sample buffer's own audio buffer list. The PCM copy can
@@ -331,6 +397,108 @@ final class AudioIO: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     if !soundEnabled {
       leftover.removeAll(keepingCapacity: true)
     }
+  }
+
+  private let wakeLock = NSLock()
+  private var wakeWanted = false
+  private var wakeGate = false
+  private var wakeFired = false
+  private var speechRecognizer: SFSpeechRecognizer?
+  private var speechRequest: SFSpeechAudioBufferRecognitionRequest?
+  private var speechTask: SFSpeechRecognitionTask?
+  private var wakeRetryAt = Date.distantPast
+
+  private func beginWakeIfIdle() {
+    wakeLock.lock()
+    let wanted = wakeWanted
+    let gate = wakeGate
+    let running = capturing
+    wakeLock.unlock()
+    guard wanted, !gate, !running else { return }
+    if Self.inputHardwareMuted() { return }
+    let start = { [weak self] in
+      guard let self else { return }
+      self.wakeLock.lock()
+      let still = self.wakeWanted && !self.wakeGate && !self.capturing
+      self.wakeLock.unlock()
+      guard still, !Self.inputHardwareMuted() else { return }
+      do {
+        try self.startCapture()
+        self.startWakeRecognizer()
+      } catch {
+        self.note("wake capture failed \(error.localizedDescription)")
+      }
+    }
+    switch SFSpeechRecognizer.authorizationStatus() {
+    case .authorized:
+      start()
+    case .notDetermined:
+      SFSpeechRecognizer.requestAuthorization { status in
+        DispatchQueue.main.async {
+          if status == .authorized { start() }
+        }
+      }
+    default:
+      note("wake speech recognition is off")
+    }
+  }
+
+  private func startWakeRecognizer() {
+    stopWakeRecognizer()
+    guard let recognizer = SFSpeechRecognizer(), recognizer.isAvailable else {
+      note("wake recognizer unavailable")
+      return
+    }
+    speechRecognizer = recognizer
+    let request = SFSpeechAudioBufferRecognitionRequest()
+    request.shouldReportPartialResults = true
+    if recognizer.supportsOnDeviceRecognition {
+      request.requiresOnDeviceRecognition = true
+    }
+    wakeLock.lock()
+    speechRequest = request
+    wakeLock.unlock()
+    speechTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+      guard let self else { return }
+      if let text = result?.bestTranscription.formattedString {
+        self.noteWakeMatch(text)
+      }
+      if error != nil || result?.isFinal == true {
+        DispatchQueue.main.async { self.restartWakeLater() }
+      }
+    }
+  }
+
+  private func restartWakeLater() {
+    wakeLock.lock()
+    let wanted = wakeWanted
+    let gate = wakeGate
+    wakeLock.unlock()
+    guard wanted, !gate else { return }
+    guard Date() >= wakeRetryAt else { return }
+    wakeRetryAt = Date().addingTimeInterval(0.4)
+    startWakeRecognizer()
+  }
+
+  private func noteWakeMatch(_ text: String) {
+    guard WakePhrase.matches(text) else { return }
+    wakeLock.lock()
+    let already = wakeFired || wakeGate
+    if !already { wakeFired = true }
+    wakeLock.unlock()
+    guard !already else { return }
+    DispatchQueue.main.async { [weak self] in self?.onWake?() }
+  }
+
+  private func stopWakeRecognizer() {
+    wakeLock.lock()
+    let request = speechRequest
+    let task = speechTask
+    speechRequest = nil
+    speechTask = nil
+    wakeLock.unlock()
+    request?.endAudio()
+    task?.cancel()
   }
 
   private func note(_ line: String) {

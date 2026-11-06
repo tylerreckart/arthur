@@ -383,9 +383,44 @@ the same way, so a reminder accepted before Intercom exits is spoken on
 the next attach. Spoken run ids are stored there too, and a restart does
 not speak the same run twice.
 
-STT is still one-shot at `end` (Whisper is not streaming — there are no
-word-level partials while the mic is down). After Whisper, Intercom emits
-`heard` so a desk transcript can show the user line before Arthur answers.
+Each queued utterance has a lifetime. A doorbell expires after three
+minutes, a finished timer after ten, a morning briefing after two hours,
+and a schedule reminder after six. Quiet hours (default 22:00–07:00, local
+time) and a Mac Focus frame (`{"type":"presence","dnd":true}`) hold the row
+instead of dropping it. When the window ends, or Focus clears, the next
+flush speaks whatever has not expired. Expired rows are removed.
+
+An unprompted morning briefing is the same clock, weather, news, and
+markets line as a spoken briefing, enqueued at `speakback.briefing_at`
+(default 07:30) with a grace of `briefing_grace_minutes` (default 20). The
+check is a clock, not an in-memory timer, and the last spoken civil day is
+stored, so a daemon that restarts at 07:40 still speaks once and a restart
+at noon does not. The line is composed when it fires. Do Not Disturb and
+quiet hours skip that check without spending the day.
+
+A doorbell or a finished timer can be posted by a Home Assistant
+automation:
+
+`POST /v1/home/event` with `X-Device-Id` and the device bearer token.
+`{"kind":"doorbell"}` speaks "Someone is at the door."
+`{"kind":"timer_done","name":"pie"}` speaks "The pie timer is done."
+`{"event_type":"state_changed","data":{"entity_id":"binary_sensor.front_doorbell","new_state":{"state":"on"}}}`
+and `{"event_type":"timer.finished","data":{"entity_id":"timer.pie"}}` are
+the same hooks. The WebSocket accepts `{"type":"home_event",...}` with the
+same body. These are short utterances on the speak-back queue. They are
+not a new fast-path intent.
+
+While speech is confirmed, Intercom transcribes the audio so far and emits
+`{"type":"heard","text":"...","partial":true}`. The desk paints that text
+as it arrives. The final `heard` (no `partial`, or `partial` false) is the
+transcript for the turn. Partials are not written to the session. One-shot
+Whisper at the end of the utterance remains the fallback. After that final
+Whisper, Intercom emits `heard` so a desk transcript can show the user line
+before Arthur answers. The Mac can also listen for a leading "Arthur" when
+Wake word is on. That starts the same hands-free turn. It is off by default,
+stays quiet while the microphone is hardware-muted, and does not run on the
+hallway button.
+
 While PCM is arriving, Intercom runs a small energy detector on the 24 kHz
 mono stream. Speech starts the utterance. About 700 ms of trailing silence
 ends it, bursts under 300 ms are ignored, and an utterance is capped around
@@ -445,9 +480,10 @@ Arbiter contract this path assumes:
   `index`.
 - The bus is not durable. After the SSE drop, Intercom reconnects (default
   2 s) and polls `GET /v1/runs?since=<last_seen_started_at>`. Runs use `id`
-  for the run id. Duplicate `run_id`s are skipped in memory (not across
-  Intercom restarts). Events that fire while Intercom itself is down are not
-  replayed on boot.
+  for the run id. Duplicate `run_id`s are stored in the session database, so
+  a restart does not speak the same run twice. Events that fire while
+  Intercom itself is down are not replayed on boot. Utterances already
+  queued are.
 
 Config (`speakback` in `intercom.json`):
 
@@ -457,6 +493,12 @@ Config (`speakback` in `intercom.json`):
 | `reconnect_ms` | `2000` | Pause after SSE drop before reconnect + runs poll |
 | `max_queued` | `4` | Queued utterances per offline or busy device (drop oldest). Persisted in the session database |
 | `speak_failures` | `false` | Speak a courtesy line on `run.failed` |
+| `quiet_hours` | `true` | Hold queued speech between `quiet_start` and `quiet_end` |
+| `quiet_start` | `22:00` | Local start. `HH:MM` or minutes after midnight |
+| `quiet_end` | `07:00` | Local end. Wraps midnight when earlier than the start |
+| `briefing` | `true` | Enqueue a morning briefing at `briefing_at` |
+| `briefing_at` | `07:30` | Local time. Sits after the default quiet hours |
+| `briefing_grace_minutes` | `20` | Still speak if the daemon restarts this long after `briefing_at` |
 
 How to test a reminder:
 

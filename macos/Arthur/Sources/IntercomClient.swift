@@ -8,7 +8,7 @@ enum IntercomEvent {
   case conversation(conversationId: Int64, fresh: Bool, bind: String)
   case done(ok: Bool, error: String, turnId: String)
   case speak(kind: String, runId: String, text: String)
-  case heard(String)
+  case heard(String, partial: Bool)
   case said(String)
   case forming(String)
   case surface(turnId: String, surface: ChatSurface)
@@ -298,7 +298,10 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
         text: json["text"] as? String ?? ""
       ))
     case "heard":
-      emit(.heard(json["text"] as? String ?? json["transcript"] as? String ?? ""))
+      emit(.heard(
+        json["text"] as? String ?? json["transcript"] as? String ?? "",
+        partial: json["partial"] as? Bool ?? false
+      ))
     case "said":
       emit(.said(json["text"] as? String ?? ""))
     case "forming":

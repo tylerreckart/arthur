@@ -1144,10 +1144,15 @@ struct SettingsView: View {
             Button("Allow Screen Recording") { ScreenLook.requestAccess() }
           }
           Toggle("Reminders, Finder, and Mail", isOn: $model.macTools)
+          Toggle("Wake word", isOn: $model.wakeWord)
+          if model.wakeWord, model.wakeMuted {
+            Text("The microphone is muted.")
+              .foregroundStyle(.secondary)
+          }
         } header: {
           Text("This Mac")
         } footer: {
-          Text("Today and tomorrow stay on this Mac. Arthur does not read the app in front of you, your reminders, or the screen unless you turn that on. A file you drop is included with the next question. A change, a Mail draft, and opening something wait until you approve. He does not send mail. Restart arbiter --api once after Arthur first writes these tools.")
+          Text("Today and tomorrow stay on this Mac. Arthur does not read the app in front of you, your reminders, or the screen unless you turn that on. A file you drop is included with the next question. A change, a Mail draft, and opening something wait until you approve. He does not send mail. Wake word listens for “Arthur” and starts a hands-free turn. It stays off until you turn it on, and it stays quiet while the microphone is muted. Restart arbiter --api once after Arthur first writes these tools.")
         }
 
         McpSettingsSection()

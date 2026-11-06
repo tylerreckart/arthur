@@ -1,6 +1,7 @@
 #include "intercom/http_server.hpp"
 #include "intercom/local_context.hpp"
 #include "intercom/pcm_stream.hpp"
+#include "intercom/speak_queue.hpp"
 #include "intercom/util.hpp"
 #include "intercom/ws.hpp"
 
@@ -236,6 +237,37 @@ void run_http_server(ServerDeps deps) {
              }
              res.set_content(R"({"cancelled":true})", "application/json");
            });
+
+  svr.Post("/v1/home/event", [&](const httplib::Request& req, httplib::Response& res) {
+    const std::string device_id = req.get_header_value("X-Device-Id");
+    const std::string token = bearer_token(req);
+    if (device_id.empty() || !deps.config.authorize_device(device_id, token)) {
+      res.status = 401;
+      res.set_content(R"({"error":"unauthorized"})", "application/json");
+      return;
+    }
+    nlohmann::json body;
+    try {
+      body = nlohmann::json::parse(req.body.empty() ? "{}" : req.body);
+    } catch (...) {
+      res.status = 400;
+      res.set_content(R"({"error":"invalid json"})", "application/json");
+      return;
+    }
+    const auto alert = home_alert_from_json(body);
+    if (!alert || !deps.hub) {
+      res.status = 400;
+      res.set_content(R"({"error":"unsupported home event"})", "application/json");
+      return;
+    }
+    if (!deps.hub->speak(device_id, alert->text, alert->kind, 0)) {
+      res.status = 500;
+      res.set_content(R"({"error":"could not queue"})", "application/json");
+      return;
+    }
+    nlohmann::json ok = {{"queued", true}, {"kind", alert->kind}};
+    res.set_content(ok.dump(), "application/json");
+  });
 
   svr.Post("/v1/utterance", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string device_id = req.get_header_value("X-Device-Id");

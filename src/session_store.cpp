@@ -1,4 +1,5 @@
 #include "intercom/session_store.hpp"
+#include "intercom/speak_queue.hpp"
 #include "intercom/util.hpp"
 
 #include <chrono>
@@ -123,12 +124,28 @@ bool SessionStore::open(std::string* err) {
       "CREATE TABLE IF NOT EXISTS spoken_runs ("
       "  run_id INTEGER PRIMARY KEY,"
       "  spoken_at INTEGER NOT NULL"
+      ");"
+      "CREATE TABLE IF NOT EXISTS proactive_marks ("
+      "  key TEXT PRIMARY KEY,"
+      "  day INTEGER NOT NULL"
       ");";
   errmsg = nullptr;
   if (sqlite3_exec(db_, speak_sql, nullptr, nullptr, &errmsg) != SQLITE_OK) {
     if (err) *err = errmsg ? errmsg : "create speakback tables failed";
     sqlite3_free(errmsg);
     return false;
+  }
+  errmsg = nullptr;
+  if (sqlite3_exec(db_,
+                   "ALTER TABLE speakback_queue ADD COLUMN "
+                   "expires_at INTEGER NOT NULL DEFAULT 0;",
+                   nullptr, nullptr, &errmsg) != SQLITE_OK) {
+    const std::string detail = errmsg ? errmsg : "speakback migration failed";
+    sqlite3_free(errmsg);
+    if (detail.find("duplicate column name") == std::string::npos) {
+      if (err) *err = detail;
+      return false;
+    }
   }
   return true;
 }
@@ -372,7 +389,8 @@ std::int64_t SessionStore::enqueue_speakback(const std::string& device_id,
                                              const std::string& kind,
                                              std::int64_t run_id,
                                              int max_queued,
-                                             std::string* err) {
+                                             std::string* err,
+                                             std::int64_t expires_at) {
   std::lock_guard<std::mutex> lk(mu_);
   if (!db_) {
     if (err) *err = "session store not open";
@@ -391,19 +409,23 @@ std::int64_t SessionStore::enqueue_speakback(const std::string& device_id,
   }
   sqlite3_stmt* stmt = nullptr;
   const char* sql =
-      "INSERT INTO speakback_queue(device_id, text, kind, run_id, created_at) "
-      "VALUES(?,?,?,?,?)";
+      "INSERT INTO speakback_queue(device_id, text, kind, run_id, created_at, expires_at) "
+      "VALUES(?,?,?,?,?,?)";
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     if (err) *err = sqlite3_errmsg(db_);
     sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
     return 0;
   }
   const std::string stored_kind = kind.empty() ? "schedule" : kind;
+  const std::int64_t created = now_unix();
+  const std::int64_t expires =
+      expires_at > 0 ? expires_at : created + speak_ttl_seconds(stored_kind);
   sqlite3_bind_text(stmt, 1, device_id.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(stmt, 2, text.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(stmt, 3, stored_kind.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_int64(stmt, 4, run_id);
-  sqlite3_bind_int64(stmt, 5, now_unix());
+  sqlite3_bind_int64(stmt, 5, created);
+  sqlite3_bind_int64(stmt, 6, expires);
   const int rc = sqlite3_step(stmt);
   const std::int64_t id = sqlite3_last_insert_rowid(db_);
   sqlite3_finalize(stmt);
@@ -448,7 +470,7 @@ std::vector<SpeakbackItem> SessionStore::list_speakback(
   if (!db_ || device_id.empty()) return out;
   sqlite3_stmt* stmt = nullptr;
   const char* sql =
-      "SELECT id, device_id, text, kind, run_id, created_at "
+      "SELECT id, device_id, text, kind, run_id, created_at, expires_at "
       "FROM speakback_queue WHERE device_id = ? ORDER BY id ASC";
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return out;
   sqlite3_bind_text(stmt, 1, device_id.c_str(), -1, SQLITE_TRANSIENT);
@@ -460,6 +482,7 @@ std::vector<SpeakbackItem> SessionStore::list_speakback(
     item.kind = column_text(stmt, 3);
     item.run_id = sqlite3_column_int64(stmt, 4);
     item.created_at = sqlite3_column_int64(stmt, 5);
+    item.expires_at = sqlite3_column_int64(stmt, 6);
     out.push_back(std::move(item));
   }
   sqlite3_finalize(stmt);
@@ -502,6 +525,45 @@ bool SessionStore::remove_speakback(std::int64_t id, std::string* err) {
     return false;
   }
   return true;
+}
+
+bool SessionStore::mark_day(const std::string& key, int day, std::string* err) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_) {
+    if (err) *err = "session store not open";
+    return false;
+  }
+  if (key.empty() || day <= 0) return false;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "INSERT INTO proactive_marks(key, day) VALUES(?, ?) "
+      "ON CONFLICT(key) DO UPDATE SET day = excluded.day";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(stmt, 2, day);
+  const int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  return true;
+}
+
+int SessionStore::marked_day(const std::string& key) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_ || key.empty()) return 0;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql = "SELECT day FROM proactive_marks WHERE key = ?";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
+  sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+  int day = 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) day = sqlite3_column_int(stmt, 0);
+  sqlite3_finalize(stmt);
+  return day;
 }
 
 }  // namespace intercom

@@ -2,6 +2,7 @@
 #include "intercom/audio_dsp.hpp"
 #include "intercom/device_hub.hpp"
 #include "intercom/local_context.hpp"
+#include "intercom/speak_queue.hpp"
 #include "intercom/util.hpp"
 
 #include <nlohmann/json.hpp>
@@ -18,6 +19,7 @@
 #include <cstring>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <sstream>
 
@@ -575,8 +577,73 @@ void WsServer::handle_client(int fd) {
       active_turn.clear();
     }
   };
+  struct LiveHeard {
+    std::mutex mu;
+    int generation = 0;
+    std::string last;
+    std::size_t mark = 0;
+  };
+  auto live_heard = std::make_shared<LiveHeard>();
+  std::future<void> heard_job;
+  struct WaitHeard {
+    std::future<void>* job = nullptr;
+    ~WaitHeard() {
+      if (job && job->valid()) job->wait();
+    }
+  } wait_heard{&heard_job};
+  auto bump_heard = [&]() {
+    std::lock_guard<std::mutex> lk(live_heard->mu);
+    ++live_heard->generation;
+    live_heard->mark = 0;
+    live_heard->last.clear();
+  };
+  auto maybe_partial = [&]() {
+    if (!endpoint.speech_confirmed()) return;
+    const bool busy =
+        heard_job.valid() &&
+        heard_job.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready;
+    std::size_t mark = 0;
+    {
+      std::lock_guard<std::mutex> lk(live_heard->mu);
+      mark = live_heard->mark;
+    }
+    if (!partial_due(pcm.size(), mark, busy)) return;
+    if (heard_job.valid()) {
+      try {
+        heard_job.get();
+      } catch (...) {
+      }
+    }
+    int gen = 0;
+    {
+      std::lock_guard<std::mutex> lk(live_heard->mu);
+      live_heard->mark = pcm.size();
+      gen = live_heard->generation;
+    }
+    auto copy = pcm;
+    heard_job = std::async(std::launch::async, [this, live_heard, copy = std::move(copy), gen,
+                                                &send_text]() {
+      std::string err;
+      std::string text;
+      try {
+        text = deps_.pipeline->stt().transcribe(
+            copy, deps_.config.sample_rate, deps_.config.channels, &err);
+      } catch (...) {
+        return;
+      }
+      if (text.empty()) return;
+      {
+        std::lock_guard<std::mutex> lk(live_heard->mu);
+        if (gen != live_heard->generation || text == live_heard->last) return;
+        live_heard->last = text;
+      }
+      send_text({{"type", "heard"}, {"text", text}, {"partial", true}});
+    });
+  };
+
   auto submit_pcm = [&](bool automatic, const nlohmann::json* frame) {
     if (pcm.empty()) return;
+    bump_heard();
     retire_active();
     ignore_empty_end = true;
     suppress_tail = automatic;
@@ -680,6 +747,7 @@ void WsServer::handle_client(int fd) {
           retire_active();
         }
         if (decision == UtteranceEndpointEvent::Completed) submit_pcm(true, nullptr);
+        else maybe_partial();
         continue;
       }
       if (frame->opcode != WsOpcode::Text) continue;
@@ -692,6 +760,17 @@ void WsServer::handle_client(int fd) {
         continue;
       }
       const std::string type = j.value("type", "");
+      if (type == "presence") {
+        if (hub) hub->set_dnd(device_id, j.value("dnd", false));
+        continue;
+      }
+      if (type == "home_event") {
+        const nlohmann::json& body = j.contains("event") ? j["event"] : j;
+        if (auto alert = home_alert_from_json(body)) {
+          if (hub) hub->speak(device_id, alert->text, alert->kind, 0);
+        }
+        continue;
+      }
       if (type == "arm_approval") {
         const std::string id = j.value("id", "");
         if (!deps_.pipeline->arm_approval(device_id, id)) {

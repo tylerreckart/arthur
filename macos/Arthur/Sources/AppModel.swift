@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import Intents
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -142,6 +143,17 @@ final class AppModel {
       }
     }
   }
+  /// Hands-free "Arthur". Off until the user opts in. Hardware mute keeps it quiet.
+  var wakeWord = false {
+    didSet {
+      guard oldValue != wakeWord else { return }
+      guard !previewCanvas else { return }
+      ConfigStore.saveWakeWord(wakeWord)
+      if presenceReady { applyWake() }
+    }
+  }
+  /// True while Wake word is on and the input device is hardware-muted.
+  var wakeMuted = false
   /// Reminders list, Finder, Mail drafts, and opening a page or app.
   var macTools = false {
     didSet {
@@ -166,6 +178,8 @@ final class AppModel {
   private var fileLoads = 0
   private var deferredSend: (() -> Void)?
   private var presenceReady = false
+  /// This listen was opened by the wake word. An empty result counts as a false accept.
+  private var wakeTurn = false
   private var pendingWriteId: String?
   private var pendingWritePhase = ""
   var pendingWriteLabel: String {
@@ -244,6 +258,7 @@ final class AppModel {
     seesFront = ConfigStore.loadSeesFront()
     screenLook = ConfigStore.loadScreenLook()
     macTools = ConfigStore.loadMacTools()
+    wakeWord = ConfigStore.loadWakeWord()
     presenceReady = true
     microphoneID = ConfigStore.loadMicrophoneID()
     audio.preferredDeviceID = microphoneID
@@ -284,6 +299,7 @@ final class AppModel {
     audio.requestMic { [weak self] ok in
       self?.micGranted = ok
       if !ok { self?.errorText = "Microphone access is off — type instead, or enable it in System Settings." }
+      self?.resumeWake()
     }
     do { try audio.startPlayback() } catch {
       errorText = error.localizedDescription
@@ -293,6 +309,8 @@ final class AppModel {
       Task { @MainActor in self?.pollHealth() }
     }
     pollHealth()
+    watchFocus()
+    applyWake()
     startLocalCalendar()
     if activeObserver == nil {
       activeObserver = NotificationCenter.default.addObserver(
@@ -863,7 +881,49 @@ final class AppModel {
     }
   }
 
+  private func wakeHeard() {
+    guard !previewCanvas, wakeWord, !holding, !preparingTalk, canSend, micGranted else { return }
+    wakeTurn = true
+    if calendarReadyWithoutPrompt {
+      publishTurnContext()
+      audio.armWakeGate(true)
+      beginListening(handsFree: true)
+      if !holding {
+        wakeTurn = false
+        audio.armWakeGate(false)
+        resumeWake()
+      }
+      return
+    }
+    preparingTalk = true
+    let sharing = calendarSharing
+    let sessionAllowed = sessionCalendarAllowed
+    Task {
+      let (context, allowSession) = await CalendarDesk.context(
+        sharing: sharing,
+        sessionAllowed: sessionAllowed,
+        interactive: true
+      )
+      preparingTalk = false
+      if allowSession { sessionCalendarAllowed = true }
+      guard canSend, micGranted, !holding else {
+        wakeTurn = false
+        resumeWake()
+        return
+      }
+      publishTurnContext(calendar: context)
+      audio.armWakeGate(true)
+      beginListening(handsFree: true)
+      if !holding {
+        wakeTurn = false
+        audio.armWakeGate(false)
+        resumeWake()
+      }
+    }
+  }
+
   private func beginListening(handsFree open: Bool = false) {
+    audio.armWakeGate(true)
     do {
       pcmBytes = 0
       handsFree = open
@@ -884,6 +944,8 @@ final class AppModel {
       errorText = ""
       lastSurface = .desk
     } catch {
+      audio.armWakeGate(false)
+      wakeTurn = false
       clearHearing()
       errorText = error.localizedDescription
     }
@@ -919,10 +981,12 @@ final class AppModel {
     pttFromKeyboard = false
     inputLevel = 0
     audio.stopCapture()
+    audio.armWakeGate(false)
     endpoint.reset()
     let elapsed = Date().timeIntervalSince(pttStarted ?? Date())
     pttStarted = nil
     if audio.capturePeak < 0.001 {
+      if wakeTurn { noteFalseWake() }
       client.sendCancel()
       clearHearing()
       become(client.isConnected ? .idle : .disconnected)
@@ -931,12 +995,14 @@ final class AppModel {
     }
     let tooShort = wasHandsFree ? pcmBytes < 8000 : (elapsed < 0.35 || pcmBytes < 8000)
     if tooShort {
+      if wakeTurn { noteFalseWake() }
       client.sendCancel()
       clearHearing()
       become(client.isConnected ? .idle : .disconnected)
       errorText = wasHandsFree ? "Too short." : "Too short — hold a little longer."
       return
     }
+    wakeTurn = false
     if awaitDeskPrep(retry: { [weak self] in self?.sendEndedUtterance() }) { return }
     sendEndedUtterance()
   }
@@ -958,6 +1024,7 @@ final class AppModel {
     pttFromKeyboard = false
     inputLevel = 0
     audio.stopCapture()
+    audio.armWakeGate(false)
     endpoint.reset()
     pttStarted = nil
     if !expectingReply {
@@ -1511,6 +1578,7 @@ final class AppModel {
       reconnectAttempt = 0
       if !deviceId.isEmpty { socketDeviceId = deviceId }
       become(.idle)
+      publishFocus()
       healthOK = true
       healthDetail = "connected"
       errorText = ""
@@ -1531,9 +1599,15 @@ final class AppModel {
         ingestSpeakLevel(AudioIO.pcmLevel(data, gain: 2.4))
         refreshSpokenReveal()
       }
-    case .heard(let text):
-      if !text.isEmpty {
-        commitVoiceTranscript(text)
+    case .heard(let text, let partial):
+      switch HeardLine.interpret(text: text, partial: partial) {
+      case .live(let line):
+        hearingText = line
+      case .commit(let line):
+        wakeTurn = false
+        commitVoiceTranscript(line)
+      case nil:
+        break
       }
     case .turn(let eventTurnId, let transcript, let conv, let ok, _):
       guard eventTurnId.isEmpty || eventTurnId == turnId else { return }
@@ -1700,6 +1774,53 @@ final class AppModel {
       formingText = ""
       hearingText = ""
     }
+    if p == .idle {
+      resumeWake()
+    } else if !holding {
+      audio.setWakeWanted(false)
+    }
+  }
+
+  private func applyWake() {
+    audio.onWake = { [weak self] in self?.wakeHeard() }
+    resumeWake()
+  }
+
+  private func resumeWake() {
+    guard !previewCanvas else { return }
+    guard wakeWord, micGranted, !holding, !preparingTalk, phase == .idle else {
+      if !holding, !wakeWord || !micGranted {
+        audio.setWakeWanted(false)
+      }
+      if !wakeWord { wakeMuted = false }
+      return
+    }
+    wakeMuted = AudioIO.inputHardwareMuted()
+    if wakeMuted {
+      audio.setWakeWanted(false)
+      return
+    }
+    audio.setWakeWanted(true)
+  }
+
+  private func noteFalseWake() {
+    wakeTurn = false
+    let count = ConfigStore.bumpWakeFalseAccepts()
+    NSLog("arthur wake false-accept count=%d", count)
+  }
+
+  private func watchFocus() {
+    guard !previewCanvas else { return }
+    INFocusStatusCenter.default.requestAuthorization { _ in
+      DispatchQueue.main.async { [weak self] in self?.publishFocus() }
+    }
+  }
+
+  private func publishFocus() {
+    guard !previewCanvas else { return }
+    let center = INFocusStatusCenter.default
+    let focused = center.authorizationStatus == .authorized && center.focusStatus.isFocused == true
+    client.sendJSON(["type": "presence", "dnd": focused])
   }
 
   private func ingestSpeakLevel(_ level: Double) {
@@ -1749,6 +1870,8 @@ final class AppModel {
           }
         }
         self.refreshSessionContinuity()
+        self.publishFocus()
+        self.resumeWake()
       }
     }.resume()
   }

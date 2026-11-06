@@ -1,5 +1,6 @@
 #include "intercom/arbiter_client.hpp"
 #include "intercom/device_hub.hpp"
+#include "intercom/morning.hpp"
 #include "intercom/session_store.hpp"
 #include "intercom/speakback.hpp"
 #include "intercom/tts.hpp"
@@ -8,6 +9,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <ctime>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -332,6 +334,119 @@ int main() {
 
     if (fds[0] >= 0) ::close(fds[0]);
     if (fds[1] >= 0) ::close(fds[1]);
+    std::filesystem::remove(db);
+  }
+
+  {
+    const auto db = std::filesystem::temp_directory_path() / "intercom_speak_quiet.db";
+    std::filesystem::remove(db);
+    auto sessions = std::make_shared<intercom::SessionStore>(db.string());
+    std::string err;
+    CHECK(sessions->open(&err));
+    auto tts = std::make_shared<SilentTts>();
+    auto hub = std::make_shared<intercom::DeviceHub>(tts, 4, sessions);
+    const std::time_t now = std::time(nullptr);
+    const int minute = intercom::minute_of_day(now);
+    int quiet_end = minute + 30;
+    if (quiet_end >= 24 * 60) quiet_end -= 24 * 60;
+    hub->set_quiet(true, minute, quiet_end);
+    int fds[2] = {-1, -1};
+    CHECK(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    hub->attach("desk", fds[0]);
+    CHECK(hub->speak("desk", "Someone is at the door.", "doorbell", 0));
+    CHECK(tts->calls == 0);
+    CHECK(hub->queued("desk") == 1);
+    const auto held = sessions->list_speakback("desk");
+    CHECK(held.size() == 1);
+    if (!held.empty()) CHECK(held[0].expires_at > held[0].created_at);
+
+    hub->set_quiet(false, 0, 0);
+    hub->nudge();
+    const std::string raw = read_available(fds[1]);
+    CHECK(frames_contain(raw, "Someone is at the door."));
+    CHECK(tts->calls == 1);
+    CHECK(hub->queued("desk") == 0);
+
+    CHECK(sessions->enqueue_speakback("desk", "late", "doorbell", 0, 4, &err, 1) > 0);
+    hub->nudge();
+    CHECK(hub->queued("desk") == 0);
+    CHECK(tts->calls == 1);
+
+    hub->set_dnd("desk", true);
+    CHECK(hub->speak("desk", "Held for Focus.", "schedule", 0));
+    CHECK(tts->calls == 1);
+    CHECK(hub->queued("desk") == 1);
+    hub->set_dnd("desk", false);
+    CHECK(tts->calls == 2);
+    CHECK(hub->queued("desk") == 0);
+
+    if (fds[0] >= 0) ::close(fds[0]);
+    if (fds[1] >= 0) ::close(fds[1]);
+    std::filesystem::remove(db);
+  }
+
+  {
+    const auto db = std::filesystem::temp_directory_path() / "intercom_morning.db";
+    std::filesystem::remove(db);
+    const std::time_t now = std::time(nullptr);
+    const int minute = intercom::minute_of_day(now);
+    const int day = intercom::civil_day(now);
+    auto sessions = std::make_shared<intercom::SessionStore>(db.string());
+    std::string err;
+    CHECK(sessions->open(&err));
+    intercom::DeviceSession row;
+    row.device_id = "desk";
+    row.conversation_id = 3;
+    CHECK(sessions->upsert(row, &err));
+    auto tts = std::make_shared<SilentTts>();
+    auto hub = std::make_shared<intercom::DeviceHub>(tts, 4, sessions);
+    intercom::SpeakbackConfig cfg;
+    cfg.briefing = true;
+    cfg.briefing_minute = minute;
+    cfg.briefing_grace_minutes = 20;
+    cfg.quiet_hours = false;
+    intercom::MorningBriefing briefing(hub, sessions, cfg, []() { return "Good morning."; });
+    CHECK(briefing.tick(static_cast<std::int64_t>(now), minute, day));
+    CHECK(hub->queued("desk") == 1);
+    CHECK(sessions->marked_day("briefing") == day);
+    const auto queued = sessions->list_speakback("desk");
+    CHECK(queued.size() == 1);
+    if (!queued.empty()) {
+      CHECK(queued[0].text == "Good morning.");
+      CHECK(queued[0].kind == "briefing");
+    }
+    CHECK(!briefing.tick(static_cast<std::int64_t>(now), minute, day));
+    CHECK(hub->queued("desk") == 1);
+
+    hub->set_dnd("desk", true);
+    sessions->mark_day("briefing", day - 1, &err);
+    CHECK(!briefing.tick(static_cast<std::int64_t>(now), minute, day));
+    CHECK(hub->queued("desk") == 1);
+    hub->set_dnd("desk", false);
+  }
+
+  {
+    const auto db = std::filesystem::temp_directory_path() / "intercom_morning.db";
+    const std::time_t now = std::time(nullptr);
+    const int minute = intercom::minute_of_day(now);
+    const int day = intercom::civil_day(now);
+    auto sessions = std::make_shared<intercom::SessionStore>(db.string());
+    std::string err;
+    CHECK(sessions->open(&err));
+    CHECK(sessions->marked_day("briefing") == day - 1);
+    auto tts = std::make_shared<SilentTts>();
+    auto hub = std::make_shared<intercom::DeviceHub>(tts, 4, sessions);
+    intercom::SpeakbackConfig cfg;
+    cfg.briefing = true;
+    cfg.briefing_minute = minute;
+    cfg.briefing_grace_minutes = 20;
+    cfg.quiet_hours = false;
+    intercom::MorningBriefing restarted(hub, sessions, cfg, []() { return "Good morning."; });
+    CHECK(restarted.tick(static_cast<std::int64_t>(now), minute, day));
+    CHECK(hub->queued("desk") == 2);
+    CHECK(sessions->marked_day("briefing") == day);
+    CHECK(!restarted.tick(static_cast<std::int64_t>(now), minute, day));
+    CHECK(hub->queued("desk") == 2);
     std::filesystem::remove(db);
   }
 

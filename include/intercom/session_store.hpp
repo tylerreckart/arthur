@@ -34,6 +34,9 @@ struct SpeakbackItem {
   std::string kind;
   std::int64_t run_id = 0;
   std::int64_t created_at = 0;
+  // 0 means "created_at plus the kind's lifetime" for rows written before
+  // this column existed.
+  std::int64_t expires_at = 0;
 };
 
 class SessionStore {
@@ -63,12 +66,18 @@ class SessionStore {
   // or busy; oldest rows past `max_queued` are dropped.
   bool has_spoken_run(std::int64_t run_id) const;
   bool mark_spoken_run(std::int64_t run_id, std::string* err);
+  // expires_at == 0 stores created_at plus the lifetime for `kind`.
   std::int64_t enqueue_speakback(const std::string& device_id,
                                  const std::string& text,
                                  const std::string& kind,
                                  std::int64_t run_id,
                                  int max_queued,
-                                 std::string* err);
+                                 std::string* err,
+                                 std::int64_t expires_at = 0);
+
+  // Civil day (YYYYMMDD) a proactive utterance was spoken. 0 if never.
+  bool mark_day(const std::string& key, int day, std::string* err);
+  int marked_day(const std::string& key) const;
   std::vector<SpeakbackItem> list_speakback(const std::string& device_id) const;
   std::size_t count_speakback(const std::string& device_id) const;
   bool remove_speakback(std::int64_t id, std::string* err);

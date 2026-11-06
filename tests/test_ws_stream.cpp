@@ -584,7 +584,16 @@ int main() {
     CHECK(got_done);
     CHECK(got_heard);
     CHECK(accepts == 1);
-    CHECK(stt->calls.load() == calls_before + 1);
+    // A partial transcript may call Whisper before the final one-shot.
+    // The late end below must not add another.
+    int calls_settled = stt->calls.load();
+    for (int i = 0; i < 10; ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      const int now_calls = stt->calls.load();
+      if (now_calls == calls_settled && i > 0) break;
+      calls_settled = now_calls;
+    }
+    CHECK(calls_settled > calls_before);
 
     intercom::WsFrame late_end;
     late_end.opcode = intercom::WsOpcode::Text;
@@ -617,7 +626,7 @@ int main() {
     }
     CHECK(!second_accept);
     CHECK(!empty_error);
-    CHECK(stt->calls.load() == calls_before + 1);
+    CHECK(stt->calls.load() == calls_settled);
 
     // Speech during an active turn cancels it and starts the next utterance.
     arbiter->slow_mode.store(true);

@@ -5,8 +5,12 @@
 #include <sys/socket.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
+#include <ctime>
 #include <iostream>
+#include <utility>
+#include <vector>
 
 namespace intercom {
 namespace {
@@ -24,6 +28,12 @@ bool send_all(int fd, const void* data, std::size_t len) {
     sent += static_cast<std::size_t>(n);
   }
   return true;
+}
+
+std::int64_t unix_now() {
+  return std::chrono::duration_cast<std::chrono::seconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
 }
 
 }  // namespace
@@ -149,6 +159,56 @@ bool DeviceHub::speak_on(const std::shared_ptr<Conn>& c, const std::string& text
   return ok;
 }
 
+SpeakAction DeviceHub::action_for(const std::string& device_id, const std::string& kind,
+                                   std::int64_t created_at, std::int64_t expires_at) const {
+  SpeakPolicy policy;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    policy = quiet_;
+    const auto it = dnd_.find(device_id);
+    if (it != dnd_.end()) policy.dnd = it->second;
+  }
+  SpeakCandidate item;
+  item.kind = kind;
+  item.created_at = created_at;
+  item.expires_at = expires_at;
+  const std::int64_t now = unix_now();
+  return decide_speak(item, now, minute_of_day(static_cast<std::time_t>(now)), policy);
+}
+
+void DeviceHub::set_dnd(const std::string& device_id, bool on) {
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    dnd_[device_id] = on;
+  }
+  if (!on) {
+    if (auto c = get(device_id)) flush_pending(device_id, c);
+  }
+}
+
+bool DeviceHub::dnd(const std::string& device_id) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  const auto it = dnd_.find(device_id);
+  return it != dnd_.end() && it->second;
+}
+
+void DeviceHub::set_quiet(bool enabled, int start_minute, int end_minute) {
+  std::lock_guard<std::mutex> lk(mu_);
+  quiet_.quiet_enabled = enabled;
+  quiet_.quiet_start_minute = start_minute;
+  quiet_.quiet_end_minute = end_minute;
+}
+
+void DeviceHub::nudge() {
+  std::vector<std::pair<std::string, std::shared_ptr<Conn>>> live;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    live.reserve(conns_.size());
+    for (const auto& [id, conn] : conns_) live.emplace_back(id, conn);
+  }
+  for (const auto& [id, conn] : live) flush_pending(id, conn);
+}
+
 void DeviceHub::flush_pending(const std::string& device_id,
                               const std::shared_ptr<Conn>& c) {
   if (!c || c->fd < 0 || c->busy.load()) return;
@@ -164,6 +224,17 @@ void DeviceHub::flush_pending(const std::string& device_id,
       const auto items = sessions_->list_speakback(device_id);
       if (items.empty()) return;
       const auto& item = items.front();
+      const SpeakAction action =
+          action_for(device_id, item.kind, item.created_at, item.expires_at);
+      if (action == SpeakAction::Hold) return;
+      if (action == SpeakAction::Drop) {
+        std::string err;
+        if (!sessions_->remove_speakback(item.id, &err) && !err.empty()) {
+          std::cerr << "intercom speakback: drop expired failed: " << err << std::endl;
+          return;
+        }
+        continue;
+      }
       std::cerr << "intercom speakback: flush queued for " << device_id << std::endl;
       if (!speak_on(c, item.text, item.kind, item.run_id)) return;
       std::string err;
@@ -179,9 +250,19 @@ void DeviceHub::flush_pending(const std::string& device_id,
     {
       std::lock_guard<std::mutex> lk(c->pending_mu);
       if (c->pending.empty()) return;
-      item = std::move(c->pending.front());
+      item = c->pending.front();
+    }
+    const SpeakAction action =
+        action_for(device_id, item.kind, item.created_at, item.expires_at);
+    if (action == SpeakAction::Hold) return;
+    {
+      std::lock_guard<std::mutex> lk(c->pending_mu);
+      if (c->pending.empty()) return;
+      const auto& front = c->pending.front();
+      if (front.created_at != item.created_at || front.text != item.text) continue;
       c->pending.pop_front();
     }
+    if (action == SpeakAction::Drop) continue;
     std::cerr << "intercom speakback: flush queued for " << device_id << std::endl;
     if (!speak_on(c, item.text, item.kind, item.run_id)) {
       std::lock_guard<std::mutex> lk(c->pending_mu);
@@ -194,8 +275,13 @@ void DeviceHub::flush_pending(const std::string& device_id,
 bool DeviceHub::speak(const std::string& device_id, const std::string& text,
                       const std::string& kind, std::int64_t run_id) {
   if (text.empty()) return true;
+  const std::int64_t created = unix_now();
+  const std::int64_t expires = created + speak_ttl_seconds(kind.empty() ? "schedule" : kind);
+  const SpeakAction action = action_for(device_id, kind, created, expires);
+  if (action == SpeakAction::Drop) return true;
   auto c = get(device_id);
-  if (c && c->fd >= 0 && !c->busy.load() && !c->flushing.load()) {
+  if (action == SpeakAction::Speak && c && c->fd >= 0 && !c->busy.load() &&
+      !c->flushing.load()) {
     if (speak_on(c, text, kind, run_id)) return true;
   }
   if (!c) {
@@ -211,7 +297,7 @@ bool DeviceHub::speak(const std::string& device_id, const std::string& text,
   if (sessions_) {
     std::string err;
     const auto id = sessions_->enqueue_speakback(
-        device_id, text, kind, run_id, max_queued_, &err);
+        device_id, text, kind, run_id, max_queued_, &err, expires);
     if (id <= 0) {
       std::cerr << "intercom speakback: queue failed for " << device_id << ": "
                 << err << std::endl;
@@ -223,7 +309,7 @@ bool DeviceHub::speak(const std::string& device_id, const std::string& text,
     return true;
   }
   std::lock_guard<std::mutex> lk(c->pending_mu);
-  c->pending.push_back(PendingSpeak{text, kind, run_id});
+  c->pending.push_back(PendingSpeak{text, kind, run_id, created, expires});
   while (static_cast<int>(c->pending.size()) > max_queued_) c->pending.pop_front();
   std::cerr << "intercom speakback: queued for " << device_id
             << " (offline or busy, n=" << c->pending.size() << ")" << std::endl;
