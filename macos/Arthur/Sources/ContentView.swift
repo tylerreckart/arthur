@@ -571,11 +571,42 @@ private struct ComposerBar: View {
   var body: some View {
     @Bindable var model = model
 
-    HStack(alignment: .center, spacing: 8) {
+    VStack(alignment: .leading, spacing: 8) {
+      if model.screenStaged || !model.stagedFiles.isEmpty {
+        stagedChips
+      }
+      composerRow
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 10)
+    .animation(.easeInOut(duration: 0.16), value: model.holding)
+    .animation(.easeInOut(duration: 0.16), value: model.canCancel)
+    .animation(.easeInOut(duration: 0.16), value: model.quietTextMode)
+    .animation(.easeInOut(duration: 0.16), value: model.screenStaged)
+    .animation(.easeInOut(duration: 0.16), value: model.stagedFiles.count)
+    .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+      model.takeDroppedProviders(providers)
+      return true
+    }
+    .onPasteCommand(of: [.fileURL, .image]) { providers in
+      model.takeDroppedProviders(providers)
+    }
+  }
+
+  private var composerRow: some View {
+    @Bindable var model = model
+    return HStack(alignment: .center, spacing: 8) {
       if model.holding {
         listeningAffordance
       } else {
         QuietModeToggle()
+        if model.screenLook {
+          ComposerCircle(systemImage: "viewfinder", enabled: model.canTalk) {
+            model.lookAtScreen()
+          }
+          .help("Look at the screen once, then ask")
+          .accessibilityLabel("Look at the screen")
+        }
         VStack(alignment: .leading, spacing: 3) {
           if showReturnHint {
             Text("Return to send · Shift-Return for a new line")
@@ -634,11 +665,42 @@ private struct ComposerBar: View {
           }
       )
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 10)
-    .animation(.easeInOut(duration: 0.16), value: model.holding)
-    .animation(.easeInOut(duration: 0.16), value: model.canCancel)
-    .animation(.easeInOut(duration: 0.16), value: model.quietTextMode)
+  }
+
+  private var stagedChips: some View {
+    HStack(spacing: 6) {
+      if model.screenStaged {
+        Button {
+          model.clearScreen()
+        } label: {
+          Text("Screen")
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(ArthurTheme.paper)
+        .arthurPlate(radius: 12)
+        .help("Looking at your screen. Click to discard.")
+        .accessibilityLabel("Discard screenshot")
+      }
+      ForEach(model.stagedFiles) { file in
+        Button {
+          model.removeStaged(file.id)
+        } label: {
+          Text(file.label)
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(ArthurTheme.paper)
+        .arthurPlate(radius: 12)
+        .help("Remove \(file.label)")
+        .accessibilityLabel("Remove \(file.label)")
+      }
+    }
   }
 
   private var listeningAffordance: some View {
@@ -1073,10 +1135,19 @@ struct SettingsView: View {
               Text(choice.settingsLabel).tag(choice)
             }
           }
+          Toggle("App and selection", isOn: $model.seesFront)
+          if model.seesFront, !FrontDesk.trusted {
+            Button("Allow Accessibility") { FrontDesk.prompt() }
+          }
+          Toggle("Look at the screen", isOn: $model.screenLook)
+          if model.screenLook, !ScreenLook.allowed {
+            Button("Allow Screen Recording") { ScreenLook.requestAccess() }
+          }
+          Toggle("Reminders, Finder, and Mail", isOn: $model.macTools)
         } header: {
           Text("This Mac")
         } footer: {
-          Text("Today and tomorrow stay on this Mac. Arthur does not read the list aloud unless you ask. A change waits until you approve it. Restart arbiter --api once after Arthur first writes the calendar tool.")
+          Text("Today and tomorrow stay on this Mac. Arthur does not read the app in front of you, your reminders, or the screen unless you turn that on. A file you drop is included with the next question. A change, a Mail draft, and opening something wait until you approve. He does not send mail. Restart arbiter --api once after Arthur first writes these tools.")
         }
 
         McpSettingsSection()

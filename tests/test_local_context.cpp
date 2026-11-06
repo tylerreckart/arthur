@@ -53,6 +53,47 @@ int main() {
   CHECK(wrapped.compare(wrapped.size() - user.size(), user.size(), user) == 0);
   CHECK(wrapped.find(user) != 0);
 
+  const auto pictured = intercom::client_context_from_json(nlohmann::json{
+      {"sources", nlohmann::json::array({nlohmann::json{{"name", "screen"}, {"text", "A screenshot is attached."}}})},
+      {"images",
+       nlohmann::json::array({
+           nlohmann::json{{"media_type", "image/jpeg"}, {"data", "aGVsbG8="}},
+           nlohmann::json{{"media_type", "text/plain"}, {"data", "aGVsbG8="}},
+           nlohmann::json{{"media_type", "image/png"}, {"data", "not base64!!!"}},
+           "skip",
+       })},
+  });
+  CHECK(pictured.sources.size() == 1);
+  CHECK(pictured.images.size() == 1);
+  if (!pictured.images.empty()) {
+    CHECK(pictured.images[0].media_type == "image/jpeg");
+    CHECK(pictured.images[0].data == "aGVsbG8=");
+  }
+  const auto parts = intercom::user_message_json(pictured, user);
+  CHECK(parts.is_array());
+  CHECK(parts.size() == 2);
+  if (parts.is_array() && parts.size() == 2) {
+    CHECK(parts[0].value("type", "") == "text");
+    const std::string text = parts[0].value("text", "");
+    CHECK(text.find("[LOCAL CONTEXT") == 0);
+    CHECK(text.find("aGVsbG8=") == std::string::npos);
+    CHECK(text.compare(text.size() - user.size(), user.size(), user) == 0);
+    CHECK(parts[1].value("type", "") == "image");
+    CHECK(parts[1]["source"].value("media_type", "") == "image/jpeg");
+    CHECK(parts[1]["source"].value("data", "") == "aGVsbG8=");
+  }
+  const auto words_only = intercom::user_message_json(parsed, user);
+  CHECK(words_only.is_string());
+  CHECK(words_only.get<std::string>() == wrapped);
+
+  const auto images_only = intercom::client_context_from_json(nlohmann::json{
+      {"images", nlohmann::json::array({nlohmann::json{{"media_type", "IMAGE/PNG"}, {"data", "YWI="}}})},
+  });
+  CHECK(images_only.sources.empty());
+  CHECK(!images_only.empty());
+  CHECK(images_only.images.size() == 1);
+  if (!images_only.images.empty()) CHECK(images_only.images[0].media_type == "image/png");
+
   std::string huge(5000, 'a');
   const auto capped = intercom::client_context_from_json(nlohmann::json{
       {"sources", nlohmann::json::array({nlohmann::json{{"name", "calendar"}, {"text", huge}}})},

@@ -1458,6 +1458,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
               << " ttfa_ms=" << ttfa_ms << " ttfa_kind=" << (ttfa_kind[0] ? ttfa_kind : "-")
               << " first_answer_ms=" << first_answer_ms
               << " ctx_sources=" << result.client_context_sources
+              << " ctx_images=" << client_context.images.size()
               << " ctx_ms=" << ctx_ms;
     if (!r.error.empty()) std::cerr << " error=" << r.error;
     std::cerr << std::endl;
@@ -2043,10 +2044,14 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     arb_state.done.store(true);
   };
 
-  auto arbiter_future = std::async(std::launch::async, [&]() {
+  const nlohmann::json user_payload = user_message_json(client_context, arbiter_message);
+  auto arbiter_future = std::async(std::launch::async, [&, user_payload]() {
     std::string stream_err;
-    const bool streamed = arbiter_->send_message(
-        conv, arbiter_message, result.turn_id, cbs, &handle->cancel, &stream_err);
+    const bool streamed = user_payload.is_string()
+        ? arbiter_->send_message(conv, user_payload.get<std::string>(), result.turn_id, cbs,
+                                 &handle->cancel, &stream_err)
+        : arbiter_->send_user_message(conv, user_payload, result.turn_id, cbs,
+                                      &handle->cancel, &stream_err);
     arb_state.streamed = streamed;
     arb_state.stream_err = std::move(stream_err);
     arb_state.done.store(true);

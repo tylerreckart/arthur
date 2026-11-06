@@ -68,6 +68,7 @@ struct DropletContent: Equatable {
   var noteTitle: String
   var noteBody: String
   var approveLabel: String
+  var lookLabel: String
   var level: Double
   var speak: Double
   var canTalk: Bool
@@ -87,6 +88,7 @@ struct DropletContent: Equatable {
     noteTitle: "",
     noteBody: "",
     approveLabel: "",
+    lookLabel: "",
     level: 0,
     speak: 0,
     canTalk: false,
@@ -157,7 +159,11 @@ struct DropletContent: Equatable {
         case .disconnected:
           subtitle = model.healthDetail
         default:
-          subtitle = "Hold the droplet to talk · \(hotkey)"
+          if !model.deskCue.isEmpty {
+            subtitle = model.deskCue
+          } else {
+            subtitle = "Hold the droplet to talk · \(hotkey)"
+          }
         }
       }
     }
@@ -184,6 +190,7 @@ struct DropletContent: Equatable {
       noteTitle: surface?.title ?? "",
       noteBody: surface?.summary ?? "",
       approveLabel: model.pendingWriteLabel,
+      lookLabel: model.screenLook ? "Look" : "",
       level: model.inputLevel,
       speak: speak,
       canTalk: model.canTalk,
@@ -216,6 +223,7 @@ struct DropletActions {
   var dismiss: () -> Void = {}
   var send: (String) -> Void = { _ in }
   var approve: () -> Void = {}
+  var look: () -> Void = {}
   var fieldFocus: (Bool) -> Void = { _ in }
   var hover: (Bool) -> Void = { _ in }
   var setAcceptsHits: (Bool) -> Void = { _ in }
@@ -594,15 +602,29 @@ private struct DropletCardBody: View {
         SpokenReply(text: content.reply)
       }
 
-      if !content.approveLabel.isEmpty {
-        Button(content.approveLabel) { session.actions.approve() }
-          .buttonStyle(.plain)
-          .font(.system(size: 13, weight: .semibold))
-          .padding(.horizontal, 12)
-          .padding(.vertical, 7)
-          .foregroundStyle(Color.black)
-          .background(Color.white.opacity(0.92), in: Capsule())
-          .accessibilityLabel(content.approveLabel)
+      if !content.approveLabel.isEmpty || !content.lookLabel.isEmpty {
+        HStack(spacing: 8) {
+          if !content.lookLabel.isEmpty {
+            Button(content.lookLabel) { session.actions.look() }
+              .buttonStyle(.plain)
+              .font(.system(size: 13, weight: .semibold))
+              .padding(.horizontal, 12)
+              .padding(.vertical, 7)
+              .foregroundStyle(Color.white.opacity(0.92))
+              .overlay(Capsule().stroke(Color.white.opacity(0.92), lineWidth: 1))
+              .accessibilityLabel("Look at the screen")
+          }
+          if !content.approveLabel.isEmpty {
+            Button(content.approveLabel) { session.actions.approve() }
+              .buttonStyle(.plain)
+              .font(.system(size: 13, weight: .semibold))
+              .padding(.horizontal, 12)
+              .padding(.vertical, 7)
+              .foregroundStyle(Color.black)
+              .background(Color.white.opacity(0.92), in: Capsule())
+              .accessibilityLabel(content.approveLabel)
+          }
+        }
       }
 
     }

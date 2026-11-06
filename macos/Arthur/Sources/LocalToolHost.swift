@@ -6,6 +6,12 @@ struct LocalToolHost {
   var act: (String, [String: Any]) -> String = { _, _ in
     "That action is not available."
   }
+  var remindersText: () -> String = {
+    "unavailable. Reminders are off. If they ask, say you cannot see them. Do not invent reminders."
+  }
+  var finderText: (String) -> String = { _ in
+    "unavailable. Finder search is off. If they ask, say you cannot look. Do not invent files."
+  }
   var calendarText: (String) -> String
 
   /// Nil when the body is a notification and the HTTP server should answer 202.
@@ -46,7 +52,19 @@ struct LocalToolHost {
         "content": [["type": "text", "text": calendarText(day)]],
         "isError": false,
       ]
-    case "calendar.move", "calendar.create", "reminders.create", "reminders.complete":
+    case "reminders.list":
+      return [
+        "content": [["type": "text", "text": remindersText()]],
+        "isError": false,
+      ]
+    case "finder.search":
+      let query = (arguments["query"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      return [
+        "content": [["type": "text", "text": finderText(query)]],
+        "isError": false,
+      ]
+    case "calendar.move", "calendar.create", "reminders.create", "reminders.complete",
+         "finder.reveal", "mail.draft", "open.url", "open.app":
       let text = act(name, arguments)
       return [
         "content": [["type": "text", "text": text]],
@@ -133,6 +151,72 @@ struct LocalToolHost {
           "confirmed": ["type": "boolean"],
         ],
         "required": ["title"],
+      ],
+    ],
+    [
+      "name": "reminders.list",
+      "description": "List open reminders on this Mac. Returns unavailable when the user has not allowed it. Do not invent reminders.",
+      "inputSchema": ["type": "object", "properties": [:]],
+    ],
+    [
+      "name": "finder.search",
+      "description": "Search file names in the user's home folder. Returns paths, not file contents. Returns unavailable when the user has not allowed it.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "query": ["type": "string", "description": "Words from the file name."],
+        ],
+        "required": ["query"],
+      ],
+    ],
+    [
+      "name": "finder.reveal",
+      "description": "Propose showing a file in Finder. Does not open it until they approve. path is an existing file in the home folder.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "path": ["type": "string"],
+          "confirmed": ["type": "boolean"],
+        ],
+        "required": ["path"],
+      ],
+    ],
+    [
+      "name": "mail.draft",
+      "description": "Propose a Mail draft. Does not create it until they approve, and never sends it. to is an email address and may be omitted.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "to": ["type": "string"],
+          "subject": ["type": "string"],
+          "body": ["type": "string"],
+          "confirmed": ["type": "boolean"],
+        ],
+        "required": ["subject"],
+      ],
+    ],
+    [
+      "name": "open.url",
+      "description": "Propose opening an http or https page. Does not open it until they approve.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "url": ["type": "string"],
+          "confirmed": ["type": "boolean"],
+        ],
+        "required": ["url"],
+      ],
+    ],
+    [
+      "name": "open.app",
+      "description": "Propose opening an app by name, such as Safari. Does not open it until they approve.",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "name": ["type": "string"],
+          "confirmed": ["type": "boolean"],
+        ],
+        "required": ["name"],
       ],
     ],
   ]

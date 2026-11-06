@@ -203,10 +203,16 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 | `{"type":"arm_approval","id"}` | The next yes or no on this device resolves a Mac write. Expires after three minutes |
 | `{"type":"clear_approval"}` | Drop that pending yes or no because the desk already resolved it |
 
-`context` is `{sources:[{name,text}]}`. Intercom prepends it to the Arbiter
-message as a private `LOCAL CONTEXT` block. It is not the heard line, and it
-is not written to the session row. Empty and malformed context is ignored.
-Clients that never send it are unchanged.
+`context` is `{sources:[{name,text}], images:[{media_type,data}]}`. `images`
+is optional. Each image is base64 with no `data:` prefix, and `media_type` is
+`image/jpeg`, `image/png`, `image/gif`, or `image/webp`. At most two images
+are kept. Intercom prepends `sources` to the Arbiter message as a private
+`LOCAL CONTEXT` block. When images are present the message is sent as content
+parts (the text part, then the images) instead of a string. Images are not
+copied into the text block, the heard line, or the session row. Empty and
+malformed context is ignored. Clients that never send it are unchanged. An
+`end` frame may carry the same `context` object; otherwise the remembered
+context frame is used.
 
 | Server | Meaning |
 |--------|---------|
