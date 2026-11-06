@@ -86,6 +86,8 @@ bool SessionStore::open(std::string* err) {
            "pending_intent TEXT NOT NULL DEFAULT '';",
            "ALTER TABLE device_sessions ADD COLUMN "
            "pending_at INTEGER NOT NULL DEFAULT 0;",
+           "ALTER TABLE device_sessions ADD COLUMN "
+           "person_id TEXT NOT NULL DEFAULT '';",
        }) {
     errmsg = nullptr;
     if (sqlite3_exec(db_, migration, nullptr, nullptr, &errmsg) != SQLITE_OK) {
@@ -128,6 +130,28 @@ bool SessionStore::open(std::string* err) {
       "CREATE TABLE IF NOT EXISTS proactive_marks ("
       "  key TEXT PRIMARY KEY,"
       "  day INTEGER NOT NULL"
+      ");"
+      "CREATE TABLE IF NOT EXISTS people ("
+      "  person_id TEXT PRIMARY KEY,"
+      "  name TEXT NOT NULL,"
+      "  calendar TEXT NOT NULL DEFAULT '',"
+      "  created_at INTEGER NOT NULL"
+      ");"
+      "CREATE TABLE IF NOT EXISTS voiceprints ("
+      "  person_id TEXT NOT NULL,"
+      "  phrase INTEGER NOT NULL,"
+      "  embedding BLOB NOT NULL,"
+      "  PRIMARY KEY (person_id, phrase)"
+      ");"
+      "CREATE TABLE IF NOT EXISTS person_scopes ("
+      "  device_id TEXT NOT NULL,"
+      "  person_id TEXT NOT NULL,"
+      "  last_user TEXT NOT NULL DEFAULT '',"
+      "  last_spoken TEXT NOT NULL DEFAULT '',"
+      "  last_card TEXT NOT NULL DEFAULT '',"
+      "  last_fast_path_kind TEXT NOT NULL DEFAULT '',"
+      "  last_fast_path_request TEXT NOT NULL DEFAULT '',"
+      "  PRIMARY KEY (device_id, person_id)"
       ");";
   errmsg = nullptr;
   if (sqlite3_exec(db_, speak_sql, nullptr, nullptr, &errmsg) != SQLITE_OK) {
@@ -157,7 +181,7 @@ std::optional<DeviceSession> SessionStore::get(const std::string& device_id) con
   const char* sql =
       "SELECT device_id, conversation_id, last_turn_id, last_user, last_spoken, "
       "last_fast_path_kind, last_fast_path_request, last_card, pending_intent, "
-      "pending_at, updated_at FROM device_sessions WHERE device_id = ?";
+      "pending_at, updated_at, person_id FROM device_sessions WHERE device_id = ?";
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     return std::nullopt;
   }
@@ -183,6 +207,8 @@ std::optional<DeviceSession> SessionStore::get(const std::string& device_id) con
     s.pending_intent = pending ? reinterpret_cast<const char*>(pending) : "";
     s.pending_at = sqlite3_column_int64(stmt, 9);
     s.updated_at = sqlite3_column_int64(stmt, 10);
+    const unsigned char* person = sqlite3_column_text(stmt, 11);
+    s.person_id = person ? reinterpret_cast<const char*>(person) : "";
     out = std::move(s);
   }
   sqlite3_finalize(stmt);
@@ -197,7 +223,7 @@ std::vector<DeviceSession> SessionStore::list() const {
   const char* sql =
       "SELECT device_id, conversation_id, last_turn_id, last_user, last_spoken, "
       "last_fast_path_kind, last_fast_path_request, last_card, pending_intent, "
-      "pending_at, updated_at FROM device_sessions ORDER BY device_id";
+      "pending_at, updated_at, person_id FROM device_sessions ORDER BY device_id";
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     return out;
   }
@@ -221,6 +247,8 @@ std::vector<DeviceSession> SessionStore::list() const {
     s.pending_intent = pending ? reinterpret_cast<const char*>(pending) : "";
     s.pending_at = sqlite3_column_int64(stmt, 9);
     s.updated_at = sqlite3_column_int64(stmt, 10);
+    const unsigned char* person = sqlite3_column_text(stmt, 11);
+    s.person_id = person ? reinterpret_cast<const char*>(person) : "";
     out.push_back(std::move(s));
   }
   sqlite3_finalize(stmt);
@@ -237,8 +265,8 @@ bool SessionStore::upsert(const DeviceSession& session, std::string* err) {
   const char* sql =
       "INSERT INTO device_sessions(device_id, conversation_id, last_turn_id, "
       "last_user, last_spoken, last_fast_path_kind, last_fast_path_request, "
-      "last_card, pending_intent, pending_at, updated_at) "
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+      "last_card, pending_intent, pending_at, updated_at, person_id) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
       "ON CONFLICT(device_id) DO UPDATE SET "
       "conversation_id=excluded.conversation_id, "
       "last_turn_id=excluded.last_turn_id, "
@@ -249,7 +277,8 @@ bool SessionStore::upsert(const DeviceSession& session, std::string* err) {
       "last_card=excluded.last_card, "
       "pending_intent=excluded.pending_intent, "
       "pending_at=excluded.pending_at, "
-      "updated_at=excluded.updated_at";
+      "updated_at=excluded.updated_at, "
+      "person_id=excluded.person_id";
   if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
     if (err) *err = sqlite3_errmsg(db_);
     return false;
@@ -268,6 +297,7 @@ bool SessionStore::upsert(const DeviceSession& session, std::string* err) {
   sqlite3_bind_text(stmt, 9, session.pending_intent.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_int64(stmt, 10, session.pending_at);
   sqlite3_bind_int64(stmt, 11, ts);
+  sqlite3_bind_text(stmt, 12, session.person_id.c_str(), -1, SQLITE_TRANSIENT);
   const int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
   if (rc != SQLITE_DONE) {
@@ -544,6 +574,230 @@ bool SessionStore::mark_day(const std::string& key, int day, std::string* err) {
   }
   sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_int(stmt, 2, day);
+  const int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  return true;
+}
+
+std::optional<HouseholdPerson> SessionStore::enroll_person(const std::string& person_id,
+                                                             const std::string& name,
+                                                             const std::string& calendar,
+                                                             std::string* err) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_) {
+    if (err) *err = "session store not open";
+    return std::nullopt;
+  }
+  if (person_id.empty() || name.empty()) {
+    if (err) *err = "missing person";
+    return std::nullopt;
+  }
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "INSERT INTO people(person_id, name, calendar, created_at) VALUES(?,?,?,?)";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return std::nullopt;
+  }
+  sqlite3_bind_text(stmt, 1, person_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 2, name.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 3, calendar.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(stmt, 4, now_unix());
+  const int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return std::nullopt;
+  }
+  HouseholdPerson person;
+  person.person_id = person_id;
+  person.name = name;
+  person.calendar = calendar;
+  return person;
+}
+
+std::vector<HouseholdPerson> SessionStore::list_people() const {
+  std::lock_guard<std::mutex> lk(mu_);
+  std::vector<HouseholdPerson> out;
+  if (!db_) return out;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "SELECT p.person_id, p.name, p.calendar, "
+      "(SELECT COUNT(*) FROM voiceprints v WHERE v.person_id = p.person_id) "
+      "FROM people p ORDER BY p.created_at, p.person_id";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return out;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    HouseholdPerson person;
+    person.person_id = column_text(stmt, 0);
+    person.name = column_text(stmt, 1);
+    person.calendar = column_text(stmt, 2);
+    person.phrases = sqlite3_column_int(stmt, 3);
+    out.push_back(std::move(person));
+  }
+  sqlite3_finalize(stmt);
+  return out;
+}
+
+bool SessionStore::remove_person(const std::string& person_id, std::string* err) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_) {
+    if (err) *err = "session store not open";
+    return false;
+  }
+  if (person_id.empty()) return false;
+  sqlite3_stmt* voices = nullptr;
+  if (sqlite3_prepare_v2(db_, "DELETE FROM voiceprints WHERE person_id = ?", -1, &voices,
+                         nullptr) != SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  sqlite3_bind_text(voices, 1, person_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_step(voices);
+  sqlite3_finalize(voices);
+  sqlite3_stmt* scopes = nullptr;
+  if (sqlite3_prepare_v2(db_, "DELETE FROM person_scopes WHERE person_id = ?", -1, &scopes,
+                         nullptr) != SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  sqlite3_bind_text(scopes, 1, person_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_step(scopes);
+  sqlite3_finalize(scopes);
+  sqlite3_stmt* stmt = nullptr;
+  if (sqlite3_prepare_v2(db_, "DELETE FROM people WHERE person_id = ?", -1, &stmt, nullptr) !=
+      SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  sqlite3_bind_text(stmt, 1, person_id.c_str(), -1, SQLITE_TRANSIENT);
+  const int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  return true;
+}
+
+bool SessionStore::put_voiceprint(const std::string& person_id, int phrase,
+                                  const float* embedding, int dims, std::string* err) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_) {
+    if (err) *err = "session store not open";
+    return false;
+  }
+  if (person_id.empty() || !embedding || dims <= 0 || phrase < 0) {
+    if (err) *err = "missing voiceprint";
+    return false;
+  }
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "INSERT INTO voiceprints(person_id, phrase, embedding) VALUES(?,?,?) "
+      "ON CONFLICT(person_id, phrase) DO UPDATE SET embedding = excluded.embedding";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  sqlite3_bind_text(stmt, 1, person_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(stmt, 2, phrase);
+  sqlite3_bind_blob(stmt, 3, embedding, dims * static_cast<int>(sizeof(float)),
+                    SQLITE_TRANSIENT);
+  const int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_DONE) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  return true;
+}
+
+std::vector<StoredVoice> SessionStore::list_voices() const {
+  std::lock_guard<std::mutex> lk(mu_);
+  std::vector<StoredVoice> out;
+  if (!db_) return out;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "SELECT v.person_id, p.name, v.phrase, v.embedding "
+      "FROM voiceprints v JOIN people p ON p.person_id = v.person_id "
+      "ORDER BY v.person_id, v.phrase";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return out;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    StoredVoice voice;
+    voice.person_id = column_text(stmt, 0);
+    voice.name = column_text(stmt, 1);
+    voice.phrase = sqlite3_column_int(stmt, 2);
+    const auto* blob = static_cast<const float*>(sqlite3_column_blob(stmt, 3));
+    const int bytes = sqlite3_column_bytes(stmt, 3);
+    if (blob && bytes > 0 && bytes % static_cast<int>(sizeof(float)) == 0) {
+      voice.embedding.assign(blob, blob + bytes / static_cast<int>(sizeof(float)));
+    }
+    out.push_back(std::move(voice));
+  }
+  sqlite3_finalize(stmt);
+  return out;
+}
+
+std::optional<PersonScope> SessionStore::get_scope(const std::string& device_id,
+                                                   const std::string& person_id) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_ || device_id.empty() || person_id.empty()) return std::nullopt;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "SELECT device_id, person_id, last_user, last_spoken, last_card, "
+      "last_fast_path_kind, last_fast_path_request FROM person_scopes "
+      "WHERE device_id = ? AND person_id = ?";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return std::nullopt;
+  sqlite3_bind_text(stmt, 1, device_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 2, person_id.c_str(), -1, SQLITE_TRANSIENT);
+  std::optional<PersonScope> out;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    PersonScope scope;
+    scope.device_id = column_text(stmt, 0);
+    scope.person_id = column_text(stmt, 1);
+    scope.last_user = column_text(stmt, 2);
+    scope.last_spoken = column_text(stmt, 3);
+    scope.last_card = column_text(stmt, 4);
+    scope.last_fast_path_kind = column_text(stmt, 5);
+    scope.last_fast_path_request = column_text(stmt, 6);
+    out = std::move(scope);
+  }
+  sqlite3_finalize(stmt);
+  return out;
+}
+
+bool SessionStore::upsert_scope(const PersonScope& scope, std::string* err) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!db_) {
+    if (err) *err = "session store not open";
+    return false;
+  }
+  if (scope.device_id.empty() || scope.person_id.empty()) {
+    if (err) *err = "missing person scope";
+    return false;
+  }
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql =
+      "INSERT INTO person_scopes(device_id, person_id, last_user, last_spoken, last_card, "
+      "last_fast_path_kind, last_fast_path_request) VALUES(?,?,?,?,?,?,?) "
+      "ON CONFLICT(device_id, person_id) DO UPDATE SET "
+      "last_user=excluded.last_user, last_spoken=excluded.last_spoken, "
+      "last_card=excluded.last_card, last_fast_path_kind=excluded.last_fast_path_kind, "
+      "last_fast_path_request=excluded.last_fast_path_request";
+  if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    if (err) *err = sqlite3_errmsg(db_);
+    return false;
+  }
+  sqlite3_bind_text(stmt, 1, scope.device_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 2, scope.person_id.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 3, scope.last_user.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 4, scope.last_spoken.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 5, scope.last_card.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 6, scope.last_fast_path_kind.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 7, scope.last_fast_path_request.c_str(), -1, SQLITE_TRANSIENT);
   const int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
   if (rc != SQLITE_DONE) {

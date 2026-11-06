@@ -458,6 +458,42 @@ device: a 70 Hz high-pass filter, a gentle 2.6 kHz presence lift, envelope
 compression, makeup gain, and a minus-one-decibel limiter. All parameters are
 under `kokoro.dsp`; set `enabled` to `false` for a bit-exact bypass.
 
+## Household voices
+
+Enrollment is server-side. The hallway firmware is unchanged.
+
+`GET /v1/household/people` lists `{id, name, calendar, phrases}`. It does not
+return voiceprints.
+
+`POST /v1/household/people` with `{"name":"Ada","calendar":"Ada"}` creates a
+person. `calendar` is the EventKit calendar title to prefer for that person.
+It may be empty.
+
+`POST /v1/household/people/:id/voice` with
+`{"pcm":"<base64 s16le mono>","sample_rate":24000,"phrase":0}` stores phrase
+0, 1, or 2. Sending the same phrase again replaces it. The daemon keeps a
+short voiceprint, not the audio. Three phrases are required before a voice
+can be named.
+
+`DELETE /v1/household/people/:id` removes the person, their prints, and their
+per-person follow-up memory.
+
+These routes use the same device bearer token and `X-Device-Id` as
+`POST /v1/home/event`.
+
+After a voice turn is transcribed, the socket may emit
+`{"type":"speaker","id":"pabcd1234","name":"Ada","confident":true}`.
+`confident` false has an empty id and name. The desk shows the name on the
+user line only when confident. A typed turn has no speaker event.
+
+The Mac may send the household `calendar` source plus one `cal-<person id>`
+source per enrolled calendar. Intercom keeps only the confident speaker's
+source, and drops every `cal-*` source when it is not sure. Lights and timers
+stay on the fast path for anyone in the room. Voiceprints, names, and
+calendar text are not written into `last_user`, `heard`, or the session
+transcript. Follow-up memory for a confident speaker is stored beside the
+device session so one person's card does not become the household's.
+
 ## Speak-back (scheduled reminders)
 
 When `speakback.enabled` is true (default), Intercom subscribes to Arbiter's

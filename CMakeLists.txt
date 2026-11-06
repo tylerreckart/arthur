@@ -55,6 +55,7 @@ add_executable(intercom
   src/local_context.cpp
   src/approval.cpp
   src/turn_pipeline.cpp
+  src/voiceprint.cpp
   src/http_server.cpp
   src/ws.cpp
   src/util.cpp
@@ -213,6 +214,7 @@ add_test(NAME test_surface COMMAND test_surface)
 add_executable(test_sentence_tts
   tests/test_sentence_tts.cpp
   src/turn_pipeline.cpp
+  src/voiceprint.cpp
   src/speakable.cpp
   src/util.cpp
   src/session_store.cpp
@@ -254,6 +256,7 @@ add_executable(test_ws_stream
   src/audio_dsp.cpp
   src/config.cpp
   src/turn_pipeline.cpp
+  src/voiceprint.cpp
   src/speakable.cpp
   src/util.cpp
   src/session_store.cpp
@@ -305,6 +308,7 @@ add_executable(test_speakback
   src/audio_dsp.cpp
   src/config.cpp
   src/turn_pipeline.cpp
+  src/voiceprint.cpp
   src/fast_path.cpp
   src/home_intent.cpp
   src/home_client.cpp
@@ -332,6 +336,21 @@ if(APPLE)
   target_compile_definitions(test_speakback PRIVATE CPPHTTPLIB_USE_POLL)
 endif()
 add_test(NAME test_speakback COMMAND test_speakback)
+
+add_executable(test_voiceprint
+  tests/test_voiceprint.cpp
+  src/voiceprint.cpp
+  src/session_store.cpp
+  src/util.cpp
+)
+target_include_directories(test_voiceprint PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(test_voiceprint PRIVATE
+  nlohmann_json::nlohmann_json
+  SQLite3::SQLite3
+)
+add_test(NAME test_voiceprint COMMAND test_voiceprint)
 
 add_executable(test_speak_queue tests/test_speak_queue.cpp)
 target_include_directories(test_speak_queue PRIVATE

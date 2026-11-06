@@ -24,6 +24,34 @@ struct DeviceSession {
   std::string pending_intent;
   std::int64_t pending_at = 0;
   std::int64_t updated_at = 0;
+  // Who spoke last. Empty is the household. Follow-up memory for a person
+  // lives in person scope, not in these household fields.
+  std::string person_id;
+};
+
+struct HouseholdPerson {
+  std::string person_id;
+  std::string name;
+  std::string calendar;
+  int phrases = 0;
+};
+
+// Per-person follow-up memory. The device row stays the household session.
+struct PersonScope {
+  std::string device_id;
+  std::string person_id;
+  std::string last_user;
+  std::string last_spoken;
+  std::string last_card;
+  std::string last_fast_path_kind;
+  std::string last_fast_path_request;
+};
+
+struct StoredVoice {
+  std::string person_id;
+  std::string name;
+  int phrase = 0;
+  std::vector<float> embedding;
 };
 
 // One unsent speak-back utterance. `id` is the SQLite row.
@@ -78,6 +106,21 @@ class SessionStore {
   // Civil day (YYYYMMDD) a proactive utterance was spoken. 0 if never.
   bool mark_day(const std::string& key, int day, std::string* err);
   int marked_day(const std::string& key) const;
+
+  // Enrollment stores a name and voiceprints, never the audio.
+  std::optional<HouseholdPerson> enroll_person(const std::string& person_id,
+                                               const std::string& name,
+                                               const std::string& calendar,
+                                               std::string* err);
+  std::vector<HouseholdPerson> list_people() const;
+  bool remove_person(const std::string& person_id, std::string* err);
+  bool put_voiceprint(const std::string& person_id, int phrase,
+                      const float* embedding, int dims, std::string* err);
+  std::vector<StoredVoice> list_voices() const;
+
+  std::optional<PersonScope> get_scope(const std::string& device_id,
+                                       const std::string& person_id) const;
+  bool upsert_scope(const PersonScope& scope, std::string* err);
   std::vector<SpeakbackItem> list_speakback(const std::string& device_id) const;
   std::size_t count_speakback(const std::string& device_id) const;
   bool remove_speakback(std::int64_t id, std::string* err);

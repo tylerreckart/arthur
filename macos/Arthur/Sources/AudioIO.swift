@@ -38,6 +38,10 @@ final class AudioIO: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
   private let player = AVAudioPlayerNode()
   private var capturing = false
   private var leftover = Data()
+  private let clipLock = NSLock()
+  private var clipSink = false
+  private var clipBuffer = Data()
+  private var clipHandler: ((Data?) -> Void)?
   /// Frames queued on the player since the last interrupt. Speech text uses
   /// this with `playedFrames()` so words stay with the voice.
   private(set) var scheduledFrames: AVAudioFramePosition = 0
@@ -219,6 +223,55 @@ final class AudioIO: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     }
   }
 
+  /// A short enrollment clip. Fails if a turn already owns the microphone.
+  /// Wake listening is paused for the clip and is not restarted here.
+  /// The samples are not a turn.
+  func recordClip(_ handler: @escaping (Data?) -> Void) {
+    setWakeWanted(false)
+    if capturing {
+      DispatchQueue.main.async { handler(nil) }
+      return
+    }
+    clipLock.lock()
+    clipBuffer.removeAll(keepingCapacity: true)
+    clipHandler = handler
+    clipSink = true
+    clipLock.unlock()
+    do {
+      try startCapture()
+    } catch {
+      clipLock.lock()
+      clipSink = false
+      clipHandler = nil
+      clipLock.unlock()
+      DispatchQueue.main.async { handler(nil) }
+      return
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3.2) { [weak self] in
+      self?.finishClip()
+    }
+  }
+
+  private func finishClip() {
+    clipLock.lock()
+    let handler = clipHandler
+    clipHandler = nil
+    let data = clipBuffer
+    clipBuffer.removeAll(keepingCapacity: true)
+    clipLock.unlock()
+    guard let handler else { return }
+    stopCapture()
+    clipLock.lock()
+    clipSink = false
+    clipLock.unlock()
+    let clip = data.isEmpty ? nil : data
+    if Thread.isMainThread {
+      handler(clip)
+    } else {
+      DispatchQueue.main.async { handler(clip) }
+    }
+  }
+
   func stopCapture() {
     guard capturing else { return }
     capturing = false
@@ -269,6 +322,11 @@ final class AudioIO: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
       return
     }
     guard let pcm = pcm16(from: buffer) else { return }
+    clipLock.lock()
+    let sinking = clipSink
+    if sinking { clipBuffer.append(pcm) }
+    clipLock.unlock()
+    if sinking { return }
     onCapture?(pcm)
   }
 

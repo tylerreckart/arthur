@@ -6,6 +6,7 @@
 #include "intercom/speak_queue.hpp"
 #include "intercom/surface.hpp"
 #include "intercom/util.hpp"
+#include "intercom/voiceprint.hpp"
 #include "intercom/warm.hpp"
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <future>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <set>
 #include <string_view>
@@ -1448,8 +1450,10 @@ TurnResult TurnPipeline::run_utterance(const std::string& device_id,
               << " error=" << result.error << std::endl;
     return result;
   }
+  SpeakerIdentity speaker = identify_pcm(pcm.data(), pcm.size(), sample_rate, channels);
   return run_text_utterance(
-      device_id, transcript, sink, std::move(turn_id), stt_ms, std::move(client_context));
+      device_id, transcript, sink, std::move(turn_id), stt_ms, std::move(client_context),
+      std::move(speaker));
 }
 
 TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
@@ -1457,7 +1461,8 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
                                             AudioSink& sink,
                                             std::string turn_id,
                                             int stt_ms,
-                                            ClientContext client_context) {
+                                            ClientContext client_context,
+                                            SpeakerIdentity speaker) {
   TurnResult result;
   result.turn_id = turn_id.empty() ? make_turn_id() : std::move(turn_id);
   result.transcript = transcript;
@@ -1502,7 +1507,9 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
               << " first_answer_ms=" << first_answer_ms
               << " ctx_sources=" << result.client_context_sources
               << " ctx_images=" << client_context.images.size()
-              << " ctx_ms=" << ctx_ms;
+              << " ctx_ms=" << ctx_ms
+              << " speaker=" << (speaker.confident ? speaker.person_id : "household")
+              << " speaker_ms=" << speaker.score_ms;
     if (!r.error.empty()) std::cerr << " error=" << r.error;
     std::cerr << std::endl;
     return r;
@@ -1519,7 +1526,39 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
   }
 
   std::string routing_transcript = result.transcript;
-  const auto prior_session = sessions_->get(device_id);
+  auto prior_session = sessions_->get(device_id);
+  const auto household_memory = prior_session;
+  if (speaker.confident) {
+    DeviceSession scoped = prior_session.value_or(DeviceSession{});
+    scoped.device_id = device_id;
+    scoped.last_user.clear();
+    scoped.last_spoken.clear();
+    scoped.last_card.clear();
+    scoped.last_fast_path_kind.clear();
+    scoped.last_fast_path_request.clear();
+    if (auto saved = sessions_->get_scope(device_id, speaker.person_id)) {
+      scoped.last_user = saved->last_user;
+      scoped.last_spoken = saved->last_spoken;
+      scoped.last_card = saved->last_card;
+      scoped.last_fast_path_kind = saved->last_fast_path_kind;
+      scoped.last_fast_path_request = saved->last_fast_path_request;
+    }
+    if (household_memory) {
+      scoped.conversation_id = household_memory->conversation_id;
+      scoped.pending_intent = household_memory->pending_intent;
+      scoped.pending_at = household_memory->pending_at;
+      scoped.last_turn_id = household_memory->last_turn_id;
+    }
+    prior_session = scoped;
+  }
+  if (speaker.confident || speaker.score_ms >= 0) {
+    nlohmann::json named = {
+        {"id", speaker.confident ? speaker.person_id : ""},
+        {"name", speaker.confident ? speaker.name : ""},
+        {"confident", speaker.confident},
+    };
+    sink.event("speaker", named.dump());
+  }
   std::string carried_card = prior_session ? prior_session->last_card : "";
   auto remember_surface = [&](const nlohmann::json& surface) {
     carried_card = merge_card_state(carried_card, surface);
@@ -1604,6 +1643,39 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     if (s.updated_at <= 0) s.updated_at = now_unix();
     sessions_->upsert(s, &err);
   };
+  auto keep_session = [&](DeviceSession s) {
+    if (speaker.confident) {
+      PersonScope scope;
+      scope.device_id = device_id;
+      scope.person_id = speaker.person_id;
+      scope.last_user = s.last_user;
+      scope.last_spoken = s.last_spoken;
+      scope.last_card = s.last_card;
+      scope.last_fast_path_kind = s.last_fast_path_kind;
+      scope.last_fast_path_request = s.last_fast_path_request;
+      sessions_->upsert_scope(scope, nullptr);
+      if (household_memory) {
+        s.last_user = household_memory->last_user;
+        s.last_spoken = household_memory->last_spoken;
+        s.last_card = household_memory->last_card;
+        s.last_fast_path_kind = household_memory->last_fast_path_kind;
+        s.last_fast_path_request = household_memory->last_fast_path_request;
+        if (household_memory->conversation_id > 0) {
+          s.conversation_id = household_memory->conversation_id;
+        }
+      } else {
+        s.last_user.clear();
+        s.last_spoken.clear();
+        s.last_card.clear();
+        s.last_fast_path_kind.clear();
+        s.last_fast_path_request.clear();
+      }
+      s.person_id = speaker.person_id;
+    } else {
+      s.person_id.clear();
+    }
+    save_session(s);
+  };
 
   if (prior_session && is_approval_intent(prior_session->pending_intent) &&
       prior_session->pending_at > 0) {
@@ -1635,7 +1707,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       s.pending_intent.clear();
       s.pending_at = 0;
       s.updated_at = now_unix();
-      save_session(s);
+      keep_session(s);
       return finish(result);
     }
     {
@@ -1704,7 +1776,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
           s.pending_at = prior_session->pending_at;
         }
         s.updated_at = now_unix();
-        save_session(s);
+        keep_session(s);
       }
       return finish(result);
       }
@@ -1812,7 +1884,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
       s.last_fast_path_request = routing_transcript;
       s.last_card = carried_card;
       s.updated_at = now_unix();
-      save_session(s);
+      keep_session(s);
     }
     return finish(result);
   }
@@ -1887,7 +1959,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
         s.pending_at = now_unix();
       }
       s.updated_at = now_unix();
-      save_session(s);
+      keep_session(s);
     }
     return finish(result);
   }
@@ -1936,7 +2008,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
         s.pending_at = now_unix();
       }
       s.updated_at = now_unix();
-      save_session(s);
+      keep_session(s);
     }
     return finish(result);
   }
@@ -1959,6 +2031,12 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
 
   {
     const auto ctx_t0 = std::chrono::steady_clock::now();
+    client_context = context_for_speaker(std::move(client_context), speaker);
+    // Typed turns have no voice. The agent rule covers them. A note on every
+    // text turn would change replies the desk already sends without audio.
+    if (speaker.score_ms >= 0) {
+      arbiter_message = speaker_note(speaker) + arbiter_message;
+    }
     if (!client_context.sources.empty()) {
       arbiter_message = with_local_context(client_context, arbiter_message);
     }
@@ -2281,7 +2359,7 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     s.last_fast_path_request = card_follow_request;
   }
   s.updated_at = now_unix();
-  save_session(s);
+  keep_session(s);
 
   if (!arb_state.streamed) {
     result.error =
@@ -2294,6 +2372,142 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     result.error = arb_state.done_err.empty() ? "arbiter done ok=false" : arb_state.done_err;
   }
   return finish(result);
+}
+
+std::vector<EnrolledSpeaker> TurnPipeline::enrolled_speakers() const {
+  std::vector<EnrolledSpeaker> out;
+  if (!sessions_) return out;
+  for (const auto& row : sessions_->list_voices()) {
+    if (row.embedding.size() != static_cast<std::size_t>(kVoiceDims)) continue;
+    auto it = std::find_if(out.begin(), out.end(), [&](const EnrolledSpeaker& speaker) {
+      return speaker.person_id == row.person_id;
+    });
+    if (it == out.end()) {
+      out.push_back(EnrolledSpeaker{row.person_id, row.name, {}});
+      it = std::prev(out.end());
+    }
+    Voiceprint print;
+    for (int i = 0; i < kVoiceDims; ++i) print.v[i] = row.embedding[static_cast<std::size_t>(i)];
+    it->prints.push_back(print);
+  }
+  return out;
+}
+
+SpeakerIdentity TurnPipeline::identify_pcm(const std::uint8_t* pcm, std::size_t bytes,
+                                           int sample_rate, int channels) {
+  const auto t0 = std::chrono::steady_clock::now();
+  const Voiceprint print = embed_pcm(pcm, bytes, sample_rate, channels);
+  SpeakerIdentity speaker = identify_speaker(enrolled_speakers(), print);
+  speaker.score_ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now() - t0)
+                                          .count());
+  return speaker;
+}
+
+namespace {
+
+std::string clean_person_name(std::string_view raw) {
+  std::string out;
+  for (unsigned char c : raw) {
+    if (out.size() >= 40) break;
+    if (std::isalnum(c) || c == ' ' || c == '\'' || c == '-' || c == '.') {
+      if (c == ' ' && (out.empty() || out.back() == ' ')) continue;
+      out.push_back(static_cast<char>(c));
+    }
+  }
+  while (!out.empty() && out.back() == ' ') out.pop_back();
+  return out;
+}
+
+std::string clean_calendar_title(std::string_view raw) {
+  std::string out;
+  for (unsigned char c : raw) {
+    if (out.size() >= 80) break;
+    if (c < 32) continue;
+    out.push_back(static_cast<char>(c));
+  }
+  while (!out.empty() && out.back() == ' ') out.pop_back();
+  return out;
+}
+
+std::string make_person_id() {
+  const std::string hex = make_turn_id();
+  std::string id = "p";
+  for (unsigned char c : hex) {
+    if (!std::isxdigit(c)) continue;
+    id.push_back(static_cast<char>(std::tolower(c)));
+    if (id.size() == 9) break;
+  }
+  while (id.size() < 9) id.push_back('0');
+  return id;
+}
+
+}  // namespace
+
+std::vector<HouseholdPerson> TurnPipeline::list_people() const {
+  if (!sessions_) return {};
+  return sessions_->list_people();
+}
+
+std::optional<HouseholdPerson> TurnPipeline::enroll_person(const std::string& name,
+                                                          const std::string& calendar,
+                                                          std::string* err) {
+  if (!sessions_) {
+    if (err) *err = "session store not open";
+    return std::nullopt;
+  }
+  const std::string clean = clean_person_name(name);
+  if (clean.empty()) {
+    if (err) *err = "missing name";
+    return std::nullopt;
+  }
+  const std::string title = clean_calendar_title(calendar);
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    auto person = sessions_->enroll_person(make_person_id(), clean, title, err);
+    if (person) return person;
+  }
+  return std::nullopt;
+}
+
+bool TurnPipeline::enroll_voice(const std::string& person_id, int phrase,
+                                const std::uint8_t* pcm, std::size_t bytes, int sample_rate,
+                                std::string* err) {
+  if (!sessions_) {
+    if (err) *err = "session store not open";
+    return false;
+  }
+  if (phrase < 0 || phrase >= kEnrollmentPhrases) {
+    if (err) *err = "phrase out of range";
+    return false;
+  }
+  if (!pcm || bytes == 0 || bytes > 2'000'000) {
+    if (err) *err = "audio out of range";
+    return false;
+  }
+  bool known = false;
+  for (const auto& person : sessions_->list_people()) {
+    if (person.person_id == person_id) known = true;
+  }
+  if (!known) {
+    if (err) *err = "unknown person";
+    return false;
+  }
+  const Voiceprint print = embed_pcm(pcm, bytes, sample_rate, 1);
+  double energy = 0;
+  for (int i = 0; i < kVoiceDims; ++i) energy += std::fabs(print.v[i]);
+  if (energy < 1e-4) {
+    if (err) *err = "could not hear a voice";
+    return false;
+  }
+  return sessions_->put_voiceprint(person_id, phrase, print.v, kVoiceDims, err);
+}
+
+bool TurnPipeline::remove_person(const std::string& person_id, std::string* err) {
+  if (!sessions_) {
+    if (err) *err = "session store not open";
+    return false;
+  }
+  return sessions_->remove_person(person_id, err);
 }
 
 }  // namespace intercom
