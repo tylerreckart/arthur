@@ -1,5 +1,6 @@
 #pragma once
 
+#include "intercom/approval.hpp"
 #include "intercom/arbiter_client.hpp"
 #include "intercom/local_context.hpp"
 #include "intercom/config.hpp"
@@ -30,9 +31,8 @@ class AudioSink {
   // Return false to abort synthesis / pipeline.
   virtual bool write(const std::uint8_t* data, std::size_t len) = 0;
   // Optional side-channel (WS JSON). HTTP and tests ignore it.
-  // type is "heard", "said", "working", "status", "forming", or "surface";
-  // value is text, a tool name, or (for surface) a JSON object string
-  // `{turn_id, surface}`.
+  // type is "heard", "said", "working", "status", "forming", "surface",
+  // or "approval"; value is text, a tool name, or a JSON object string.
   virtual void event(const char* type, const std::string& value) {
     (void)type;
     (void)value;
@@ -103,6 +103,11 @@ class TurnPipeline {
                            std::int64_t conversation_id,
                            std::string* err);
 
+  // The next yes or no on this device resolves the Mac proposal. A later
+  // session write from the turn that armed it must not clear the marker.
+  bool arm_approval(const std::string& device_id, const std::string& id);
+  bool clear_approval(const std::string& device_id);
+
   // Create per-device conversations and send PREFIX WARM so a local model
   // caches Arthur's constitution before the first PTT. Best-effort.
   void warm_prefix();
@@ -133,6 +138,7 @@ class TurnPipeline {
   FastPath fast_path_;
 
   mutable std::mutex turns_mu_;
+  std::mutex approval_mu_;
   std::unordered_map<std::string, std::shared_ptr<TurnHandle>> turns_;
 };
 

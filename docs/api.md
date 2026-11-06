@@ -200,6 +200,8 @@ Handshake: `GET /v1/stream` with `Upgrade: websocket`, `Authorization: Bearer
 | `{"type":"text","text":"…"}` | Skip STT. Optional `context` is attached to that turn and is not the heard line |
 | `{"type":"context","context":{…}}` | Remember desk context for the next utterance on this socket. Replaced by a later context frame, and consumed when the turn starts |
 | `{"type":"cancel"}` | Cancel the current turn if one is active |
+| `{"type":"arm_approval","id"}` | The next yes or no on this device resolves a Mac write. Expires after three minutes |
+| `{"type":"clear_approval"}` | Drop that pending yes or no because the desk already resolved it |
 
 `context` is `{sources:[{name,text}]}`. Intercom prepends it to the Arbiter
 message as a private `LOCAL CONTEXT` block. It is not the heard line, and it
@@ -220,6 +222,7 @@ Clients that never send it are unchanged.
 | `{"type":"said","text"}` | Sentence about to be spoken (same text Kokoro hears) |
 | `{"type":"forming","text"}` | Unspoken answer prefix as tokens arrive (~12 Hz, desk presence) |
 | `{"type":"surface","turn_id","surface"}` | Versioned desk card for this turn. Voice-only devices ignore it. |
+| `{"type":"approval","id","granted"}` | The user accepted or refused a pending Mac write. `reason` is `replaced` when a later request retires it. Voice-only devices still hear the short reply |
 
 Turn execution runs independently of the socket reader, so `cancel`, ping, and
 close frames remain responsive during STT, Arbiter work, and TTS. The turn is

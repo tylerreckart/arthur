@@ -53,6 +53,7 @@ add_executable(intercom
   src/http_fetch.cpp
   src/clock.cpp
   src/local_context.cpp
+  src/approval.cpp
   src/turn_pipeline.cpp
   src/http_server.cpp
   src/ws.cpp
@@ -226,6 +227,7 @@ add_executable(test_sentence_tts
   src/http_fetch.cpp
   src/clock.cpp
   src/local_context.cpp
+  src/approval.cpp
   src/arbiter_client.cpp
   src/filler_client.cpp
 )
@@ -266,6 +268,7 @@ add_executable(test_ws_stream
   src/http_fetch.cpp
   src/clock.cpp
   src/local_context.cpp
+  src/approval.cpp
   src/arbiter_client.cpp
   src/filler_client.cpp
   src/device_hub.cpp
@@ -297,6 +300,7 @@ add_executable(test_speakback
   src/speakable.cpp
   src/clock.cpp
   src/local_context.cpp
+  src/approval.cpp
   src/ws.cpp
   src/audio_dsp.cpp
   src/config.cpp
@@ -338,6 +342,15 @@ target_include_directories(test_local_context PRIVATE
 )
 target_link_libraries(test_local_context PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME test_local_context COMMAND test_local_context)
+
+add_executable(test_approval
+  tests/test_approval.cpp
+  src/approval.cpp
+)
+target_include_directories(test_approval PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME test_approval COMMAND test_approval)
 
 find_program(Python3_EXECUTABLE NAMES python3 python)
 if(Python3_EXECUTABLE)
