@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum ArthurPhase: Equatable {
   case disconnected
@@ -119,6 +120,52 @@ final class AppModel {
       publishCalendarPolicy()
     }
   }
+  /// Frontmost app, window title, and selection. Off until the user opts in.
+  var seesFront = false {
+    didSet {
+      guard oldValue != seesFront else { return }
+      guard !previewCanvas else { return }
+      ConfigStore.saveSeesFront(seesFront)
+      if seesFront, presenceReady { FrontDesk.prompt() }
+    }
+  }
+  /// The Look button. Off until the user opts in. A capture still waits for the tap.
+  var screenLook = false {
+    didSet {
+      guard oldValue != screenLook else { return }
+      guard !previewCanvas else { return }
+      ConfigStore.saveScreenLook(screenLook)
+      if screenLook, presenceReady {
+        ScreenLook.requestAccess()
+      } else if !screenLook {
+        clearScreen()
+      }
+    }
+  }
+  /// Reminders list, Finder, Mail drafts, and opening a page or app.
+  var macTools = false {
+    didSet {
+      guard oldValue != macTools else { return }
+      guard !previewCanvas else { return }
+      ConfigStore.saveMacTools(macTools)
+      MacDesk.configure(toolsOn: macTools)
+    }
+  }
+  var stagedFiles: [StagedFile] = []
+  var screenStaged = false
+  var deskCue: String {
+    if screenStaged { return "Looking at your screen" }
+    if stagedFiles.count == 1 { return "A file is attached" }
+    if stagedFiles.count > 1 { return "\(stagedFiles.count) files are attached" }
+    return ""
+  }
+  private var stagedShot: DeskContext.Image?
+  private var stagedToken = 0
+  private var sentToken = 0
+  private var lookInFlight = false
+  private var fileLoads = 0
+  private var deferredSend: (() -> Void)?
+  private var presenceReady = false
   private var pendingWriteId: String?
   private var pendingWritePhase = ""
   var pendingWriteLabel: String {
@@ -194,6 +241,10 @@ final class AppModel {
     pttHotkey = PTTHotkey.load()
     quietTextMode = ConfigStore.loadQuietTextMode()
     calendarSharing = ConfigStore.loadCalendarSharing()
+    seesFront = ConfigStore.loadSeesFront()
+    screenLook = ConfigStore.loadScreenLook()
+    macTools = ConfigStore.loadMacTools()
+    presenceReady = true
     microphoneID = ConfigStore.loadMicrophoneID()
     audio.preferredDeviceID = microphoneID
     transcriptDeviceId = config.deviceId
@@ -407,17 +458,195 @@ final class AppModel {
     }
   }
 
+  private func publishTurnContext() {
+    publishTurnContext(calendar: immediateCalendarContext())
+  }
+
+  private func publishTurnContext(calendar: DeskContext) {
+    client.sendContext(turnContext(calendar: calendar))
+    sentToken = stagedToken
+  }
+
+  private func turnContext(calendar: DeskContext) -> DeskContext {
+    var context = calendar
+    if seesFront {
+      context.sources.append(contentsOf: FrontDesk.sources())
+    }
+    for file in stagedFiles {
+      if let source = file.source { context.sources.append(source) }
+      if let image = file.image { context.images.append(image) }
+    }
+    if let stagedShot {
+      context.images.append(stagedShot)
+      context.sources.append(DeskContext.Source(
+        name: "screen",
+        text: "A screenshot is attached. They tapped Look. Answer from the image. Do not say you can see the screen live."
+      ))
+    }
+    if context.images.count > 2 {
+      context.images = Array(context.images.prefix(2))
+    }
+    return context
+  }
+
+  private func awaitDeskPrep(retry: @escaping () -> Void) -> Bool {
+    guard lookInFlight || fileLoads > 0 else { return false }
+    deferredSend = retry
+    return true
+  }
+
+  private func resumeDeferred() {
+    guard !lookInFlight, fileLoads == 0, let send = deferredSend else { return }
+    deferredSend = nil
+    send()
+  }
+
+  private func consumeIfSent() {
+    guard !lookInFlight, fileLoads == 0, stagedToken > 0, sentToken == stagedToken else { return }
+    stagedFiles = []
+    stagedShot = nil
+    screenStaged = false
+    stagedToken = 0
+    sentToken = 0
+    LookChrome.hide()
+  }
+
+  func lookAtScreen() {
+    guard screenLook, !previewCanvas, !lookInFlight else { return }
+    lookInFlight = true
+    screenStaged = true
+    LookChrome.show()
+    Task {
+      let image = await ScreenLook.capture()
+      lookInFlight = false
+      if let image {
+        stagedShot = image
+        stagedToken += 1
+        if holding { publishTurnContext() }
+      } else if stagedShot == nil {
+        screenStaged = false
+        LookChrome.hide()
+        errorText = "I couldn't see the screen."
+      }
+      resumeDeferred()
+    }
+  }
+
+  func clearScreen() {
+    guard screenStaged || stagedShot != nil else { return }
+    stagedShot = nil
+    screenStaged = false
+    LookChrome.hide()
+    stagedToken += 1
+    if holding { publishTurnContext() }
+  }
+
+  func removeStaged(_ id: UUID) {
+    guard stagedFiles.contains(where: { $0.id == id }) else { return }
+    stagedFiles.removeAll { $0.id == id }
+    stagedToken += 1
+    if holding { publishTurnContext() }
+  }
+
+  func takeDroppedProviders(_ providers: [NSItemProvider]) {
+    let fileProviders = providers.filter {
+      $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+    }
+    let imageProviders = fileProviders.isEmpty
+      ? providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) }
+      : []
+    guard !fileProviders.isEmpty || !imageProviders.isEmpty else { return }
+    fileLoads += 1
+    let group = DispatchGroup()
+    let lock = NSLock()
+    var urls: [URL] = []
+    var images: [NSImage] = []
+    for provider in fileProviders {
+      group.enter()
+      provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+        defer { group.leave() }
+        let url: URL?
+        if let item = item as? URL {
+          url = item
+        } else if let data = item as? Data {
+          url = URL(dataRepresentation: data, relativeTo: nil)
+        } else {
+          url = nil
+        }
+        guard let url else { return }
+        lock.lock()
+        urls.append(url)
+        lock.unlock()
+      }
+    }
+    for provider in imageProviders {
+      group.enter()
+      provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+        defer { group.leave() }
+        guard let data, let image = NSImage(data: data) else { return }
+        lock.lock()
+        images.append(image)
+        lock.unlock()
+      }
+    }
+    group.notify(queue: .main) { [weak self] in
+      let loadedURLs = urls
+      let loadedImages = images
+      Task { @MainActor in
+        guard let self else { return }
+        self.fileLoads = max(0, self.fileLoads - 1)
+        var staged: [StagedFile] = []
+        for url in loadedURLs.prefix(3) {
+          if let file = FileInbox.load(url: url) { staged.append(file) }
+        }
+        if staged.isEmpty {
+          for image in loadedImages.prefix(2) {
+            if let file = FileInbox.loadImage(image, label: "Pasted image") { staged.append(file) }
+          }
+        }
+        self.addStaged(staged)
+      }
+    }
+  }
+
+  private func addStaged(_ files: [StagedFile]) {
+    for file in files {
+      if stagedFiles.count >= 3 { break }
+      let images = stagedFiles.compactMap(\.image).count + (stagedShot == nil ? 0 : 1)
+      if file.image != nil, images >= 2 { continue }
+      stagedFiles.append(file)
+    }
+    if !files.isEmpty {
+      stagedToken += 1
+      if holding { publishTurnContext() }
+    }
+    resumeDeferred()
+  }
+
   private func startLocalCalendar() {
     guard !previewCanvas else { return }
     publishCalendarPolicy()
+    MacDesk.configure(toolsOn: macTools)
     CalendarDesk.onProposal = { [weak self] proposal in
       self?.presentWrite(proposal)
+    }
+    MacDesk.onProposal = { [weak self] card in
+      self?.presentMac(card)
     }
     let token = LocalMcpToken.load()
     let server = LocalMcpServer(
       token: token,
       tools: LocalToolHost(
-        act: { tool, args in CalendarDesk.propose(tool: tool, args: args) },
+        act: { tool, args in
+          switch tool {
+          case "finder.reveal", "mail.draft", "open.url", "open.app":
+            return MacDesk.propose(tool: tool, args: args)
+          default:
+            return CalendarDesk.propose(tool: tool, args: args)
+          }
+        },
+        remindersText: { MacDesk.remindersText() },
+        finderText: { query in MacDesk.finderText(query: query) },
         calendarText: { day in CalendarDesk.toolText(day: day) }
       )
     )
@@ -444,11 +673,11 @@ final class AppModel {
   func resolveSurfaceAction(_ action: SurfaceAction) {
     switch action.kind {
     case "approve":
-      applyWrite(CalendarDesk.resolve(id: action.id, granted: true, via: "card"))
+      resolveWrite(id: action.id, granted: true, via: "card")
     case "dismiss":
-      applyWrite(CalendarDesk.resolve(id: action.id, granted: false, via: "card"))
+      resolveWrite(id: action.id, granted: false, via: "card")
     case "undo":
-      applyWrite(CalendarDesk.resolve(id: action.id, granted: true, via: "undo"))
+      resolveWrite(id: action.id, granted: true, via: "undo")
     case "edit":
       if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         draft = action.label
@@ -462,10 +691,18 @@ final class AppModel {
   func resolvePendingWrite() {
     guard let id = pendingWriteId else { return }
     if pendingWritePhase == "undo" {
-      applyWrite(CalendarDesk.resolve(id: id, granted: true, via: "undo"))
+      resolveWrite(id: id, granted: true, via: "undo")
     } else {
-      applyWrite(CalendarDesk.resolve(id: id, granted: true, via: "card"))
+      resolveWrite(id: id, granted: true, via: "card")
     }
+  }
+
+  private func resolveWrite(id: String, granted: Bool, via: String) {
+    if let proposal = CalendarDesk.resolve(id: id, granted: granted, via: via) {
+      applyWrite(proposal)
+      return
+    }
+    presentMac(MacDesk.resolve(id: id, granted: granted, via: via))
   }
 
   private func applyWrite(_ proposal: CalendarDesk.WriteProposal?) {
@@ -473,19 +710,30 @@ final class AppModel {
     presentWrite(proposal)
   }
 
+  private func presentMac(_ card: MacDesk.WriteCard?) {
+    guard let card else { return }
+    pendingWritePhase = card.phase
+    pendingWriteId = card.phase == "approve" || card.phase == "undo" ? card.id : nil
+    showWrite(id: card.id, title: card.title, summary: card.summary, phase: card.phase)
+  }
+
   private func presentWrite(_ proposal: CalendarDesk.WriteProposal) {
     pendingWritePhase = proposal.phase
     pendingWriteId = proposal.phase == "approve" || proposal.phase == "undo" ? proposal.id : nil
+    showWrite(id: proposal.id, title: proposal.title, summary: proposal.summary, phase: proposal.phase)
+  }
+
+  private func showWrite(id: String, title: String, summary: String, phase: String) {
     let actions: [SurfaceAction]
-    switch proposal.phase {
+    switch phase {
     case "approve":
       actions = [
-        SurfaceAction(id: proposal.id, label: "Approve", kind: "approve"),
-        SurfaceAction(id: proposal.id, label: "Not now", kind: "dismiss"),
+        SurfaceAction(id: id, label: "Approve", kind: "approve"),
+        SurfaceAction(id: id, label: "Not now", kind: "dismiss"),
       ]
-      client.sendArmApproval(id: proposal.id)
+      client.sendArmApproval(id: id)
     case "undo":
-      actions = [SurfaceAction(id: proposal.id, label: "Undo", kind: "undo")]
+      actions = [SurfaceAction(id: id, label: "Undo", kind: "undo")]
       client.sendClearApproval()
     default:
       actions = []
@@ -494,12 +742,12 @@ final class AppModel {
     let surface = ChatSurface(
       kindRaw: "generic",
       version: 2,
-      title: proposal.title,
-      summary: proposal.summary,
-      payload: .object(["proposal_id": .string(proposal.id)]),
+      title: title,
+      summary: summary,
+      payload: .object(["proposal_id": .string(id)]),
       actions: actions
     )
-    upsertProposalSurface(surface, id: proposal.id)
+    upsertProposalSurface(surface, id: id)
   }
 
   private func upsertProposalSurface(_ surface: ChatSurface, id: String) {
@@ -589,7 +837,7 @@ final class AppModel {
     guard !preparingTalk else { return }
     talkPointerDown = true
     if calendarReadyWithoutPrompt {
-      client.sendContext(immediateCalendarContext())
+      publishTurnContext()
       beginListening()
       return
     }
@@ -605,7 +853,7 @@ final class AppModel {
       preparingTalk = false
       if allowSession { sessionCalendarAllowed = true }
       guard canSend, micGranted else { return }
-      client.sendContext(context)
+      publishTurnContext(calendar: context)
       if talkPointerDown {
         releaseArmsHandsFree = true
         beginListening()
@@ -689,10 +937,17 @@ final class AppModel {
       errorText = wasHandsFree ? "Too short." : "Too short — hold a little longer."
       return
     }
+    if awaitDeskPrep(retry: { [weak self] in self?.sendEndedUtterance() }) { return }
+    sendEndedUtterance()
+  }
+
+  private func sendEndedUtterance() {
+    if stagedToken != sentToken { publishTurnContext() }
     expectingReply = true
     setWork(.findingWords)
     become(.thinking)
     client.sendEnd()
+    consumeIfSent()
   }
 
   /// The server already started the turn from trailing silence. Stop the mic
@@ -721,6 +976,7 @@ final class AppModel {
     }
     guard canSend else { return }
     guard !preparingTalk else { return }
+    if awaitDeskPrep(retry: { [weak self] in self?.sendDraft() }) { return }
     if calendarReadyWithoutPrompt {
       commitDraft(text, context: immediateCalendarContext())
       return
@@ -742,6 +998,8 @@ final class AppModel {
 
   private func commitDraft(_ text: String, context: DeskContext) {
     guard canSend else { return }
+    let context = turnContext(calendar: context)
+    sentToken = stagedToken
     turnModality = .text
     youSaid = text
     appendDiscussion(fromYou: true, text: text)
@@ -758,6 +1016,7 @@ final class AppModel {
     become(.thinking)
     lastSurface = .desk
     client.sendText(text, context: context)
+    consumeIfSent()
   }
 
   /// Send a line from the droplet without discarding a draft sitting in the window.
@@ -1262,6 +1521,7 @@ final class AppModel {
       lastSurface = .desk
       if !id.isEmpty { lastPolledTurnId = id }
       if holding { stopCaptureForServer() }
+      consumeIfSent()
     case .pcm(let data):
       if expectingReply || phase == .speaking || pacingReply {
         beginSpeechIfNeeded()
@@ -1334,7 +1594,7 @@ final class AppModel {
     case .surface(let turnId, let surface):
       attachSurface(surface, turnId: turnId)
     case .approval(let id, let granted):
-      applyWrite(CalendarDesk.resolve(id: id, granted: granted, via: "voice"))
+      resolveWrite(id: id, granted: granted, via: "voice")
     case .forming(let text):
       if formingText.isEmpty {
         formingLineId = UUID()

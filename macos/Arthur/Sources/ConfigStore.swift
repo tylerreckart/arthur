@@ -29,6 +29,9 @@ enum ConfigStore {
   private static let quietTextKey = "arthur.quietTextMode"
   private static let microphoneKey = "arthur.microphoneID"
   private static let calendarSharingKey = "arthur.calendarSharing"
+  private static let seesFrontKey = "arthur.seesFront"
+  private static let screenLookKey = "arthur.screenLook"
+  private static let macToolsKey = "arthur.macTools"
 
   static func load() -> ClientConfig {
     let path = resolvedConfigPath()
@@ -129,6 +132,30 @@ enum ConfigStore {
 
   static func saveCalendarSharing(_ sharing: CalendarSharing) {
     UserDefaults.standard.set(sharing.rawValue, forKey: calendarSharingKey)
+  }
+
+  static func loadSeesFront() -> Bool {
+    UserDefaults.standard.bool(forKey: seesFrontKey)
+  }
+
+  static func saveSeesFront(_ on: Bool) {
+    UserDefaults.standard.set(on, forKey: seesFrontKey)
+  }
+
+  static func loadScreenLook() -> Bool {
+    UserDefaults.standard.bool(forKey: screenLookKey)
+  }
+
+  static func saveScreenLook(_ on: Bool) {
+    UserDefaults.standard.set(on, forKey: screenLookKey)
+  }
+
+  static func loadMacTools() -> Bool {
+    UserDefaults.standard.bool(forKey: macToolsKey)
+  }
+
+  static func saveMacTools(_ on: Bool) {
+    UserDefaults.standard.set(on, forKey: macToolsKey)
   }
 
   static func loadTranscript(deviceId: String) -> [DiscussionLine] {

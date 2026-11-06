@@ -126,12 +126,24 @@ struct DeskContext: Equatable {
     var text: String
   }
 
-  var sources: [Source]
+  struct Image: Equatable {
+    var mediaType: String
+    var data: String
+  }
 
-  var isEmpty: Bool { sources.isEmpty }
+  var sources: [Source]
+  var images: [Image] = []
+
+  var isEmpty: Bool { sources.isEmpty && images.isEmpty }
 
   var wire: [String: Any] {
-    ["sources": sources.map { ["name": $0.name, "text": $0.text] }]
+    var object: [String: Any] = [
+      "sources": sources.map { ["name": $0.name, "text": $0.text] },
+    ]
+    if !images.isEmpty {
+      object["images"] = images.map { ["media_type": $0.mediaType, "data": $0.data] }
+    }
+    return object
   }
 
   static func calendar(_ text: String) -> DeskContext {

@@ -551,7 +551,7 @@ void WsServer::handle_client(int fd) {
     if (frame && frame->contains("context")) {
       inline_ctx = client_context_from_json((*frame)["context"]);
     }
-    if (!inline_ctx.sources.empty()) {
+    if (!inline_ctx.empty()) {
       pending_context = {};
       return inline_ctx;
     }
@@ -575,7 +575,7 @@ void WsServer::handle_client(int fd) {
       active_turn.clear();
     }
   };
-  auto submit_pcm = [&](bool automatic) {
+  auto submit_pcm = [&](bool automatic, const nlohmann::json* frame) {
     if (pcm.empty()) return;
     retire_active();
     ignore_empty_end = true;
@@ -588,7 +588,7 @@ void WsServer::handle_client(int fd) {
     auto turn_pcm = std::move(pcm);
     pcm.clear();
     const std::string turn_id = active_turn;
-    ClientContext turn_context = take_context(nullptr);
+    ClientContext turn_context = take_context(frame);
     turn_future = std::async(std::launch::async,
         [this, fd, hub, device_id, turn_id, turn_pcm = std::move(turn_pcm),
          turn_context = std::move(turn_context), &direct_send_mu]() {
@@ -679,7 +679,7 @@ void WsServer::handle_client(int fd) {
         if (endpoint.take_speech_onset() && !active_turn.empty()) {
           retire_active();
         }
-        if (decision == UtteranceEndpointEvent::Completed) submit_pcm(true);
+        if (decision == UtteranceEndpointEvent::Completed) submit_pcm(true, nullptr);
         continue;
       }
       if (frame->opcode != WsOpcode::Text) continue;
@@ -788,7 +788,7 @@ void WsServer::handle_client(int fd) {
                     device_id, text, sink, turn_id, -1, turn_context);
               });
         } else {
-          submit_pcm(false);
+          submit_pcm(false, &j);
         }
       }
     }

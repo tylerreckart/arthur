@@ -1,5 +1,7 @@
 #pragma once
 
+#include <nlohmann/json.hpp>
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -63,6 +65,15 @@ class ArbiterClient {
                             std::atomic<bool>* cancel_flag,
                             std::string* err) const;
 
+  // Same call when `message` is a content-parts array (text plus images).
+  // Text-only turns keep using send_message so existing test doubles are unchanged.
+  bool send_user_message(std::int64_t conversation_id,
+                         const nlohmann::json& message,
+                         const std::string& idempotency_key,
+                         ArbiterStreamCallbacks cbs,
+                         std::atomic<bool>* cancel_flag,
+                         std::string* err) const;
+
   virtual bool cancel_request(const std::string& request_id, std::string* err) const;
 
   virtual std::optional<ScheduleInfo> get_schedule(std::int64_t task_id,
@@ -77,6 +88,13 @@ class ArbiterClient {
   bool health_reachable(std::string* detail) const;
 
  private:
+  bool post_turn(std::int64_t conversation_id,
+                 const nlohmann::json& message,
+                 const std::string& idempotency_key,
+                 ArbiterStreamCallbacks cbs,
+                 std::atomic<bool>* cancel_flag,
+                 std::string* err) const;
+
   std::string base_url_;
   std::string token_;
   std::string agent_;

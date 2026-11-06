@@ -223,6 +223,25 @@ bool ArbiterClient::send_message(std::int64_t conversation_id,
                                  ArbiterStreamCallbacks cbs,
                                  std::atomic<bool>* cancel_flag,
                                  std::string* err) const {
+  return post_turn(conversation_id, nlohmann::json(message), idempotency_key, std::move(cbs),
+                   cancel_flag, err);
+}
+
+bool ArbiterClient::send_user_message(std::int64_t conversation_id,
+                                      const nlohmann::json& message,
+                                      const std::string& idempotency_key,
+                                      ArbiterStreamCallbacks cbs,
+                                      std::atomic<bool>* cancel_flag,
+                                      std::string* err) const {
+  return post_turn(conversation_id, message, idempotency_key, std::move(cbs), cancel_flag, err);
+}
+
+bool ArbiterClient::post_turn(std::int64_t conversation_id,
+                              const nlohmann::json& message,
+                              const std::string& idempotency_key,
+                              ArbiterStreamCallbacks cbs,
+                              std::atomic<bool>* cancel_flag,
+                              std::string* err) const {
   auto parsed = parse_base_url(base_url_);
   if (!parsed) {
     if (err) *err = "invalid arbiter_base_url";

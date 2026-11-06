@@ -19,5 +19,9 @@
 	<string>Arthur adds or completes a reminder on this Mac only after you approve it.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>Arthur adds or completes a reminder on this Mac only after you approve it.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Arthur takes one screenshot when you tap Look, and attaches it to your next question.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Arthur creates a Mail draft only after you approve it, and can delete that draft if you undo.</string>
 </dict>
 </plist>

@@ -627,6 +627,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     }
     droplet.session.actions.dismiss = { [weak self] in self?.dismissDroplet() }
     droplet.session.actions.approve = { [weak self] in self?.model?.resolvePendingWrite() }
+    droplet.session.actions.look = { [weak self] in self?.model?.lookAtScreen() }
     droplet.session.actions.send = { [weak self] text in
       self?.cardPinned = true
       self?.cancelDismiss()
