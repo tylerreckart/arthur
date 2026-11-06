@@ -229,7 +229,7 @@ class SocketAudioSink : public AudioSink {
       j["tool"] = value;
     } else if (t == "status") {
       j["phase"] = value;
-    } else if (t == "surface" || t == "approval") {
+    } else if (t == "surface" || t == "approval" || t == "speaker") {
       try {
         auto extra = nlohmann::json::parse(value.empty() ? "{}" : value);
         if (extra.is_object()) {

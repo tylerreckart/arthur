@@ -235,7 +235,8 @@ struct ContentView: View {
           && !last.turnId.isEmpty
           && !line.turnId.isEmpty
           && last.turnId != line.turnId
-        if !splitArthurTurn {
+        let splitSpeaker = line.fromYou && last.speakerName != line.speakerName
+        if !splitArthurTurn && !splitSpeaker {
           last.texts.append(line.text)
           last.surfaces.append(contentsOf: line.surfaces)
           clusters[clusters.count - 1] = last
@@ -248,7 +249,8 @@ struct ContentView: View {
           fromYou: line.fromYou,
           texts: [line.text],
           turnId: line.turnId,
-          surfaces: line.surfaces
+          surfaces: line.surfaces,
+          speakerName: line.speakerName
         )
       )
     }
@@ -260,7 +262,7 @@ struct ContentView: View {
     }
     let ghost = model.hearingText.trimmingCharacters(in: .whitespacesAndNewlines)
     if !ghost.isEmpty {
-      if var last = clusters.last, last.fromYou {
+      if var last = clusters.last, last.fromYou, last.speakerName.isEmpty {
         last.texts.append(ghost)
         last.liveLast = true
         clusters[clusters.count - 1] = last
@@ -833,6 +835,7 @@ private struct TranscriptCluster: Identifiable {
   var texts: [String]
   var turnId = ""
   var surfaces: [ChatSurface] = []
+  var speakerName = ""
   var liveLast = false
 }
 
@@ -855,7 +858,12 @@ private struct TranscriptClusterView: View {
   @ViewBuilder
   private var clusterBody: some View {
     if cluster.fromYou {
-      UserCopy(texts: cluster.texts, liveLast: cluster.liveLast, onEdit: onEdit)
+      UserCopy(
+        texts: cluster.texts,
+        speakerName: cluster.speakerName,
+        liveLast: cluster.liveLast,
+        onEdit: onEdit
+      )
     } else {
       ArthurCopy(
         texts: cluster.texts,
@@ -884,12 +892,19 @@ private struct TranscriptClusterView: View {
 
 private struct UserCopy: View {
   let texts: [String]
+  var speakerName = ""
   var liveLast = false
   var onEdit: (String) -> Void
 
+  private var caption: String {
+    if liveLast { return "You · …" }
+    let name = speakerName.trimmingCharacters(in: .whitespacesAndNewlines)
+    return name.isEmpty ? "You" : name
+  }
+
   var body: some View {
     VStack(alignment: .trailing, spacing: 6) {
-      Text(liveLast ? "You · …" : "You")
+      Text(caption)
         .font(.caption2)
         .foregroundStyle(.tertiary)
       VStack(alignment: .trailing, spacing: 6) {
@@ -917,7 +932,7 @@ private struct UserCopy: View {
     .padding(.leading, 72)
     .animation(.easeOut(duration: 0.2), value: liveLast)
     .accessibilityElement(children: .combine)
-    .accessibilityLabel(liveLast ? "You, listening" : "You, \(texts.joined(separator: " "))")
+    .accessibilityLabel(liveLast ? "You, listening" : "\(caption), \(texts.joined(separator: " "))")
     .accessibilityAction(named: "Edit & resend") {
       guard !liveLast, let last = texts.last else { return }
       onEdit(last)
@@ -1130,6 +1145,47 @@ struct SettingsView: View {
         }
 
         Section {
+          if model.household.isEmpty {
+            Text("No one enrolled")
+              .foregroundStyle(.secondary)
+          }
+          ForEach(model.household) { person in
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(person.name)
+                if !person.calendar.isEmpty {
+                  Text(person.calendar)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+              }
+              Spacer()
+              Text(person.phrases >= 3 ? "Voice ready" : "\(person.phrases) of 3")
+                .foregroundStyle(.secondary)
+              Button("Remove") { model.forgetPerson(person.id) }
+            }
+          }
+          TextField("Name", text: $model.teachName)
+          TextField("Calendar title", text: $model.teachCalendar)
+          Button(model.teaching ? "Listening…" : "Teach Arthur your voice") {
+            model.teachVoice()
+          }
+          .disabled(model.teaching || model.teachName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          if model.teaching {
+            Text(HouseholdRoster.phrases[min(model.teachPhrase, HouseholdRoster.phrases.count - 1)])
+              .foregroundStyle(.secondary)
+          }
+          if !model.householdStatus.isEmpty {
+            Text(model.householdStatus)
+              .foregroundStyle(.secondary)
+          }
+        } header: {
+          Text("Household")
+        } footer: {
+          Text("Three phrases teach a voice. He uses a name only when he is sure. He does not mix calendars or memories. Someone he does not recognize can still use the lights and the timers.")
+        }
+
+        Section {
           Picker("Calendar", selection: $model.calendarSharing) {
             ForEach(CalendarSharing.allCases, id: \.self) { choice in
               Text(choice.settingsLabel).tag(choice)
@@ -1189,6 +1245,7 @@ struct SettingsView: View {
       .onAppear {
         model.loadMcpRegistry()
         model.refreshMicrophones()
+        model.loadHousehold()
       }
     }
     .frame(minWidth: 520, minHeight: 560)

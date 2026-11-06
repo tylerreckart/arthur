@@ -11,6 +11,7 @@
 #include "intercom/session_store.hpp"
 #include "intercom/stt.hpp"
 #include "intercom/tts.hpp"
+#include "intercom/voiceprint.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -83,7 +84,21 @@ class TurnPipeline {
                                 AudioSink& sink,
                                 std::string turn_id = {},
                                 int stt_ms = -1,
-                                ClientContext client_context = {});
+                                ClientContext client_context = {},
+                                SpeakerIdentity speaker = {});
+
+  // Score PCM the same way an utterance does. Typed turns never call this.
+  SpeakerIdentity identify_pcm(const std::uint8_t* pcm, std::size_t bytes, int sample_rate,
+                               int channels);
+
+  std::vector<HouseholdPerson> list_people() const;
+  std::optional<HouseholdPerson> enroll_person(const std::string& name,
+                                               const std::string& calendar,
+                                               std::string* err);
+  bool enroll_voice(const std::string& person_id, int phrase,
+                    const std::uint8_t* pcm, std::size_t bytes, int sample_rate,
+                    std::string* err);
+  bool remove_person(const std::string& person_id, std::string* err);
 
   // Make an accepted transport turn cancellable before its worker starts.
   void prepare_turn(const std::string& turn_id);
@@ -131,6 +146,7 @@ class TurnPipeline {
   void register_turn(std::shared_ptr<TurnHandle> h);
   void unregister_turn(const std::string& turn_id);
   std::shared_ptr<TurnHandle> find_turn(const std::string& turn_id);
+  std::vector<EnrolledSpeaker> enrolled_speakers() const;
 
   Config config_;
   std::shared_ptr<SttProvider> stt_;

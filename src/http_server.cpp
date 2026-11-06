@@ -14,6 +14,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -29,6 +30,50 @@ void on_stop_signal(int) {
   if (g_ws) g_ws->stop();
 }
 
+int base64_value(char c) {
+  if (c >= 'A' && c <= 'Z') return c - 'A';
+  if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+  if (c >= '0' && c <= '9') return c - '0' + 52;
+  if (c == '+') return 62;
+  if (c == '/') return 63;
+  return -1;
+}
+
+std::optional<std::vector<std::uint8_t>> decode_base64(std::string_view in) {
+  std::string filtered;
+  filtered.reserve(in.size());
+  for (char c : in) {
+    if (c == '\n' || c == '\r' || c == ' ' || c == '\t') continue;
+    filtered.push_back(c);
+  }
+  if (filtered.empty() || filtered.size() % 4 != 0) return std::nullopt;
+  std::vector<std::uint8_t> out;
+  out.reserve(filtered.size() / 4 * 3);
+  for (std::size_t i = 0; i < filtered.size(); i += 4) {
+    int value[4];
+    int pad = 0;
+    for (int k = 0; k < 4; ++k) {
+      const char c = filtered[i + static_cast<std::size_t>(k)];
+      if (c == '=') {
+        value[k] = 0;
+        ++pad;
+      } else {
+        value[k] = base64_value(c);
+        if (value[k] < 0 || pad) return std::nullopt;
+      }
+    }
+    if (pad > 2) return std::nullopt;
+    out.push_back(static_cast<std::uint8_t>((value[0] << 2) | (value[1] >> 4)));
+    if (pad < 2) {
+      out.push_back(static_cast<std::uint8_t>(((value[1] & 15) << 4) | (value[2] >> 2)));
+    }
+    if (pad < 1) {
+      out.push_back(static_cast<std::uint8_t>(((value[2] & 3) << 6) | value[3]));
+    }
+  }
+  return out;
+}
+
 std::string bearer_token(const httplib::Request& req) {
   const auto auth = req.get_header_value("Authorization");
   constexpr std::string_view prefix = "Bearer ";
@@ -37,6 +82,11 @@ std::string bearer_token(const httplib::Request& req) {
     return auth.substr(prefix.size());
   }
   return {};
+}
+
+bool device_authorized(const ServerDeps& deps, const httplib::Request& req) {
+  const std::string device_id = req.get_header_value("X-Device-Id");
+  return !device_id.empty() && deps.config.authorize_device(device_id, bearer_token(req));
 }
 
 int parse_sample_rate(const httplib::Request& req, int fallback) {
@@ -96,7 +146,8 @@ void start_streaming_turn(httplib::Response& res,
                           const std::string& transcript,
                           const std::string& turn_id,
                           int stt_ms,
-                          ClientContext client_context = {}) {
+                          ClientContext client_context = {},
+                          SpeakerIdentity speaker = {}) {
   auto state = std::make_shared<StreamingTurnState>();
   state->result.turn_id = turn_id;
   state->result.transcript = transcript;
@@ -131,11 +182,11 @@ void start_streaming_turn(httplib::Response& res,
       });
 
   auto pipeline = deps.pipeline;
-  std::thread([state, pipeline, device_id, transcript, turn_id, stt_ms,
+  std::thread([state, pipeline, device_id, transcript, turn_id, stt_ms, speaker,
                client_context = std::move(client_context)]() {
     StreamingAudioSink audio(state->stream);
     TurnResult result = pipeline->run_text_utterance(
-        device_id, transcript, audio, turn_id, stt_ms, client_context);
+        device_id, transcript, audio, turn_id, stt_ms, client_context, speaker);
     {
       std::lock_guard<std::mutex> lk(state->result_mu);
       state->result = std::move(result);
@@ -305,7 +356,9 @@ void run_http_server(ServerDeps deps) {
     }
 
     const std::string turn_id = intercom::make_turn_id();
-    start_streaming_turn(res, deps, device_id, transcript, turn_id, stt_ms);
+    const SpeakerIdentity speaker =
+        deps.pipeline->identify_pcm(pcm.data(), pcm.size(), sample_rate, deps.config.channels);
+    start_streaming_turn(res, deps, device_id, transcript, turn_id, stt_ms, {}, speaker);
   });
 
   svr.Post("/v1/utterance/text", [&](const httplib::Request& req, httplib::Response& res) {
@@ -338,6 +391,119 @@ void run_http_server(ServerDeps deps) {
     const std::string turn_id = intercom::make_turn_id();
     start_streaming_turn(res, deps, device_id, transcript, turn_id, -1, std::move(context));
   });
+
+  svr.Get("/v1/household/people", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!device_authorized(deps, req)) {
+      res.status = 401;
+      res.set_content(R"({"error":"unauthorized"})", "application/json");
+      return;
+    }
+    nlohmann::json people = nlohmann::json::array();
+    for (const auto& person : deps.pipeline->list_people()) {
+      people.push_back({
+          {"id", person.person_id},
+          {"name", person.name},
+          {"calendar", person.calendar},
+          {"phrases", person.phrases},
+      });
+    }
+    res.set_content(nlohmann::json{{"people", people}}.dump(), "application/json");
+  });
+
+  svr.Post("/v1/household/people", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!device_authorized(deps, req)) {
+      res.status = 401;
+      res.set_content(R"({"error":"unauthorized"})", "application/json");
+      return;
+    }
+    std::string name;
+    std::string calendar;
+    try {
+      auto body = nlohmann::json::parse(req.body.empty() ? "{}" : req.body);
+      if (body.contains("name") && body["name"].is_string()) name = body["name"].get<std::string>();
+      if (body.contains("calendar") && body["calendar"].is_string()) {
+        calendar = body["calendar"].get<std::string>();
+      }
+    } catch (...) {
+      res.status = 400;
+      res.set_content(R"({"error":"invalid json"})", "application/json");
+      return;
+    }
+    std::string err;
+    auto person = deps.pipeline->enroll_person(name, calendar, &err);
+    if (!person) {
+      res.status = 400;
+      nlohmann::json j = {{"error", err.empty() ? "could not enroll" : err}};
+      res.set_content(j.dump(), "application/json");
+      return;
+    }
+    nlohmann::json j = {
+        {"id", person->person_id},
+        {"name", person->name},
+        {"calendar", person->calendar},
+    };
+    res.set_content(j.dump(), "application/json");
+  });
+
+  svr.Delete(R"(/v1/household/people/([^/]+))",
+             [&](const httplib::Request& req, httplib::Response& res) {
+               if (!device_authorized(deps, req)) {
+                 res.status = 401;
+                 res.set_content(R"({"error":"unauthorized"})", "application/json");
+                 return;
+               }
+               std::string err;
+               if (!deps.pipeline->remove_person(req.matches[1], &err)) {
+                 res.status = 400;
+                 nlohmann::json j = {{"error", err.empty() ? "could not remove" : err}};
+                 res.set_content(j.dump(), "application/json");
+                 return;
+               }
+               res.set_content(R"({"removed":true})", "application/json");
+             });
+
+  svr.Post(R"(/v1/household/people/([^/]+)/voice)",
+           [&](const httplib::Request& req, httplib::Response& res) {
+             if (!device_authorized(deps, req)) {
+               res.status = 401;
+               res.set_content(R"({"error":"unauthorized"})", "application/json");
+               return;
+             }
+             int phrase = -1;
+             int sample_rate = deps.config.sample_rate;
+             std::string pcm_b64;
+             try {
+               auto body = nlohmann::json::parse(req.body.empty() ? "{}" : req.body);
+               if (body.contains("phrase") && body["phrase"].is_number_integer()) {
+                 phrase = body["phrase"].get<int>();
+               }
+               if (body.contains("sample_rate") && body["sample_rate"].is_number_integer()) {
+                 sample_rate = body["sample_rate"].get<int>();
+               }
+               if (body.contains("pcm") && body["pcm"].is_string()) {
+                 pcm_b64 = body["pcm"].get<std::string>();
+               }
+             } catch (...) {
+               res.status = 400;
+               res.set_content(R"({"error":"invalid json"})", "application/json");
+               return;
+             }
+             auto pcm = decode_base64(pcm_b64);
+             if (!pcm) {
+               res.status = 400;
+               res.set_content(R"({"error":"invalid audio"})", "application/json");
+               return;
+             }
+             std::string err;
+             if (!deps.pipeline->enroll_voice(req.matches[1], phrase, pcm->data(), pcm->size(),
+                                             sample_rate, &err)) {
+               res.status = 400;
+               nlohmann::json j = {{"error", err.empty() ? "could not enroll voice" : err}};
+               res.set_content(j.dump(), "application/json");
+               return;
+             }
+             res.set_content(R"({"stored":true})", "application/json");
+           });
 
   std::cout << "intercom listening on http://" << deps.config.listen_host << ":"
             << deps.config.listen_port << std::endl;

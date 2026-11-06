@@ -102,6 +102,18 @@ enum CalendarDesk {
     DeskContext.calendar(CalendarAgenda.describe(now: Date(), timeZone: .current, events: fetch(days: 2)))
   }
 
+  /// Personal calendars ride beside the household one. The daemon drops the
+  /// ones that are not this speaker's after it scores the voice.
+  static func personalSources(people: [HouseholdRoster.Person]) -> [DeskContext.Source] {
+    guard !people.isEmpty else { return [] }
+    return HouseholdRoster.personalSources(
+      events: fetch(days: 2),
+      people: people,
+      now: Date(),
+      timeZone: .current
+    )
+  }
+
   private static func noteAskGranted() {
     lock.lock()
     askUntil = Date().addingTimeInterval(120)

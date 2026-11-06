@@ -15,9 +15,11 @@ struct DiscussionLine: Identifiable, Equatable, Codable {
   /// Versioned cards for this turn (weather, generic fallback). Empty on
   /// older transcripts and speech-only turns.
   var surfaces: [ChatSurface]
+  /// Shown instead of "You" when the daemon is sure who spoke. Empty otherwise.
+  var speakerName: String
 
   enum CodingKeys: String, CodingKey {
-    case id, fromYou, text, turnId, surfaces
+    case id, fromYou, text, turnId, surfaces, speakerName
   }
 
   init(
@@ -25,13 +27,15 @@ struct DiscussionLine: Identifiable, Equatable, Codable {
     text: String,
     id: UUID = UUID(),
     turnId: String = "",
-    surfaces: [ChatSurface] = []
+    surfaces: [ChatSurface] = [],
+    speakerName: String = ""
   ) {
     self.id = id
     self.fromYou = fromYou
     self.text = text
     self.turnId = turnId
     self.surfaces = surfaces
+    self.speakerName = speakerName
   }
 
   init(from decoder: Decoder) throws {
@@ -41,6 +45,17 @@ struct DiscussionLine: Identifiable, Equatable, Codable {
     text = try c.decode(String.self, forKey: .text)
     turnId = try c.decodeIfPresent(String.self, forKey: .turnId) ?? ""
     surfaces = try c.decodeIfPresent([ChatSurface].self, forKey: .surfaces) ?? []
+    speakerName = try c.decodeIfPresent(String.self, forKey: .speakerName) ?? ""
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(id, forKey: .id)
+    try c.encode(fromYou, forKey: .fromYou)
+    try c.encode(text, forKey: .text)
+    try c.encode(turnId, forKey: .turnId)
+    try c.encode(surfaces, forKey: .surfaces)
+    try c.encode(speakerName, forKey: .speakerName)
   }
 }
 
