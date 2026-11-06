@@ -560,7 +560,6 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     cardPinned = false
     cardFollowing = false
     cancelDismiss()
-    model?.deskFieldFocused = false
     droplet.hideAnimated()
     return true
   }
@@ -628,20 +627,11 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     droplet.session.actions.dismiss = { [weak self] in self?.dismissDroplet() }
     droplet.session.actions.approve = { [weak self] in self?.model?.resolvePendingWrite() }
     droplet.session.actions.look = { [weak self] in self?.model?.lookAtScreen() }
-    droplet.session.actions.send = { [weak self] text in
-      self?.cardPinned = true
-      self?.cancelDismiss()
-      self?.model?.sendTypedLine(text)
-    }
-    droplet.session.actions.fieldFocus = { [weak self] on in
+    droplet.session.actions.openActivity = { [weak self] in
       guard let self else { return }
-      self.model?.deskFieldFocused = on
-      if on {
-        self.cardPinned = true
-        self.model?.composerFocused = false
-        self.cancelDismiss()
-        self.droplet.focusForTyping()
-      }
+      self.revealMainWindow()
+      self.model?.activityOpen = true
+      self.dismissDroplet()
     }
     droplet.session.actions.hover = { [weak self] hot in
       guard let self, hot, self.cardFollowing, !self.cardPinned else { return }
@@ -651,7 +641,6 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
       guard let self else { return }
       self.bead.connected = false
       self.bead.dripping = false
-      self.model?.deskFieldFocused = false
       self.removeOutsideMonitors()
     }
   }

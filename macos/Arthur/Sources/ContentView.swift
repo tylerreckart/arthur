@@ -34,7 +34,14 @@ struct ContentView: View {
           .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
           .toolbar {
             ToolbarItem(placement: .navigation) {
-              ArthurToolbarBead()
+              HStack(spacing: 6) {
+                ArthurToolbarBead()
+                Button {
+                  withAnimation { columnVisibility = columnVisibility == .detailOnly ? .doubleColumn : .detailOnly }
+                } label: { Label("Conversations", systemImage: "sidebar.left") }
+                .help("Show or hide conversations")
+                .accessibilityLabel("Toggle conversations sidebar")
+              }
             }
             ToolbarItemGroup(placement: .primaryAction) {
               Button {
@@ -64,6 +71,24 @@ struct ContentView: View {
               .help("Memory, schedules, and todos")
 
               Button {
+                model.activityOpen = true
+              } label: {
+                ZStack(alignment: .topTrailing) {
+                  Label("Activity", systemImage: "checklist")
+                  if model.attentionCount > 0 {
+                    Text("\(model.attentionCount)")
+                      .font(.caption2.weight(.bold)).foregroundStyle(.white)
+                      .padding(.horizontal, 4).padding(.vertical, 1)
+                      .background(ArthurTheme.error, in: Capsule())
+                      .offset(x: 8, y: -6)
+                  }
+                }
+              }
+              .help(model.attentionCount > 0 ? "Activity — \(model.attentionCount) need you" : "Activity — needs you, running, done")
+              .accessibilityLabel(model.attentionCount > 0 ? "Activity, \(model.attentionCount) items need you" : "Activity")
+              .keyboardShortcut("a", modifiers: [.command, .shift])
+
+              Button {
                 model.settingsOpen = true
               } label: {
                 Label("Settings", systemImage: "gearshape")
@@ -72,6 +97,21 @@ struct ContentView: View {
             }
           }
           .safeAreaBar(edge: .top) {
+            VStack(spacing: 6) {
+            HStack(spacing: 8) {
+              Circle().fill(model.phase == .disconnected || model.phase == .connecting ? ArthurTheme.error : Color(red: 0.40, green: 0.72, blue: 0.52))
+                .frame(width: 7, height: 7)
+              Text(model.chromeLabel).font(.caption.weight(.semibold)).foregroundStyle(ArthurTheme.mute)
+              Text(model.chromeDetail).font(.caption).foregroundStyle(ArthurTheme.whisper).lineLimit(1)
+              Spacer()
+              if model.phase == .disconnected || model.phase == .connecting {
+                Button("Reconnect") { model.reconnect() }.font(.caption.weight(.semibold))
+                  .accessibilityLabel("Reconnect to Arthur")
+              }
+            }
+            .padding(.horizontal, 16)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Connection: \(model.chromeDetail)")
             if let notice = model.speakBack {
               SpeakBackBanner(notice: notice) {
                 model.dismissSpeakBack()
@@ -79,6 +119,7 @@ struct ContentView: View {
               .padding(.horizontal, 16)
               .padding(.bottom, 4)
               .transition(.move(edge: .top).combined(with: .opacity))
+            }
             }
           }
           .animation(.easeInOut(duration: 0.22), value: model.speakBack?.id)
@@ -100,6 +141,10 @@ struct ContentView: View {
           }
           .sheet(isPresented: $model.memoryOpen) {
             MemoryDesk()
+              .environment(model)
+          }
+          .sheet(isPresented: $model.activityOpen) {
+            ActivityPanel()
               .environment(model)
           }
           .sheet(isPresented: $model.settingsOpen) {
@@ -474,6 +519,7 @@ private struct TranscriptScrollEdge: Equatable {
 }
 
 private struct WorkTrail: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let line: String
   @State private var pulse = false
 
@@ -490,6 +536,7 @@ private struct WorkTrail: View {
     }
     .padding(.leading, 2)
     .onAppear {
+      guard !reduceMotion else { pulse = true; return }
       withAnimation(.easeInOut(duration: 0.95).repeatForever(autoreverses: true)) {
         pulse = true
       }
@@ -541,19 +588,25 @@ private struct SpeakBackBanner: View {
 }
 
 private struct ErrorBanner: View {
+  @Environment(AppModel.self) private var model
   let text: String
   var dismiss: () -> Void
+  private func modelReconnect() { model.reconnect() }
 
   var body: some View {
     HStack(alignment: .top, spacing: 8) {
       Image(systemName: "exclamationmark.circle.fill")
-        .foregroundStyle(ArthurTheme.paper)
+        .foregroundStyle(ArthurTheme.error)
         .padding(.top, 1)
+        .accessibilityHidden(true)
       Text(text)
         .font(.callout)
         .foregroundStyle(.primary)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
+      Button("Retry") { modelReconnect() }
+        .font(.callout.weight(.semibold))
+        .accessibilityLabel("Retry connection")
       Button(action: dismiss) {
         Image(systemName: "xmark")
           .font(.caption.weight(.semibold))
@@ -753,6 +806,7 @@ private struct ComposerBar: View {
 }
 
 private struct ListeningMeter: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   var level: Double
   @State private var pulse = false
 
@@ -767,6 +821,7 @@ private struct ListeningMeter: View {
     }
     .opacity(0.72 + (pulse ? 0.2 : 0) + min(level, 1) * 0.08)
     .onAppear {
+      guard !reduceMotion else { return }
       withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
         pulse = true
       }
@@ -869,6 +924,7 @@ private struct TranscriptCluster: Identifiable {
 }
 
 private struct TranscriptClusterView: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let cluster: TranscriptCluster
   var showStop = false
   var playEntrance = false
@@ -909,7 +965,7 @@ private struct TranscriptClusterView: View {
   private func settleIfNeeded() {
     guard !decided else { return }
     decided = true
-    if !playEntrance || cluster.liveLast {
+    if !playEntrance || cluster.liveLast || reduceMotion {
       settled = true
       return
     }
@@ -994,7 +1050,19 @@ private struct ArthurCopy: View {
       if !surfaces.isEmpty {
         VStack(alignment: .leading, spacing: 8) {
           ForEach(surfaces) { surface in
-            SurfaceCard(surface: surface, preferCompact: preferCompact)
+            if surface.actions.contains(where: { $0.kind == "approve" || $0.kind == "undo" }) {
+              JobCard(
+                job: JobItem(id: "surface-\(surface.id)", kind: .approval,
+                             title: surface.title, summary: surface.summary,
+                             state: .needsApproval,
+                             primaryLabel: surface.actions.first(where: { $0.kind == "approve" || $0.kind == "undo" })?.label ?? "",
+                             secondaryLabel: surface.actions.first(where: { $0.kind == "dismiss" })?.label ?? ""),
+                onPrimary: { if let a = surface.actions.first(where: { $0.kind == "approve" || $0.kind == "undo" }) { model.resolveSurfaceAction(a) } },
+                onSecondary: { if let a = surface.actions.first(where: { $0.kind == "dismiss" }) { model.resolveSurfaceAction(a) } }
+              )
+            } else {
+              SurfaceCard(surface: surface, preferCompact: preferCompact)
+            }
           }
         }
         .padding(.top, 4)
@@ -1008,11 +1076,8 @@ private struct ArthurCopy: View {
         Button("Stop") { model.cancelTurn() }
       }
     }
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: .contain)
     .accessibilityLabel(accessibilityLabel)
-    .accessibilityAction(named: "Copy") {
-      ArthurPasteboard.copy(texts.joined(separator: " "))
-    }
   }
 
   private var accessibilityLabel: String {
@@ -1027,11 +1092,12 @@ private struct ArthurCopy: View {
 
 private struct ArthurReply: View {
   @Environment(AppModel.self) private var model
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let text: String
   var live = false
 
   var body: some View {
-    if live {
+    if live, !reduceMotion {
       // The animation schedule keeps painting while the transcript is scrolling.
       // The scroll run loop does not refresh an ordinary body until the gesture ends.
       TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { _ in
@@ -1088,6 +1154,10 @@ struct SettingsView: View {
     @Bindable var model = model
     NavigationStack(path: $settingsPath) {
       Form {
+        Section {
+          Text("Connection and device below apply when you tap Done. Switches, pickers, and voice enrollment further down apply right away.")
+            .font(.caption).foregroundStyle(ArthurTheme.mute)
+        }
         Section("Connection") {
           LabeledContent("Host") {
             TextField("127.0.0.1", text: $model.config.host)
@@ -1194,16 +1264,7 @@ struct SettingsView: View {
               Button("Remove") { model.forgetPerson(person.id) }
             }
           }
-          TextField("Name", text: $model.teachName)
-          TextField("Calendar title", text: $model.teachCalendar)
-          Button(model.teaching ? "Listening…" : "Teach Arthur your voice") {
-            model.teachVoice()
-          }
-          .disabled(model.teaching || model.teachName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          if model.teaching {
-            Text(HouseholdRoster.phrases[min(model.teachPhrase, HouseholdRoster.phrases.count - 1)])
-              .foregroundStyle(.secondary)
-          }
+          Button("Enroll a household member…") { model.householdEnrollOpen = true }
           if !model.householdStatus.isEmpty {
             Text(model.householdStatus)
               .foregroundStyle(.secondary)
@@ -1271,6 +1332,9 @@ struct SettingsView: View {
           }
         }
       }
+      .sheet(isPresented: $model.householdEnrollOpen) {
+        HouseholdEnrollSheet().environment(model)
+      }
       .onAppear {
         model.loadMcpRegistry()
         model.refreshMicrophones()
@@ -1330,6 +1394,74 @@ struct SettingsView: View {
     return text
   }
 }
+
+
+private struct HouseholdEnrollSheet: View {
+  @Environment(AppModel.self) private var model
+  @Environment(\.dismiss) private var dismiss
+  var body: some View {
+    @Bindable var model = model
+    VStack(alignment: .leading, spacing: 16) {
+      Text("Teach Arthur a voice").font(.title3.weight(.semibold))
+      Text("Say each phrase when asked. Wake word pauses while you record.")
+        .font(.callout).foregroundStyle(ArthurTheme.mute)
+      // 1-2-3 progress
+      HStack(spacing: 8) {
+        ForEach(0..<HouseholdRoster.phrases.count, id: \.self) { i in
+          VStack(spacing: 4) {
+            Circle().fill(i < model.teachPhrase || !model.teaching && !model.householdStatus.isEmpty && model.householdStatus.contains("enrolled") ? Color.white : Color.white.opacity(0.18))
+              .frame(width: 10, height: 10)
+            Text("\(i + 1)").font(.caption2).foregroundStyle(ArthurTheme.mute)
+          }
+          if i < HouseholdRoster.phrases.count - 1 { Rectangle().fill(Color.white.opacity(0.18)).frame(height: 1) }
+        }
+      }
+      .accessibilityLabel(model.teaching ? "Phrase \(min(model.teachPhrase + 1, HouseholdRoster.phrases.count)) of \(HouseholdRoster.phrases.count)" : "Not recording")
+      if !model.teaching {
+        TextField("Name", text: $model.teachName)
+        TextField("Calendar title", text: $model.teachCalendar)
+      }
+      if model.teaching {
+        Text(HouseholdRoster.phrases[min(model.teachPhrase, HouseholdRoster.phrases.count - 1)])
+          .font(.callout).foregroundStyle(.primary)
+      }
+      if !model.householdStatus.isEmpty {
+        Text(model.householdStatus).font(.callout).foregroundStyle(ArthurTheme.mute)
+      }
+      HStack {
+        if model.teaching {
+          Button("Cancel enrollment") { model.cancelTeach() }
+        }
+        Spacer()
+        Button("Close") { if model.teaching { model.cancelTeach() }; dismiss() }
+        if !model.teaching {
+          Button(model.teaching ? "Listening…" : "Start — 3 phrases") { model.teachVoice() }
+            .disabled(model.teachName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .font(.callout.weight(.semibold))
+        }
+      }
+    }
+    .padding(20).frame(width: 440).background(Color.black).preferredColorScheme(.dark)
+  }
+}
+
+#if DEBUG
+#Preview("Household · mid-enrollment") {
+  let m = AppModel.previewCanvas(); m.teaching = true; m.teachPhrase = 1; m.teachName = "Sam"
+  return HouseholdEnrollSheet().environment(m).frame(width: 480, height: 380)
+}
+#Preview("Activity · error offline") {
+  let m = AppModel.previewCanvas(phase: .disconnected); m.errorText = "Disconnected from intercom."
+  return ActivityPanel().environment(m).frame(width: 520, height: 620)
+}
+#Preview("Activity · approval pending") {
+  let m = AppModel.previewCanvas()
+  m.pendingWriteTitle = "Add calendar event"; m.pendingWriteSummary = "Dentist tomorrow at 9am"
+  // pendingWriteLabel is derived from private phase; surface via schedules as fallback rows
+  m.deskSchedules = [DeskSchedule(id: 3, message: "Water the plants", phrase: "tomorrow at 9:00 am", status: "active")]
+  return ActivityPanel().environment(m).frame(width: 520, height: 620)
+}
+#endif
 
 #if DEBUG
 #Preview("Empty") {

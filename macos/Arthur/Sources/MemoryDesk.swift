@@ -8,126 +8,135 @@ struct MemoryDesk: View {
     @Bindable var model = model
     NavigationStack {
       Form {
+        if !model.deskStatus.isEmpty {
+          Section {
+            HStack {
+              Text(model.deskStatus).font(.callout).foregroundStyle(ArthurTheme.mute)
+              Spacer()
+              Button("Dismiss") { model.deskStatus = "" }.font(.caption.weight(.semibold))
+            }
+          }
+        }
+        if model.deskLoadState.isLoading {
+          Section { HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading…").foregroundStyle(ArthurTheme.mute) } }
+        } else if let failure = model.deskLoadState.failureMessage {
+          Section {
+            VStack(alignment: .leading, spacing: 8) {
+              Label(failure, systemImage: "exclamationmark.circle.fill")
+                .foregroundStyle(ArthurTheme.error)
+              Button("Retry") { model.loadDesk() }
+                .accessibilityLabel("Retry loading memory")
+            }
+          }
+        }
         Section {
           TextField("Search facts", text: $model.memoryQuery)
-          if model.memoryFacts.isEmpty {
+          if model.deskLoadState == .loaded, model.memoryFacts.isEmpty {
             Text(model.memoryQuery.isEmpty ? "No facts yet" : "Nothing matches")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(ArthurTheme.mute)
           }
           ForEach(model.memoryFacts) { fact in
             VStack(alignment: .leading, spacing: 6) {
-              Text(fact.title)
-                .font(.system(size: 14, weight: .semibold))
+              Text(fact.title).font(.body.weight(.semibold))
               if !fact.content.isEmpty {
-                Text(fact.content)
-                  .font(.system(size: 13))
-                  .foregroundStyle(.secondary)
-                  .lineLimit(4)
+                Text(fact.content).font(.callout).foregroundStyle(ArthurTheme.mute).lineLimit(4)
               }
               HStack {
                 Button("Edit") { model.beginMemoryEdit(fact) }
                 Button("Remove") { model.removeMemory(fact) }
+              }.buttonStyle(.borderless)
+              // Edit form lives directly under the row it edits.
+              if model.editingMemory, model.editingMemoryId == fact.id {
+                TextField("Title", text: $model.memoryEditTitle)
+                TextField("Fact", text: $model.memoryEditContent, axis: .vertical)
+                HStack {
+                  Button("Save") { model.saveMemoryEdit() }
+                    .disabled(model.memoryEditTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                  Button("Cancel") { model.editingMemory = false }
+                }.buttonStyle(.borderless)
               }
-              .buttonStyle(.borderless)
-            }
-            .padding(.vertical, 4)
+            }.padding(.vertical, 4)
           }
           if let undo = model.memoryUndo {
             Button("Undo remove \(undo.title)") { model.restoreMemory() }
           }
-          if model.editingMemory {
-            TextField("Title", text: $model.memoryEditTitle)
-            TextField("Fact", text: $model.memoryEditContent, axis: .vertical)
-            Button("Save") { model.saveMemoryEdit() }
-              .disabled(model.memoryEditTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          }
-        } header: {
-          Text("Memory")
-        } footer: {
+        } header: { Text("Memory") } footer: {
           Text("Removing a fact means Arthur stops using it. Undo puts that fact back.")
         }
 
         Section {
-          if model.deskSchedules.isEmpty {
-            Text("No upcoming reminders")
-              .foregroundStyle(.secondary)
+          if model.deskLoadState == .loaded, model.deskSchedules.isEmpty {
+            Text("No upcoming reminders").foregroundStyle(ArthurTheme.mute)
           }
           ForEach(model.deskSchedules) { item in
             VStack(alignment: .leading, spacing: 6) {
-              Text(item.message.isEmpty ? item.phrase : item.message)
-                .font(.system(size: 14, weight: .semibold))
-              if !item.phrase.isEmpty {
-                Text(item.phrase)
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
-              }
-              TextField("New time", text: phraseBinding(item.id, item.phrase))
+              Text(item.message.isEmpty ? item.phrase : item.message).font(.body.weight(.semibold))
+              if !item.phrase.isEmpty { Text(item.phrase).font(.caption).foregroundStyle(ArthurTheme.mute) }
+              DatePicker("New time", selection: dateBinding(item.id), displayedComponents: [.date, .hourAndMinute])
+                .accessibilityLabel("New time for \(item.message.isEmpty ? item.phrase : item.message)")
+              Text("Arthur will hear: \(ReschedulePhrase.phrase(for: model.rescheduleDates[item.id] ?? ReschedulePhrase.defaultDate()))")
+                .font(.caption).foregroundStyle(ArthurTheme.mute)
               HStack {
                 Button("Reschedule") { model.reschedule(item) }
                 Button("Complete") { model.finishSchedule(item.id, status: "completed") }
                 Button("Cancel") { model.finishSchedule(item.id, status: "canceled") }
-              }
-              .buttonStyle(.borderless)
-            }
-            .padding(.vertical, 4)
+              }.buttonStyle(.borderless)
+            }.padding(.vertical, 4)
           }
-        } header: {
-          Text("Schedules")
-        }
+        } header: { Text("Schedules") }
 
         Section {
-          if model.deskTodos.isEmpty {
-            Text("Nothing open")
-              .foregroundStyle(.secondary)
+          if model.deskLoadState == .loaded, model.deskTodos.isEmpty {
+            Text("Nothing open").foregroundStyle(ArthurTheme.mute)
           }
           ForEach(model.deskTodos) { item in
             VStack(alignment: .leading, spacing: 6) {
-              Text(item.subject)
-                .font(.system(size: 14, weight: .semibold))
+              Text(item.subject).font(.body.weight(.semibold))
               HStack {
                 Button("Complete") { model.finishTodo(item.id, status: "completed") }
                 Button("Cancel") { model.finishTodo(item.id, status: "canceled") }
-              }
-              .buttonStyle(.borderless)
-            }
-            .padding(.vertical, 4)
+              }.buttonStyle(.borderless)
+            }.padding(.vertical, 4)
           }
-        } header: {
-          Text("Todos")
-        }
-
-        if !model.deskStatus.isEmpty {
-          Section {
-            Text(model.deskStatus)
-              .foregroundStyle(.secondary)
-          }
-        }
+        } header: { Text("Todos") }
       }
       .formStyle(.grouped)
       .scrollContentBackground(.hidden)
       .background(Color.black)
       .navigationTitle("Memory")
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Done") { dismiss() }
-        }
-      }
+      .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
       .onAppear { model.loadDesk() }
-      .onSubmit { model.loadDesk() }
       .onChange(of: model.memoryQuery) { _, _ in model.loadDesk() }
     }
     .frame(minWidth: 520, minHeight: 560)
     .preferredColorScheme(.dark)
   }
 
-  private func phraseBinding(_ id: Int, _ fallback: String) -> Binding<String> {
+  private func dateBinding(_ id: Int) -> Binding<Date> {
     Binding(
-      get: { model.reschedulePhrases[id] ?? fallback },
-      set: {
-        var next = model.reschedulePhrases
-        next[id] = $0
-        model.reschedulePhrases = next
-      }
+      get: { model.rescheduleDates[id] ?? ReschedulePhrase.defaultDate() },
+      set: { var next = model.rescheduleDates; next[id] = $0; model.rescheduleDates = next }
     )
   }
 }
+
+#if DEBUG
+#Preview("Memory · loading") {
+  let m = AppModel.previewCanvas(); m.deskLoadState = .loading
+  return MemoryDesk().environment(m).frame(width: 560, height: 620)
+}
+#Preview("Memory · empty") {
+  MemoryDesk().environment(AppModel.previewCanvas()).frame(width: 560, height: 620)
+}
+#Preview("Memory · populated") {
+  let m = AppModel.previewCanvas()
+  m.memoryFacts = [MemoryFact(id: 1, title: "Kitchen", content: "Stays blue.", type: "user")]
+  m.deskSchedules = [DeskSchedule(id: 3, message: "Water the plants", phrase: "tomorrow at 9:00 am", status: "active")]
+  m.deskTodos = [DeskTodo(id: 9, subject: "Buy milk", status: "pending")]
+  return MemoryDesk().environment(m).frame(width: 560, height: 620)
+}
+#Preview("Memory · failed") {
+  let m = AppModel.previewCanvas(); m.deskLoadState = .failed("Could not reach Arthur. Check the connection, then retry.")
+  return MemoryDesk().environment(m).frame(width: 560, height: 620)
+}
+#endif

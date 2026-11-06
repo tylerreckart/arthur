@@ -1,6 +1,4 @@
 import AppKit
-import Metal
-import MetalKit
 import SwiftUI
 
 // MARK: - Motion
@@ -76,6 +74,9 @@ struct DropletContent: Equatable {
   var handsFree: Bool
   var holding: Bool
   var hotkey: String
+  var attentionCount: Int = 0
+  var attentionTitle: String = ""
+  var attentionSummary: String = "" 
 
   var live: Bool { stage != .ready }
 
@@ -185,6 +186,7 @@ struct DropletContent: Equatable {
     case .ready: title = "Arthur"
     }
 
+    let urgent = model.mostUrgentJob
     return DropletContent(
       stage: stage,
       title: title,
@@ -201,7 +203,10 @@ struct DropletContent: Equatable {
       canCancel: model.canCancel,
       handsFree: handsFree,
       holding: model.holding,
-      hotkey: hotkey
+      hotkey: hotkey,
+      attentionCount: model.attentionCount,
+      attentionTitle: urgent?.title ?? "",
+      attentionSummary: urgent?.summary ?? ""
     )
   }
 
@@ -225,10 +230,9 @@ struct DropletActions {
   var stop: () -> Void = {}
   var open: () -> Void = {}
   var dismiss: () -> Void = {}
-  var send: (String) -> Void = { _ in }
   var approve: () -> Void = {}
   var look: () -> Void = {}
-  var fieldFocus: (Bool) -> Void = { _ in }
+  var openActivity: () -> Void = {}
   var hover: (Bool) -> Void = { _ in }
   var setAcceptsHits: (Bool) -> Void = { _ in }
   var cardFrame: (NSRect) -> Void = { _ in }
@@ -261,8 +265,6 @@ final class DropletSession {
   var cardHeight: CGFloat = 168
   var pointer = CGPoint(x: 0.32, y: 0.18)
   var hovering = false
-  var fieldFocused = false
-  var metalOK = true
   var actions = DropletActions()
   var talkArmed = false
 
@@ -341,6 +343,7 @@ final class DropletSession {
 // MARK: - Bead
 
 struct ArthurBead: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   var bead: BeadState
   var diameter: CGFloat = 16
   /// When set, draw this instant instead of running a timeline.
@@ -348,7 +351,7 @@ struct ArthurBead: View {
   var clock: Date? = nil
 
   private var animating: Bool {
-    bead.listening || bead.thinking || bead.speaking || bead.dripping || bead.connected
+    !reduceMotion && (bead.listening || bead.thinking || bead.speaking || bead.dripping || bead.connected)
   }
 
   var body: some View {
@@ -485,46 +488,6 @@ struct DropletCardRoot: View {
     )
   }
 
-  private func squish(sample: DripSample, drag: CGSize) -> CGSize {
-    let sx = CGFloat(sample.squishX) * (1 - min(0.14, max(-0.14, drag.width / 420)))
-    let sy = CGFloat(sample.squishY) * (1 + min(0.20, max(-0.12, drag.height / 520)))
-    return CGSize(width: sx, height: sy)
-  }
-
-  private func makeDraw(sample: DripSample, layout: DropletLayout, time: Float) -> DropletDraw {
-    let hover = session.hovering
-    return DropletDraw(
-      time: time,
-      anchorX: Float(layout.anchor.x),
-      anchorY: Float(layout.anchor.y),
-      cardX: Float(layout.card.minX),
-      cardY: Float(layout.card.minY),
-      cardW: Float(layout.card.width),
-      cardH: Float(layout.card.height),
-      fall: sample.fall,
-      bridge: sample.bridge,
-      morph: sample.morph,
-      squishX: Float(layout.squish.width),
-      squishY: Float(layout.squish.height),
-      level: Float(session.content.level),
-      speak: Float(session.content.speak),
-      phase: phaseIndex(session.content.stage),
-      pointerX: Float(session.pointer.x),
-      pointerY: Float(session.pointer.y),
-      hovering: hover ? 1 : 0,
-      presence: sample.presence
-    )
-  }
-
-  private func phaseIndex(_ stage: DropletStage) -> Float {
-    switch stage {
-    case .ready: return 0
-    case .listening: return 1
-    case .thinking: return 2
-    case .replying: return 3
-    }
-  }
-
   @ViewBuilder
   private func card(sample: DripSample, layout: DropletLayout) -> some View {
     let reveal = CGFloat(min(max(sample.content, 0), 1))
@@ -537,6 +500,11 @@ struct DropletCardRoot: View {
         }
       }
       .background(Color.black, in: RoundedRectangle(cornerRadius: DropletMetrics.corner, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: DropletMetrics.corner, style: .continuous)
+          .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+      }
+      .shadow(color: .black.opacity(0.45), radius: 16, y: 8)
       .clipShape(RoundedRectangle(cornerRadius: DropletMetrics.corner, style: .continuous))
       .opacity(reveal)
       .offset(y: (1 - rise) * 36)
@@ -589,21 +557,72 @@ private struct DropletCardBody: View {
         .accessibilityLabel("Dismiss")
       }
 
-      if content.reply.isEmpty {
-        Text(content.stage == .ready ? "Hello." : (content.stage == .listening ? "Listening" : "…"))
-          .font(.system(size: 20, weight: .regular, design: .serif))
-          .foregroundStyle(Color.white.opacity(content.stage == .ready || content.stage == .listening ? 0.92 : 0.45))
+      if !content.you.isEmpty {
+        Text(content.you)
+          .font(.callout)
+          .foregroundStyle(ArthurTheme.mute)
+          .lineLimit(3)
           .frame(maxWidth: .infinity, alignment: .leading)
-        if content.stage == .ready,
-           !content.subtitle.isEmpty,
+          .accessibilityLabel("You said: \(content.you)")
+      }
+
+      if content.reply.isEmpty {
+        Text(content.stage == .ready ? "Hello." : content.title)
+          .font(.system(.title3, design: .serif))
+          .foregroundStyle(Color.white.opacity(0.92))
+          .frame(maxWidth: .infinity, alignment: .leading)
+        // Subtitle (work line, error, or hint) shows in every stage — not
+        // only .ready — so a long think never reads as a bare "…".
+        if !content.subtitle.isEmpty,
            !content.subtitle.hasPrefix("Hold the droplet") {
           Text(content.subtitle)
-            .font(.system(size: 13, weight: .regular))
-            .foregroundStyle(Color.white.opacity(0.55))
+            .font(.callout)
+            .foregroundStyle(content.stage == .ready && content.subtitle == session.content.subtitle && !content.attentionTitle.isEmpty ? ArthurTheme.mute : ArthurTheme.mute)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(content.subtitle)
         }
       } else {
         SpokenReply(text: content.reply)
+        if content.stage == .thinking || content.stage == .replying, !content.subtitle.isEmpty {
+          Text(content.subtitle)
+            .font(.callout).foregroundStyle(ArthurTheme.mute)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+
+      // Nothing is approvable blind: the pending item's title + summary
+      // sit directly above Approve / Not now, and tapping opens Activity.
+      if !content.approveLabel.isEmpty, !content.noteTitle.isEmpty || !content.noteBody.isEmpty {
+        JobCard(
+          job: JobItem(id: "droplet-approval", kind: .approval,
+                       title: content.noteTitle.isEmpty ? content.attentionTitle : content.noteTitle,
+                       summary: content.noteBody.isEmpty ? content.attentionSummary : content.noteBody,
+                       state: .needsApproval, primaryLabel: "", secondaryLabel: ""),
+          compact: true,
+          onTap: { session.actions.openActivity() }
+        )
+        .accessibilityHint("Opens Activity")
+      } else if content.attentionCount > 0, !content.attentionTitle.isEmpty {
+        Button { session.actions.openActivity() } label: {
+          HStack(spacing: 6) {
+            Text("\(content.attentionCount)").font(.caption2.weight(.bold))
+              .padding(5).background(Color(red: 0.86, green: 0.40, blue: 0.42), in: Circle()).foregroundStyle(.white)
+            Text(content.attentionTitle).font(.callout.weight(.semibold)).lineLimit(1)
+            Spacer()
+            Image(systemName: "chevron.right").font(.caption2)
+          }.foregroundStyle(ArthurTheme.paper)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(content.attentionCount) items need you. Most urgent: \(content.attentionTitle)")
+        .accessibilityHint("Opens Activity")
+      }
+
+      if content.canCancel {
+        Button("Stop") { session.actions.stop() }
+          .buttonStyle(.plain).font(.callout.weight(.semibold))
+          .padding(.horizontal, 12).padding(.vertical, 7)
+          .foregroundStyle(.black).background(Color.white.opacity(0.92), in: Capsule())
+          .accessibilityLabel("Stop Arthur")
       }
 
       if !content.approveLabel.isEmpty || !content.lookLabel.isEmpty {
@@ -641,7 +660,7 @@ private struct DropletCardBody: View {
   private var cardDrag: some Gesture {
     DragGesture(minimumDistance: 18)
       .onChanged { value in
-        guard !session.talkArmed, !session.fieldFocused, !session.closing else { return }
+        guard !session.talkArmed, !session.closing else { return }
         let sample = session.sample(at: Date())
         guard sample.morph > 0.92 else { return }
         session.updateDrag(value.translation)
@@ -687,446 +706,6 @@ private struct SpokenReply: View {
     reveal?.cancel()
     count = next.count
   }
-}
-
-private struct InkPressStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .scaleEffect(configuration.isPressed ? 0.94 : 1)
-      .brightness(configuration.isPressed ? 0.08 : 0)
-      .animation(.spring(response: 0.26, dampingFraction: 0.62), value: configuration.isPressed)
-  }
-}
-
-private struct InkWaveform: View {
-  var level: Double
-
-  var body: some View {
-    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-      let time = context.date.timeIntervalSinceReferenceDate
-      HStack(alignment: .center, spacing: 3) {
-        ForEach(0..<28, id: \.self) { index in
-          let wave = sin(time * 5.4 + Double(index) * 0.42)
-          let lift = 0.35 + 0.65 * min(1, level)
-          let height = 3 + lift * (7 + 16 * (0.5 + 0.5 * wave))
-          Capsule()
-            .fill(Color.white.opacity(0.22 + 0.62 * lift * (0.45 + 0.55 * (0.5 + 0.5 * wave))))
-            .frame(width: 2, height: height)
-            .blur(radius: level > 0.45 ? 0.45 : 0)
-        }
-      }
-      .frame(maxWidth: .infinity)
-      .frame(height: 32)
-    }
-    .accessibilityHidden(true)
-  }
-}
-
-private struct ThinkingSheen: View {
-  var body: some View {
-    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-      let time = context.date.timeIntervalSinceReferenceDate
-      let travel = 0.5 + 0.5 * sin(time * 0.95)
-      GeometryReader { geo in
-        ZStack(alignment: .leading) {
-          Capsule()
-            .fill(Color.white.opacity(0.06))
-            .frame(height: 2)
-          Capsule()
-            .fill(
-              LinearGradient(
-                colors: [Color.white.opacity(0.0), Color.white.opacity(0.85), Color.white.opacity(0.0)],
-                startPoint: .leading,
-                endPoint: .trailing
-              )
-            )
-            .frame(width: 48, height: 3)
-            .blur(radius: 1.1)
-            .offset(x: (geo.size.width - 48) * travel)
-        }
-        .frame(height: geo.size.height, alignment: .center)
-      }
-      .frame(height: 8)
-    }
-    .accessibilityHidden(true)
-  }
-}
-
-// MARK: - Liquid
-
-private struct DropletDraw: Equatable {
-  var time: Float
-  var anchorX: Float
-  var anchorY: Float
-  var cardX: Float
-  var cardY: Float
-  var cardW: Float
-  var cardH: Float
-  var fall: Float
-  var bridge: Float
-  var morph: Float
-  var squishX: Float
-  var squishY: Float
-  var level: Float
-  var speak: Float
-  var phase: Float
-  var pointerX: Float
-  var pointerY: Float
-  var hovering: Float
-  var presence: Float
-}
-
-private struct DropletFallbackBody: View {
-  var draw: DropletDraw
-
-  var body: some View {
-    let morph = CGFloat(min(max(draw.morph, 0), 1))
-    let width = max(16, CGFloat(draw.cardW) * morph + 18 * (1 - morph))
-    let height = max(16, CGFloat(draw.cardH) * morph + 18 * (1 - morph))
-    let landed = CGPoint(
-      x: CGFloat(draw.cardX) + CGFloat(draw.cardW) / 2,
-      y: CGFloat(draw.cardY) + height / 2
-    )
-    let gathered = CGPoint(x: CGFloat(draw.anchorX), y: CGFloat(draw.anchorY) + 14)
-    let fall = CGFloat(draw.fall)
-    let center = CGPoint(
-      x: gathered.x + (landed.x - gathered.x) * fall,
-      y: gathered.y + (landed.y - gathered.y) * fall
-    )
-    ZStack {
-      if draw.bridge > 0.03 {
-        Capsule()
-          .fill(Color.black)
-          .frame(width: 4 + CGFloat(draw.bridge) * 8, height: max(8, center.y - CGFloat(draw.anchorY)))
-          .position(x: CGFloat(draw.anchorX), y: (CGFloat(draw.anchorY) + center.y) / 2)
-      }
-      RoundedRectangle(cornerRadius: morph > 0.45 ? DropletMetrics.corner : width / 2, style: .continuous)
-        .fill(Color.black)
-        .overlay {
-          RoundedRectangle(cornerRadius: DropletMetrics.corner, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
-            .blur(radius: 0.4)
-        }
-        .frame(width: width, height: height)
-        .position(center)
-        .shadow(color: .black.opacity(0.45), radius: 16, y: 12)
-    }
-    .opacity(Double(draw.presence))
-  }
-}
-
-private struct DropletMetal: NSViewRepresentable {
-  var draw: DropletDraw
-  var onUnavailable: () -> Void
-
-  func makeCoordinator() -> DropletRenderer { DropletRenderer() }
-
-  func makeNSView(context: Context) -> MTKView {
-    let view = MTKView()
-    context.coordinator.attach(view, onUnavailable: onUnavailable)
-    context.coordinator.drawState = draw
-    context.coordinator.push(view)
-    return view
-  }
-
-  func updateNSView(_ view: MTKView, context: Context) {
-    context.coordinator.drawState = draw
-    context.coordinator.push(view)
-    if view.isPaused { view.isPaused = false }
-  }
-}
-
-private struct DropletGPU {
-  var time: Float = 0
-  var anchorX: Float = 0
-  var anchorY: Float = 0
-  var cardX: Float = 0
-  var cardY: Float = 0
-  var cardW: Float = 1
-  var cardH: Float = 1
-  var fall: Float = 0
-  var bridge: Float = 0
-  var morph: Float = 0
-  var squishX: Float = 1
-  var squishY: Float = 1
-  var level: Float = 0
-  var speak: Float = 0
-  var phase: Float = 0
-  var pointerX: Float = 0.3
-  var pointerY: Float = 0.2
-  var hovering: Float = 0
-  var presence: Float = 1
-  var resolutionX: Float = 1
-  var resolutionY: Float = 1
-}
-
-final class DropletRenderer: NSObject, MTKViewDelegate {
-  fileprivate var drawState = DropletDraw(
-    time: 0, anchorX: 0, anchorY: 0, cardX: 0, cardY: 0, cardW: 1, cardH: 1,
-    fall: 0, bridge: 0, morph: 0, squishX: 1, squishY: 1, level: 0, speak: 0,
-    phase: 0, pointerX: 0.3, pointerY: 0.2, hovering: 0, presence: 0
-  )
-
-  private var device: MTLDevice?
-  private var queue: MTLCommandQueue?
-  private var pipeline: MTLRenderPipelineState?
-  private var uniforms: MTLBuffer?
-  private var reportedFailure = false
-  private var onUnavailable: (() -> Void)?
-
-  func attach(_ view: MTKView, onUnavailable: @escaping () -> Void) {
-    self.onUnavailable = onUnavailable
-    guard let device = MTLCreateSystemDefaultDevice() else {
-      fail()
-      return
-    }
-    self.device = device
-    view.device = device
-    view.delegate = self
-    view.framebufferOnly = true
-    view.isPaused = false
-    view.enableSetNeedsDisplay = false
-    view.preferredFramesPerSecond = 60
-    view.colorPixelFormat = .bgra8Unorm
-    view.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-    view.wantsLayer = true
-    view.layer?.isOpaque = false
-    view.layer?.backgroundColor = CGColor(gray: 0, alpha: 0)
-    if let metal = view.layer as? CAMetalLayer {
-      metal.isOpaque = false
-    }
-    queue = device.makeCommandQueue()
-    uniforms = device.makeBuffer(length: MemoryLayout<DropletGPU>.stride, options: .storageModeShared)
-    pipeline = Self.makePipeline(device: device, pixelFormat: view.colorPixelFormat)
-    if pipeline == nil { fail() }
-  }
-
-  func push(_ view: MTKView) {
-    view.isPaused = false
-  }
-
-  func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
-
-  func draw(in view: MTKView) {
-    guard let pipeline, let queue, let uniforms,
-          let drawable = view.currentDrawable,
-          let descriptor = view.currentRenderPassDescriptor
-    else { return }
-
-    let scaleX = Float(view.drawableSize.width / max(view.bounds.width, 1))
-    let scaleY = Float(view.drawableSize.height / max(view.bounds.height, 1))
-    var gpu = DropletGPU()
-    let state = drawState
-    gpu.time = state.time
-    gpu.anchorX = state.anchorX * scaleX
-    gpu.anchorY = state.anchorY * scaleY
-    gpu.cardX = state.cardX * scaleX
-    gpu.cardY = state.cardY * scaleY
-    gpu.cardW = state.cardW * scaleX
-    gpu.cardH = state.cardH * scaleY
-    gpu.fall = state.fall
-    gpu.bridge = state.bridge
-    gpu.morph = state.morph
-    gpu.squishX = state.squishX
-    gpu.squishY = state.squishY
-    gpu.level = state.level
-    gpu.speak = state.speak
-    gpu.phase = state.phase
-    gpu.pointerX = state.pointerX
-    gpu.pointerY = state.pointerY
-    gpu.hovering = state.hovering
-    gpu.presence = state.presence
-    gpu.resolutionX = Float(view.drawableSize.width)
-    gpu.resolutionY = Float(view.drawableSize.height)
-    uniforms.contents().assumingMemoryBound(to: DropletGPU.self).pointee = gpu
-
-    descriptor.colorAttachments[0].loadAction = .clear
-    descriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-
-    guard let cmd = queue.makeCommandBuffer(),
-          let enc = cmd.makeRenderCommandEncoder(descriptor: descriptor)
-    else { return }
-    enc.setRenderPipelineState(pipeline)
-    enc.setVertexBuffer(uniforms, offset: 0, index: 0)
-    enc.setFragmentBuffer(uniforms, offset: 0, index: 0)
-    enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-    enc.endEncoding()
-    cmd.present(drawable)
-    cmd.commit()
-  }
-
-  private func fail() {
-    guard !reportedFailure else { return }
-    reportedFailure = true
-    DispatchQueue.main.async { [onUnavailable] in onUnavailable?() }
-  }
-
-  private static func makePipeline(device: MTLDevice, pixelFormat: MTLPixelFormat) -> MTLRenderPipelineState? {
-    guard let library = try? device.makeLibrary(source: DropletShader.source, options: nil),
-          let vs = library.makeFunction(name: "droplet_vertex"),
-          let fs = library.makeFunction(name: "droplet_fragment")
-    else { return nil }
-    let desc = MTLRenderPipelineDescriptor()
-    desc.vertexFunction = vs
-    desc.fragmentFunction = fs
-    desc.colorAttachments[0].pixelFormat = pixelFormat
-    desc.colorAttachments[0].isBlendingEnabled = true
-    desc.colorAttachments[0].sourceRGBBlendFactor = .one
-    desc.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
-    desc.colorAttachments[0].sourceAlphaBlendFactor = .one
-    desc.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
-    return try? device.makeRenderPipelineState(descriptor: desc)
-  }
-}
-
-private enum DropletShader {
-  static let source = """
-  #include <metal_stdlib>
-  using namespace metal;
-
-  struct Uniforms {
-    float time;
-    float anchorX;
-    float anchorY;
-    float cardX;
-    float cardY;
-    float cardW;
-    float cardH;
-    float fall;
-    float bridge;
-    float morph;
-    float squishX;
-    float squishY;
-    float level;
-    float speak;
-    float phase;
-    float pointerX;
-    float pointerY;
-    float hovering;
-    float presence;
-    float resolutionX;
-    float resolutionY;
-  };
-
-  struct VertexOut {
-    float4 position [[position]];
-    float2 uv;
-  };
-
-  struct Scene {
-    float dist;
-    float2 center;
-    float2 halfSize;
-  };
-
-  vertex VertexOut droplet_vertex(uint vid [[vertex_id]]) {
-    float2 pos[3] = { float2(-1.0, -1.0), float2(-1.0, 3.0), float2(3.0, -1.0) };
-    VertexOut out;
-    out.position = float4(pos[vid], 0.0, 1.0);
-    out.uv = pos[vid] * 0.5 + 0.5;
-    return out;
-  }
-
-  float sdRoundBox(float2 p, float2 b, float r) {
-    float2 q = abs(p) - b + float2(r);
-    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
-  }
-
-  float sdCapsule(float2 p, float2 a, float2 b, float r) {
-    float2 pa = p - a;
-    float2 ba = b - a;
-    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
-    return length(pa - ba * h) - r;
-  }
-
-  float smin(float a, float b, float k) {
-    if (k <= 0.001) return min(a, b);
-    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
-    return mix(b, a, h) - k * h * (1.0 - h);
-  }
-
-  Scene evalScene(float2 p, constant Uniforms &u) {
-    float m = clamp(u.morph, 0.0, 1.0);
-    float over = max(u.morph - 1.0, 0.0);
-    float2 outer = float2(u.cardW, u.cardH) * 0.5 * (1.0 + over * 0.04);
-    float2 halfSize = mix(float2(9.0), max(outer, float2(9.0)), m);
-    float corner = mix(9.0, min(28.0, min(halfSize.x, halfSize.y)), m);
-    float2 cardCenter = float2(u.cardX, u.cardY) + float2(u.cardW, u.cardH) * 0.5;
-    float2 landed = float2(cardCenter.x, u.cardY + halfSize.y);
-    float2 gathered = float2(u.anchorX, u.anchorY + 12.0);
-    float2 center = mix(gathered, landed, clamp(u.fall, 0.0, 1.0));
-
-    float2 q = p - center;
-    float sx = max(u.squishX, 0.25);
-    float sy = max(u.squishY, 0.25);
-    q.x /= sx;
-    q.y /= sy;
-    float body = sdRoundBox(q, halfSize, corner) * min(sx, sy);
-
-    float dist = body;
-    if (u.bridge > 0.004) {
-      float2 neckEnd = center + float2(0.0, -halfSize.y * 0.2);
-      float neckR = mix(1.15, 8.0, u.bridge);
-      float cap = sdCapsule(p, float2(u.anchorX, u.anchorY), neckEnd, neckR);
-      float k = mix(8.0, 46.0, u.bridge);
-      dist = smin(body, cap, k);
-    }
-    Scene scene;
-    scene.dist = dist;
-    scene.center = center;
-    scene.halfSize = halfSize;
-    return scene;
-  }
-
-  fragment float4 droplet_fragment(VertexOut in [[stage_in]], constant Uniforms &u [[buffer(0)]]) {
-    float2 p = float2(in.uv.x * u.resolutionX, (1.0 - in.uv.y) * u.resolutionY);
-    Scene scene = evalScene(p, u);
-    float dist = scene.dist;
-
-    // Normals of a rounded box are constant across each face and jump
-    // along the diagonals, which reads as a folded metal envelope.
-    // Shade only from position so the body stays a soft black drop.
-    float2 rel = (p - scene.center) / max(scene.halfSize, float2(1.0));
-    float above = saturate(-rel.y);
-    float lift = above * above;
-    float2 drift = float2(sin(u.time * 0.31), cos(u.time * 0.23)) * 0.03;
-    float2 hover = (float2(u.pointerX, u.pointerY) - float2(0.32, 0.20)) * u.hovering * 0.12;
-    float2 h = (rel - float2(0.0, -0.55) - drift - hover) * float2(0.75, 1.35);
-    float lobe = exp(-dot(h, h) * 0.85);
-
-    float3 col = float3(0.015, 0.015, 0.017);
-    col += float3(0.045, 0.046, 0.050) * lift;
-    col += float3(0.55, 0.56, 0.58) * lobe * 0.045;
-
-    if (u.phase > 0.5 && u.phase < 1.5) {
-      float wave = sin(p.x * 0.03 + u.time * 3.4) * (1.2 + u.level * 4.0);
-      float band = p.y - (scene.center.y - scene.halfSize.y * 0.04) - wave;
-      float meniscus = exp(-band * band / (48.0 + u.level * 40.0));
-      col += float3(0.55) * meniscus * (0.015 + u.level * 0.05);
-    }
-
-    if (u.phase > 1.5) {
-      float amp = u.phase > 2.5 ? (0.02 + u.speak * 0.035) : 0.016;
-      float2 c1 = scene.center + float2(sin(u.time * 0.45) * scene.halfSize.x * 0.35, cos(u.time * 0.32) * scene.halfSize.y * 0.16);
-      float b1 = exp(-dot(p - c1, p - c1) / 6400.0);
-      col += float3(0.62, 0.63, 0.66) * b1 * amp;
-    }
-
-    float rim = smoothstep(2.6, 0.6, abs(dist));
-    col += float3(0.40, 0.41, 0.43) * rim * above * 0.05;
-    col = clamp(col, 0.0, 1.0);
-
-    float aa = mix(2.0, 1.1, clamp(u.morph, 0.0, 1.0));
-    float bodyA = smoothstep(aa, -aa, dist) * u.presence;
-    float glow = smoothstep(12.0, 0.0, dist) * 0.03 * u.presence;
-    Scene shadowScene = evalScene(p - float2(0.0, 12.0), u);
-    float shadow = smoothstep(22.0, -1.0, shadowScene.dist) * 0.32 * u.presence;
-
-    float outA = max(bodyA, max(glow * (1.0 - bodyA), shadow * (1.0 - bodyA)));
-    float3 outC = col * bodyA + float3(0.01) * glow * (1.0 - bodyA);
-    return float4(outC, outA);
-  }
-  """
 }
 
 // MARK: - Panel
@@ -1215,10 +794,6 @@ final class DropletController {
 
   func update(_ content: DropletContent) {
     session.content = content
-  }
-
-  func focusForTyping() {
-    panel?.makeKey()
   }
 
   func place(anchor: NSRect) {
@@ -1312,7 +887,6 @@ final class DropletController {
     cardInPanel = .zero
     session.closing = false
     session.hovering = false
-    session.fieldFocused = false
     session.talkArmed = false
     panel?.ignoresMouseEvents = true
     setMetalPaused(true)
@@ -1320,14 +894,7 @@ final class DropletController {
     onClosed?()
   }
 
-  private func setMetalPaused(_ paused: Bool) {
-    guard let content = panel?.contentView else { return }
-    func walk(_ view: NSView) {
-      if let metal = view as? MTKView { metal.isPaused = paused }
-      view.subviews.forEach(walk)
-    }
-    walk(content)
-  }
+  private func setMetalPaused(_ paused: Bool) {}
 
   private func screen(containing rect: NSRect) -> NSScreen? {
     let mid = CGPoint(x: rect.midX, y: rect.midY)
@@ -1427,5 +994,13 @@ private struct DropletCardPreview: View {
 
 #Preview("Droplet · reply") {
   DropletCardPreview(content: ArthurPreviews.replyDroplet)
+}
+
+#Preview("Droplet · thinking") {
+  DropletCardPreview(content: ArthurPreviews.thinkingDroplet)
+}
+
+#Preview("Droplet · approval") {
+  DropletCardPreview(content: ArthurPreviews.approvalDroplet)
 }
 #endif

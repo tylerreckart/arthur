@@ -55,6 +55,11 @@ struct ConversationSidebar: View {
         .font(.system(size: 13))
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+      if !model.sidebarNotice.isEmpty {
+        Text(model.sidebarNotice)
+          .font(.caption).foregroundStyle(ArthurTheme.mute)
+          .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 6)
+      }
       searchList
     }
     .background(Color.black)
@@ -68,6 +73,12 @@ struct ConversationSidebar: View {
   @ViewBuilder
   private var searchList: some View {
     if model.historyQuery.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 {
+      if model.historyHits.isEmpty {
+        Text("Nothing matches \u{201C}\(model.historyQuery)\u{201D}")
+          .font(.callout).foregroundStyle(ArthurTheme.mute)
+          .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+        Spacer()
+      } else {
       List {
         ForEach(model.historyHits) { hit in
           Button {
@@ -91,6 +102,7 @@ struct ConversationSidebar: View {
       }
       .listStyle(.sidebar)
       .scrollContentBackground(.hidden)
+      }
     } else {
       conversationList
     }
