@@ -2138,13 +2138,14 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     std::lock_guard<std::mutex> lk(arb_state.speak_mu);
     arb_state.speak_buf += arb_state.speech_gate.push(delta);
     const int now_ms = elapsed_now();
-    if (now_ms - arb_state.last_forming_ms >= 80) {
+    // One display frame. The desk paints this prefix immediately.
+    if (now_ms - arb_state.last_forming_ms >= 16) {
       arb_state.last_forming_ms = now_ms;
       // Always the unspoken prefix — never a sliding tail. A tail made the
       // Mac join first-`said` + last-N chars and drop the middle as the
       // window moved (and `started_answer` stays false during the first TTS).
       std::string preview = arb_state.speak_buf;
-      constexpr std::size_t kFormingCap = 2000;
+      constexpr std::size_t kFormingCap = 8000;
       if (preview.size() > kFormingCap) preview = preview.substr(0, kFormingCap);
       sink.event("forming", preview);
     }

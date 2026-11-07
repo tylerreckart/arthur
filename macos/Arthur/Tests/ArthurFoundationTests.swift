@@ -81,4 +81,26 @@ final class ArthurFoundationTests: XCTestCase {
   func testDiscussionWindowIsNamedForLaterPaging() {
     XCTAssertEqual(DiscussionLimits.visibleLineCap, 40)
   }
+
+  func testLiveReplyShowsTokensAheadOfSpeech() {
+    XCTAssertEqual(
+      ArthurLiveReply.shown(committed: "", forming: "The weather is"),
+      "The weather is"
+    )
+    XCTAssertEqual(
+      ArthurLiveReply.shown(
+        committed: "The weather is fine.",
+        forming: "The weather is fine. It warms up"
+      ),
+      "The weather is fine. It warms up"
+    )
+    XCTAssertEqual(
+      ArthurLiveReply.shown(committed: "The weather is fine.", forming: "The weather is fine."),
+      "The weather is fine."
+    )
+    XCTAssertEqual(
+      ArthurLiveReply.shown(committed: "The weather is fine.", forming: "It warms up later"),
+      "The weather is fine. It warms up later"
+    )
+  }
 }

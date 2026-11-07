@@ -108,8 +108,6 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
   let bead = BeadState()
   private let droplet = DropletController()
   private var beadTimer: Timer?
-  private var toolbarAnchor: NSRect = .zero
-  private var usingToolbarAnchor = false
   private var cardPinned = false
   private var cardFollowing = false
   private var dismissWork: DispatchWorkItem?
@@ -293,7 +291,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     refreshStatusImage()
   }
 
-  /// The status item is a template glyph. The toolbar bead keeps the squircle plate.
+  /// The status item is a template glyph.
   private func refreshStatusImage(fromTimer: Bool = false) {
     let animating = bead.listening || bead.thinking || bead.speaking || bead.dripping || bead.connected
     if fromTimer || beadTimer == nil || !animating {
@@ -396,7 +394,6 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
       self.model?.talkPressed()
       self.present(
         anchor: self.menuBarAnchor,
-        fromToolbar: false,
         drip: false,
         pinned: false,
         follow: true
@@ -427,7 +424,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     if wasTalking {
       model?.talkReleased()
     } else {
-      toggle(anchor: menuBarAnchor, fromToolbar: false)
+      toggle(anchor: menuBarAnchor)
     }
   }
 
@@ -481,9 +478,13 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
       _ = model.soundOn
       _ = model.turnModality
     } onChange: {
-      Task { @MainActor in
-        self.syncChrome()
-        self.observeModel()
+      // A MainActor task does not run during scroll tracking, which held
+      // the droplet's words back until the gesture ended.
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+          self.syncChrome()
+          self.observeModel()
+        }
       }
     }
     syncChrome()
@@ -527,11 +528,9 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
       cardFollowing = true
       if droplet.onScreen && !droplet.session.closing {
         cancelDismiss()
-        if !usingToolbarAnchor {
-          droplet.place(anchor: menuBarAnchor)
-        }
+        droplet.place(anchor: menuBarAnchor)
       } else {
-        present(anchor: menuBarAnchor, fromToolbar: false, drip: false, pinned: false, follow: true)
+        present(anchor: menuBarAnchor, drip: false, pinned: false, follow: true)
       }
     } else if cardFollowing && !cardPinned && droplet.onScreen && !utteranceActive && !incoming {
       scheduleDismiss(reset: false)
@@ -540,18 +539,6 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     if droplet.onScreen {
       droplet.update(content)
     }
-  }
-
-  func toggleFromToolbar() {
-    let anchor = toolbarAnchor.width > 1 ? toolbarAnchor : menuBarAnchor
-    toggle(anchor: anchor, fromToolbar: toolbarAnchor.width > 1)
-  }
-
-  func noteToolbarAnchor(_ rect: NSRect) {
-    guard rect.width > 1, rect.height > 1 else { return }
-    toolbarAnchor = rect
-    guard usingToolbarAnchor, droplet.onScreen else { return }
-    droplet.place(anchor: rect)
   }
 
   @discardableResult
@@ -578,17 +565,16 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     return window.convertToScreen(button.convert(button.bounds, to: nil))
   }
 
-  private func toggle(anchor: NSRect, fromToolbar: Bool) {
+  private func toggle(anchor: NSRect) {
     if droplet.onScreen && !droplet.session.closing {
       dismissDroplet()
       return
     }
-    present(anchor: anchor, fromToolbar: fromToolbar, drip: false, pinned: true, follow: false)
+    present(anchor: anchor, drip: false, pinned: true, follow: false)
   }
 
   private func present(
     anchor: NSRect,
-    fromToolbar: Bool,
     drip: Bool,
     pinned: Bool,
     follow: Bool
@@ -599,7 +585,6 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     if pinned { cardPinned = true }
     if follow { cardFollowing = true }
     if !cardPinned && !cardFollowing { cardPinned = true }
-    usingToolbarAnchor = fromToolbar
     let opening = !droplet.onScreen || droplet.session.closing
     droplet.show(anchor: anchor, drip: drip && opening)
     bead.connected = true
@@ -689,7 +674,6 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     guard droplet.onScreen, droplet.acceptsHits else { return }
     let mouse = NSEvent.mouseLocation
     if menuBarAnchor.insetBy(dx: -8, dy: -8).contains(mouse) { return }
-    if toolbarAnchor.width > 1, toolbarAnchor.insetBy(dx: -8, dy: -8).contains(mouse) { return }
     let card = droplet.cardScreenRect
     guard card.width > 20 else { return }
     if card.insetBy(dx: -12, dy: -18).contains(mouse) { return }

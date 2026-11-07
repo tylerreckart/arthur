@@ -11,14 +11,14 @@ struct MemoryDesk: View {
         if !model.deskStatus.isEmpty {
           Section {
             HStack {
-              Text(model.deskStatus).font(.callout).foregroundStyle(ArthurTheme.mute)
+              Text(model.deskStatus).font(.callout).foregroundStyle(Color.secondary)
               Spacer()
               Button("Dismiss") { model.deskStatus = "" }.font(.caption.weight(.semibold))
             }
           }
         }
         if model.deskLoadState.isLoading {
-          Section { HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading…").foregroundStyle(ArthurTheme.mute) } }
+          Section { HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading…").foregroundStyle(Color.secondary) } }
         } else if let failure = model.deskLoadState.failureMessage {
           Section {
             VStack(alignment: .leading, spacing: 8) {
@@ -33,13 +33,13 @@ struct MemoryDesk: View {
           TextField("Search facts", text: $model.memoryQuery)
           if model.deskLoadState == .loaded, model.memoryFacts.isEmpty {
             Text(model.memoryQuery.isEmpty ? "No facts yet" : "Nothing matches")
-              .foregroundStyle(ArthurTheme.mute)
+              .foregroundStyle(Color.secondary)
           }
           ForEach(model.memoryFacts) { fact in
             VStack(alignment: .leading, spacing: 6) {
               Text(fact.title).font(.body.weight(.semibold))
               if !fact.content.isEmpty {
-                Text(fact.content).font(.callout).foregroundStyle(ArthurTheme.mute).lineLimit(4)
+                Text(fact.content).font(.callout).foregroundStyle(Color.secondary).lineLimit(4)
               }
               HStack {
                 Button("Edit") { model.beginMemoryEdit(fact) }
@@ -66,16 +66,16 @@ struct MemoryDesk: View {
 
         Section {
           if model.deskLoadState == .loaded, model.deskSchedules.isEmpty {
-            Text("No upcoming reminders").foregroundStyle(ArthurTheme.mute)
+            Text("No upcoming reminders").foregroundStyle(Color.secondary)
           }
           ForEach(model.deskSchedules) { item in
             VStack(alignment: .leading, spacing: 6) {
               Text(item.message.isEmpty ? item.phrase : item.message).font(.body.weight(.semibold))
-              if !item.phrase.isEmpty { Text(item.phrase).font(.caption).foregroundStyle(ArthurTheme.mute) }
+              if !item.phrase.isEmpty { Text(item.phrase).font(.caption).foregroundStyle(Color.secondary) }
               DatePicker("New time", selection: dateBinding(item.id), displayedComponents: [.date, .hourAndMinute])
                 .accessibilityLabel("New time for \(item.message.isEmpty ? item.phrase : item.message)")
               Text("Arthur will hear: \(ReschedulePhrase.phrase(for: model.rescheduleDates[item.id] ?? ReschedulePhrase.defaultDate()))")
-                .font(.caption).foregroundStyle(ArthurTheme.mute)
+                .font(.caption).foregroundStyle(Color.secondary)
               HStack {
                 Button("Reschedule") { model.reschedule(item) }
                 Button("Complete") { model.finishSchedule(item.id, status: "completed") }
@@ -87,7 +87,7 @@ struct MemoryDesk: View {
 
         Section {
           if model.deskLoadState == .loaded, model.deskTodos.isEmpty {
-            Text("Nothing open").foregroundStyle(ArthurTheme.mute)
+            Text("Nothing open").foregroundStyle(.secondary)
           }
           ForEach(model.deskTodos) { item in
             VStack(alignment: .leading, spacing: 6) {
@@ -101,15 +101,12 @@ struct MemoryDesk: View {
         } header: { Text("Todos") }
       }
       .formStyle(.grouped)
-      .scrollContentBackground(.hidden)
-      .background(Color.black)
       .navigationTitle("Memory")
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
       .onAppear { model.loadDesk() }
       .onChange(of: model.memoryQuery) { _, _ in model.loadDesk() }
     }
     .frame(minWidth: 520, minHeight: 560)
-    .preferredColorScheme(.dark)
   }
 
   private func dateBinding(_ id: Int) -> Binding<Date> {

@@ -77,18 +77,27 @@ private struct SurfaceActionRow: View {
           model.resolveSurfaceAction(action)
         }
         .accessibilityLabel(cardTitle.isEmpty ? action.label : "\(action.label), \(cardTitle)")
-        .buttonStyle(.plain)
-        .font(.system(size: 12, weight: .semibold))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .foregroundStyle(fills(action) ? Color.black : Color.white.opacity(0.92))
-        .background(fills(action) ? Color.white.opacity(0.92) : Color.white.opacity(0.08), in: Capsule())
+        .controlSize(.small)
+        .modifier(SurfaceActionStyle(prominent: fills(action)))
       }
     }
   }
 
   private func fills(_ action: SurfaceAction) -> Bool {
     action.kind == "approve" || action.kind == "undo"
+  }
+}
+
+private struct SurfaceActionStyle: ViewModifier {
+  var prominent: Bool
+
+  @ViewBuilder
+  func body(content: Content) -> some View {
+    if prominent {
+      content.buttonStyle(.borderedProminent)
+    } else {
+      content.buttonStyle(.bordered)
+    }
   }
 }
 

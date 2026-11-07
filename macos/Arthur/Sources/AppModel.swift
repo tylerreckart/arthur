@@ -27,6 +27,13 @@ enum TurnModality: Equatable {
   case text
 }
 
+/// Paint cache for the live reply. A class so updates do not publish
+/// through `@Observable` while a view is reading `streamingReply`.
+private final class ReplyPaintCache {
+  var stamp = ""
+  var text = ""
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -63,13 +70,23 @@ final class AppModel {
   var work: WorkState = .none
   var youSaid = ""
   var formingText = ""
-  /// The part of Arthur's reply the voice has reached. Empty until audio starts.
-  var spokenReveal = ""
-  /// True from the first words of a reply until those words have been spoken.
-  var pacingReply = false
   /// Stable id for the in-flight Arthur bubble so `.forming` → `.said`
   /// does not remount the cluster (avoids a jump / flash).
   var formingLineId = UUID()
+  /// Token stream for the in-flight reply. Empty once that text has settled.
+  /// Words are shown as they arrive; the voice is allowed to lag behind.
+  var streamingReply: String {
+    let committed = liveTurnCommittedText
+    let forming = formingText
+    let formingLive = !forming.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    guard formingLive || (expectingReply && !committed.isEmpty) else { return "" }
+    let stamp = arthurReplyKey + "\u{1}" + committed + "\u{1}" + forming
+    if stamp == replyPaintCache.stamp { return replyPaintCache.text }
+    let shown = ArthurLiveReply.shown(committed: committed, forming: forming)
+    replyPaintCache.stamp = stamp
+    replyPaintCache.text = shown
+    return shown
+  }
   /// Shared by every Arthur `said` in the current turn (or live speak-back)
   /// so later `accept` ids do not split one reply into two bubbles.
   private var arthurReplyKey = ""
@@ -90,7 +107,7 @@ final class AppModel {
   var conversationId: Int64 = 0
   var conversations: [DeskConversation] = []
   var activeConversationId = UUID()
-  /// Sidebar column. The desk starts on the transcript; the toolbar opens this.
+  /// Sidebar column. The desk starts on the transcript.
   var sidebarOpen = false
   var turnId = ""
   var micGranted = false
@@ -245,9 +262,10 @@ final class AppModel {
   private var endpoint = UtteranceEndpoint()
   private var expectingReply = false
   private var typedThisTurn = false
-  private var pendingSpeech: String?
-  private var speechSpans: [SpeechSpan] = []
-  private var speechTick: Timer?
+  private var voiceWatch: Timer?
+  private var transcriptSave: DispatchWorkItem?
+  private let transcriptQueue = DispatchQueue(label: "arthur.transcript", qos: .utility)
+  private let replyPaintCache = ReplyPaintCache()
   private var started = false
   private var transcriptDeviceId = ""
   private var pttFromKeyboard = false
@@ -1234,6 +1252,7 @@ final class AppModel {
     clearHearing()
     setWork(.none)
     become(client.isConnected ? .idle : .disconnected)
+    flushTranscriptSave()
   }
 
   private func sendTurnCancel() {
@@ -1259,7 +1278,7 @@ final class AppModel {
     quietTextMode.toggle()
   }
 
-  /// Glanceable session copy (not rendered in the title bar).
+  /// Glanceable session copy, shown in Activity.
   /// Idle + shared device id reads as the hallway conversation.
   var chromeLabel: String {
     switch phase {
@@ -1496,8 +1515,51 @@ final class AppModel {
     guard !previewCanvas else { return }
     let device = deviceId ?? transcriptDeviceId
     captureActiveLines()
-    ConfigStore.saveTranscript(discussion, deviceId: device)
-    persistLibrary(deviceId: device)
+    // Token and sentence bursts must not encode the notebook on the
+    // main thread between paints. The latest copy is written once the
+    // turn goes quiet, and immediately when the turn ends.
+    if expectingReply {
+      scheduleTranscriptSave(deviceId: device)
+      return
+    }
+    transcriptSave?.cancel()
+    transcriptSave = nil
+    writeTranscript(deviceId: device, wait: true)
+  }
+
+  private func scheduleTranscriptSave(deviceId: String) {
+    transcriptSave?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.transcriptSave = nil
+      self.writeTranscript(deviceId: deviceId, wait: false)
+    }
+    transcriptSave = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+  }
+
+  private func flushTranscriptSave() {
+    let pending = transcriptSave
+    transcriptSave = nil
+    pending?.cancel()
+    guard pending != nil else { return }
+    writeTranscript(deviceId: transcriptDeviceId, wait: true)
+  }
+
+  private func writeTranscript(deviceId: String, wait: Bool) {
+    guard !previewCanvas else { return }
+    captureActiveLines()
+    let lines = discussion
+    let library = ConversationLibrary(activeId: activeConversationId, conversations: conversations)
+    let save: @Sendable () -> Void = {
+      ConfigStore.saveTranscript(lines, deviceId: deviceId)
+      ConfigStore.saveLibrary(library, deviceId: deviceId)
+    }
+    if wait {
+      transcriptQueue.sync(execute: save)
+    } else {
+      transcriptQueue.async(execute: save)
+    }
   }
 
   /// A turn is on the wire or the mic is open. Switching threads would orphan it.
@@ -1606,107 +1668,41 @@ final class AppModel {
     ConfigStore.saveDraft(draft)
   }
 
-  private struct SpeechSpan {
-    var text: String
-    var startFrame: AVAudioFramePosition
-    var endFrame: AVAudioFramePosition?
-    var estimatedFrames: AVAudioFramePosition
-  }
-
-  /// ~2 words a second, a little slower than Kokoro, so text doesn't finish
-  /// before the voice. Once the sentence's audio is fully queued the real
-  /// duration takes over.
-  private func estimatedFrames(for text: String) -> AVAudioFramePosition {
-    let words = max(1, text.split { $0.isWhitespace }.count)
-    return AVAudioFramePosition(Double(words) / 2.0 * AudioIO.sampleRate)
+  /// `said` lines already committed for this turn, joined the same way the
+  /// transcript bubble joins them. Empty before the first `said`.
+  private var liveTurnCommittedText: String {
+    let key = arthurReplyKey
+    guard !key.isEmpty else { return "" }
+    var parts: [String] = []
+    for line in discussion where !line.fromYou && line.turnId == key {
+      parts.append(line.text)
+    }
+    if parts.count <= 1 { return parts.first ?? "" }
+    return ArthurProseJoin.coalesce(parts, oneBubble: true).joined(separator: "\n\n")
   }
 
   private func resetSpeechSync() {
-    pendingSpeech = nil
-    speechSpans.removeAll()
-    spokenReveal = ""
-    pacingReply = false
-    speechTick?.invalidate()
-    speechTick = nil
+    voiceWatch?.invalidate()
+    voiceWatch = nil
   }
 
-  private func startSpeechTick() {
-    guard speechTick == nil else { return }
-    let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+  /// Watches the audio queue only. It does not gate the words on screen.
+  private func armVoiceWatch() {
+    guard voiceWatch == nil else { return }
+    let timer = Timer(timeInterval: 0.12, repeats: true) { [weak self] _ in
       MainActor.assumeIsolated {
-        self?.refreshSpokenReveal()
+        self?.finishVoiceIfQuiet()
       }
     }
-    speechTick = timer
+    voiceWatch = timer
     RunLoop.main.add(timer, forMode: .common)
   }
 
-  private func sealOpenSpan() {
-    guard !speechSpans.isEmpty, speechSpans[speechSpans.count - 1].endFrame == nil else { return }
-    let end = max(audio.scheduledFrames, speechSpans[speechSpans.count - 1].startFrame + 1)
-    speechSpans[speechSpans.count - 1].endFrame = end
-  }
-
-  private func beginSpeechIfNeeded() {
-    guard let text = pendingSpeech else { return }
-    pendingSpeech = nil
-    let start = audio.scheduledFrames
-    speechSpans.append(SpeechSpan(
-      text: text,
-      startFrame: start,
-      endFrame: nil,
-      estimatedFrames: estimatedFrames(for: text)
-    ))
-    pacingReply = true
-    startSpeechTick()
-  }
-
-  private func finishSpeechPacing() {
-    if !speechSpans.isEmpty {
-      spokenReveal = speechSpans.map(\.text).joined(separator: " ")
-    }
-    pacingReply = false
-    speechTick?.invalidate()
-    speechTick = nil
-    pendingSpeech = nil
-    speechSpans.removeAll()
-  }
-
-  private func reveal(_ text: String, fraction: Double) -> String {
-    if fraction >= 0.995 { return text }
-    let count = Int((fraction * Double(text.count)).rounded(.down))
-    guard count > 0 else { return "" }
-    let end = text.index(text.startIndex, offsetBy: min(count, text.count))
-    let head = text[..<end]
-    if let space = head.lastIndex(of: " ") {
-      return String(head[..<space])
-    }
-    return String(head)
-  }
-
-  private func refreshSpokenReveal() {
-    let played = audio.playedFrames()
-    var parts: [String] = []
-    for span in speechSpans {
-      let duration = span.endFrame.map { max(Int64(1), $0 - span.startFrame) } ?? span.estimatedFrames
-      let elapsed = played - span.startFrame
-      if elapsed <= 0 { break }
-      let fraction = min(1, Double(elapsed) / Double(max(duration, 1)))
-      let piece = reveal(span.text, fraction: fraction)
-      if piece.isEmpty { break }
-      parts.append(piece)
-      if piece.count < span.text.count { break }
-    }
-    let next = parts.joined(separator: " ")
-    if next != spokenReveal { spokenReveal = next }
-    let sealed = speechSpans.allSatisfy { $0.endFrame != nil }
-    let caughtUp = sealed && pendingSpeech == nil && !audio.playbackPending
-      && spokenReveal == speechSpans.map(\.text).joined(separator: " ")
-    if caughtUp, !expectingReply {
-      finishSpeechPacing()
-      if phase == .speaking {
-        become(client.isConnected ? .idle : .disconnected)
-      }
+  private func finishVoiceIfQuiet() {
+    guard !expectingReply, !audio.playbackPending else { return }
+    resetSpeechSync()
+    if phase == .speaking {
+      become(client.isConnected ? .idle : .disconnected)
     }
   }
 
@@ -1731,13 +1727,11 @@ final class AppModel {
       if holding { stopCaptureForServer() }
       consumeIfSent()
     case .pcm(let data):
-      if expectingReply || phase == .speaking || pacingReply {
-        beginSpeechIfNeeded()
+      if expectingReply || phase == .speaking {
         become(.speaking)
         if work != .speaking { setWork(.speaking) }
         audio.playPCM(data)
         ingestSpeakLevel(AudioIO.pcmLevel(data, gain: 2.4))
-        refreshSpokenReveal()
       }
     case .speaker(_, let name, let confident):
       let label = HouseholdRoster.indicator(name: name, confident: confident)
@@ -1779,14 +1773,14 @@ final class AppModel {
       clearHearing()
       setWork(.none)
       if !ok, !err.isEmpty { errorText = err }
-      sealOpenSpan()
       if audio.playbackPending {
         become(.speaking)
-        startSpeechTick()
+        armVoiceWatch()
       } else {
-        finishSpeechPacing()
+        resetSpeechSync()
         become(client.isConnected ? .idle : .disconnected)
       }
+      flushTranscriptSave()
       if speakBack?.live == true { finishSpeakBack() }
     case .speak(let kind, let runId, let text):
       resetArthurReplyKey()
@@ -1796,19 +1790,16 @@ final class AppModel {
       presentSpeakBack(kind: kind, runId: runId, text: text)
     case .said(let text):
       let id = formingText.isEmpty ? UUID() : formingLineId
-      sealOpenSpan()
-      if soundOn {
-        pendingSpeech = text
-        pacingReply = true
-        startSpeechTick()
-      }
       appendDiscussion(fromYou: false, text: text, id: id)
+      let pending = formingText.trimmingCharacters(in: .whitespacesAndNewlines)
+      if pending.isEmpty || ArthurProseJoin.alreadySpoken(liveTurnCommittedText, pending) {
+        formingText = ""
+      }
       flushPendingSurfaces()
-      formingText = ""
       if !soundOn {
         become(.speaking)
         setWork(.speaking)
-      } else if phase != .speaking {
+      } else if phase != .speaking, phase != .thinking {
         become(.thinking)
       }
       if speakBack?.live == true { noteSpeakBackSaid(text) }
@@ -1817,12 +1808,13 @@ final class AppModel {
     case .approval(let id, let granted):
       resolveWrite(id: id, granted: granted, via: "voice")
     case .forming(let text):
+      if text == formingText { return }
       if formingText.isEmpty {
         formingLineId = UUID()
       }
       _ = bindArthurReplyKey()
       formingText = text
-      if phase != .speaking, phase != .listening {
+      if phase != .speaking, phase != .listening, phase != .thinking {
         become(.thinking)
       }
     case .working(let tool):
@@ -2543,10 +2535,11 @@ final class AppModel {
 
   private func persistLibrary(deviceId: String? = nil) {
     guard !previewCanvas else { return }
-    ConfigStore.saveLibrary(
-      ConversationLibrary(activeId: activeConversationId, conversations: conversations),
-      deviceId: deviceId ?? transcriptDeviceId
-    )
+    let library = ConversationLibrary(activeId: activeConversationId, conversations: conversations)
+    let device = deviceId ?? transcriptDeviceId
+    transcriptQueue.sync {
+      ConfigStore.saveLibrary(library, deviceId: device)
+    }
   }
 
   /// Adopt a server id onto the open thread only when that thread is not

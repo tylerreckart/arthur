@@ -50,23 +50,26 @@ struct ConversationSidebar: View {
   var body: some View {
     @Bindable var model = model
     VStack(spacing: 0) {
-      TextField("Search", text: $model.historyQuery)
-        .textFieldStyle(.plain)
-        .font(.system(size: 13))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+      Button {
+        model.newConversation()
+      } label: {
+        Label("New conversation", systemImage: "square.and.pencil")
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .buttonStyle(.borderless)
+      .disabled(!model.canStartConversation || model.conversationIsEmpty)
+      .help("New conversation")
+      .padding(.horizontal, 12)
+      .padding(.vertical, 6)
+
       if !model.sidebarNotice.isEmpty {
         Text(model.sidebarNotice)
-          .font(.caption).foregroundStyle(ArthurTheme.mute)
+          .font(.caption).foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 6)
       }
       searchList
     }
-    .background(Color.black)
-    .navigationTitle("Conversations")
-    .toolbarTitleDisplayMode(.inline)
-    .toolbarBackground(Color.black, for: .windowToolbar)
-    .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
+    .searchable(text: $model.historyQuery, placement: .sidebar, prompt: "Search")
     .navigationSplitViewColumnWidth(min: 196, ideal: 232, max: 280)
   }
 
@@ -75,7 +78,7 @@ struct ConversationSidebar: View {
     if model.historyQuery.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 {
       if model.historyHits.isEmpty {
         Text("Nothing matches \u{201C}\(model.historyQuery)\u{201D}")
-          .font(.callout).foregroundStyle(ArthurTheme.mute)
+          .font(.callout).foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .leading).padding(12)
         Spacer()
       } else {
@@ -86,12 +89,11 @@ struct ConversationSidebar: View {
           } label: {
             VStack(alignment: .leading, spacing: 3) {
               Text(hit.title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.92))
+                .font(.body)
                 .lineLimit(1)
               Text(hit.snippet)
-                .font(.system(size: 11))
-                .foregroundStyle(ArthurTheme.whisper)
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 .lineLimit(2)
             }
             .padding(.vertical, 4)
@@ -101,7 +103,7 @@ struct ConversationSidebar: View {
         }
       }
       .listStyle(.sidebar)
-      .scrollContentBackground(.hidden)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     } else {
       conversationList
@@ -113,12 +115,11 @@ struct ConversationSidebar: View {
       ForEach(model.listedConversations) { item in
         VStack(alignment: .leading, spacing: 3) {
           Text(item.title)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.white.opacity(item.id == model.activeConversationId ? 1 : 0.88))
+            .font(.body)
             .lineLimit(2)
           Text(stamp(item.updatedAt))
-            .font(.system(size: 11))
-            .foregroundStyle(ArthurTheme.whisper)
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
         .tag(item.id)
@@ -126,7 +127,7 @@ struct ConversationSidebar: View {
       }
     }
     .listStyle(.sidebar)
-    .scrollContentBackground(.hidden)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   private var selection: Binding<UUID?> {
