@@ -152,6 +152,7 @@ struct ArthurMarkTile: View {
   }
 }
 
+#if DEBUG
 #Preview("Menu bar glyph") {
   ArthurGlyph()
     .fill(Color.primary)
@@ -167,3 +168,4 @@ struct ArthurMarkTile: View {
   .padding(28)
   .background(Color.blue)
 }
+#endif

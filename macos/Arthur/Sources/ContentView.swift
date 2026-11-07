@@ -978,14 +978,15 @@ private struct ArthurCopy: View {
 
 private struct ArthurReply: View {
   @Environment(AppModel.self) private var model
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let text: String
   var live = false
 
   var body: some View {
-    if live {
+    if live, !reduceMotion {
       // Scrolling freezes an ordinary body. The timeline keeps reading the
       // latest tokens; equatable skips the layout when the string is unchanged.
-      TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { _ in
+      TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { _ in
         LiveProse(text: model.streamingReply.isEmpty ? text : model.streamingReply)
           .equatable()
       }
@@ -1306,14 +1307,14 @@ private struct HouseholdEnrollSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       Text("Teach Arthur a voice").font(.title3.weight(.semibold))
       Text("Say each phrase when asked. Wake word pauses while you record.")
-        .font(.callout).foregroundStyle(Color.secondary)
+        .font(.callout).foregroundStyle(.secondary)
       // 1-2-3 progress
       HStack(spacing: 8) {
         ForEach(0..<HouseholdRoster.phrases.count, id: \.self) { i in
           VStack(spacing: 4) {
             Circle().fill(i < model.teachPhrase || !model.teaching && !model.householdStatus.isEmpty && model.householdStatus.contains("enrolled") ? Color.white : Color.white.opacity(0.18))
               .frame(width: 10, height: 10)
-            Text("\(i + 1)").font(.caption2).foregroundStyle(Color.secondary)
+            Text("\(i + 1)").font(.caption2).foregroundStyle(.secondary)
           }
           if i < HouseholdRoster.phrases.count - 1 { Rectangle().fill(Color.white.opacity(0.18)).frame(height: 1) }
         }
@@ -1328,7 +1329,7 @@ private struct HouseholdEnrollSheet: View {
           .font(.callout).foregroundStyle(.primary)
       }
       if !model.householdStatus.isEmpty {
-        Text(model.householdStatus).font(.callout).foregroundStyle(Color.secondary)
+        Text(model.householdStatus).font(.callout).foregroundStyle(.secondary)
       }
       HStack {
         if model.teaching {

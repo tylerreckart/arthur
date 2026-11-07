@@ -124,8 +124,11 @@ enum ReschedulePhrase {
     time.locale = Locale(identifier: "en_US_POSIX")
     time.dateFormat = "h:mm a"
     let t = time.string(from: date).lowercased()
-    if cal.isDateInToday(date) { return "today at \(t)" }
-    if cal.isDateInTomorrow(date) { return "tomorrow at \(t)" }
+    if cal.isDate(date, inSameDayAs: now) { return "today at \(t)" }
+    if let tomorrow = cal.date(byAdding: .day, value: 1, to: now),
+       cal.isDate(date, inSameDayAs: tomorrow) {
+      return "tomorrow at \(t)"
+    }
     let day = DateFormatter()
     day.locale = Locale(identifier: "en_US_POSIX")
     day.dateFormat = "MMM d"
