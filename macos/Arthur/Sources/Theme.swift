@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum ArthurTheme {
-  /// The desk window matches the droplet: pure black, white type, no chrome.
+  /// Droplet and card colors. The window uses the system appearance.
   static let accent = Color.white
   static let accentNSColor = NSColor.white
   static let ink = Color.black
@@ -15,15 +15,15 @@ enum ArthurTheme {
 }
 
 extension View {
-  /// A slightly lifted black plate with a subtle rim so it reads on black.
+  /// A card used on the droplet, which is always dark. `primary` is white there.
   func arthurPlate(radius: CGFloat = 16) -> some View {
     background(
-      Color.white.opacity(0.05),
+      Color.primary.opacity(0.06),
       in: RoundedRectangle(cornerRadius: radius, style: .continuous)
     )
     .overlay {
       RoundedRectangle(cornerRadius: radius, style: .continuous)
-        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
     }
   }
 }

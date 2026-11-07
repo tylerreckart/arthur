@@ -25,7 +25,7 @@ struct JobCard: View {
       if !job.summary.isEmpty {
         Text(job.summary)
           .font(compact ? .caption : .callout)
-          .foregroundStyle(ArthurTheme.mute)
+          .foregroundStyle(.secondary)
           .lineLimit(compact ? 1 : 3)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -33,17 +33,14 @@ struct JobCard: View {
         HStack(spacing: 8) {
           if !job.primaryLabel.isEmpty {
             Button(job.primaryLabel, action: onPrimary)
-              .buttonStyle(.plain).font(.callout.weight(.semibold))
-              .padding(.horizontal, 12).padding(.vertical, 7)
-              .foregroundStyle(.black).background(Color.white.opacity(0.92), in: Capsule())
+              .buttonStyle(.borderedProminent)
+              .controlSize(compact ? .small : .regular)
               .accessibilityLabel("\(job.primaryLabel), \(job.title)")
           }
           if !job.secondaryLabel.isEmpty {
             Button(job.secondaryLabel, action: onSecondary)
-              .buttonStyle(.plain).font(.callout.weight(.semibold))
-              .padding(.horizontal, 12).padding(.vertical, 7)
-              .foregroundStyle(Color.white.opacity(0.92))
-              .overlay(Capsule().stroke(Color.white.opacity(0.35), lineWidth: 1))
+              .buttonStyle(.bordered)
+              .controlSize(compact ? .small : .regular)
               .accessibilityLabel("\(job.secondaryLabel), \(job.title)")
           }
         }.padding(.top, 2)
@@ -61,12 +58,12 @@ struct JobCard: View {
   private var chipBackground: Color {
     switch job.state {
     case .needsApproval, .blocked: return Color(red: 0.86, green: 0.40, blue: 0.42).opacity(0.9)
-    case .running: return Color.white.opacity(0.22)
-    default: return Color.white.opacity(0.12)
+    case .running: return Color.primary.opacity(0.22)
+    default: return Color.primary.opacity(0.12)
     }
   }
   private var chipForeground: Color {
-    switch job.state { case .needsApproval, .blocked: return .white; default: return ArthurTheme.paper }
+    switch job.state { case .needsApproval, .blocked: return .white; default: return Color.primary }
   }
 }
 
@@ -80,7 +77,7 @@ struct ActivityPanel: View {
         VStack(alignment: .leading, spacing: 18) {
           connectionRow
           if !model.deskStatus.isEmpty {
-            Text(model.deskStatus).font(.callout).foregroundStyle(ArthurTheme.mute)
+            Text(model.deskStatus).font(.callout).foregroundStyle(.secondary)
               .frame(maxWidth: .infinity, alignment: .leading).padding(10).arthurPlate(radius: 12)
           }
           section("Needs you", jobs: ActivityBuilder.jobs(in: model.activityJobs, section: "Needs you"),
@@ -91,13 +88,11 @@ struct ActivityPanel: View {
                   empty: "No schedules or todos. Open Memory to add context.")
         }.padding(16)
       }
-      .background(Color.black)
       .navigationTitle("Activity")
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
       .onAppear { model.loadDesk() }
     }
     .frame(minWidth: 480, minHeight: 520)
-    .preferredColorScheme(.dark)
   }
 
   private var connectionRow: some View {
@@ -106,14 +101,14 @@ struct ActivityPanel: View {
         .frame(width: 8, height: 8)
       VStack(alignment: .leading, spacing: 1) {
         Text(model.chromeLabel).font(.callout.weight(.semibold))
-        Text(model.chromeDetail).font(.caption).foregroundStyle(ArthurTheme.mute).lineLimit(2)
+        Text(model.chromeDetail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
       }
       Spacer()
       if model.phase == .disconnected || model.phase == .connecting {
         Button("Reconnect") { model.reconnect() }.accessibilityLabel("Reconnect to Arthur")
       }
-      if model.wakeWord { Text(model.wakeMuted ? "Wake muted" : "Wake on").font(.caption).foregroundStyle(ArthurTheme.mute) }
-      Text(model.micGranted ? "Mic on" : "Mic off").font(.caption).foregroundStyle(ArthurTheme.mute)
+      if model.wakeWord { Text(model.wakeMuted ? "Wake muted" : "Wake on").font(.caption).foregroundStyle(.secondary) }
+      Text(model.micGranted ? "Mic on" : "Mic off").font(.caption).foregroundStyle(.secondary)
     }.padding(10).arthurPlate(radius: 12)
       .accessibilityElement(children: .contain)
       .accessibilityLabel("Connection: \(model.chromeDetail)")
@@ -124,7 +119,7 @@ struct ActivityPanel: View {
     VStack(alignment: .leading, spacing: 8) {
       Text(title).font(.headline)
       if jobs.isEmpty {
-        Text(empty).font(.callout).foregroundStyle(ArthurTheme.mute)
+        Text(empty).font(.callout).foregroundStyle(.secondary)
       } else {
         ForEach(jobs) { job in
           JobCard(job: job, onPrimary: { model.performJobAction(job, primary: true) },

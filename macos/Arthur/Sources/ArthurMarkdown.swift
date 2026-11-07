@@ -8,8 +8,42 @@ enum ArthurBlock: Equatable {
   case code(String)
 }
 
+/// Resize and scroll re-run every visible row's body many times a second, and
+/// each run used to re-parse the row's markdown. The parse depends only on the
+/// string, so it is cached. `.primary` inside the cached Text still resolves
+/// against the environment at draw time, so tint and scheme stay live.
+private final class ArthurBlockBox {
+  let blocks: [ArthurBlock]
+  init(_ blocks: [ArthurBlock]) { self.blocks = blocks }
+}
+
+private final class ArthurInlineBox {
+  let text: Text
+  init(_ text: Text) { self.text = text }
+}
+
+private let arthurBlockCache: NSCache<NSString, ArthurBlockBox> = {
+  let cache = NSCache<NSString, ArthurBlockBox>()
+  cache.countLimit = 256
+  return cache
+}()
+
+private let arthurInlineCache: NSCache<NSString, ArthurInlineBox> = {
+  let cache = NSCache<NSString, ArthurInlineBox>()
+  cache.countLimit = 512
+  return cache
+}()
+
 enum ArthurMarkdown {
   static func blocks(from text: String) -> [ArthurBlock] {
+    let key = text as NSString
+    if let cached = arthurBlockCache.object(forKey: key) { return cached.blocks }
+    let parsed = parseBlocks(from: text)
+    arthurBlockCache.setObject(ArthurBlockBox(parsed), forKey: key)
+    return parsed
+  }
+
+  private static func parseBlocks(from text: String) -> [ArthurBlock] {
     let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
     var out: [ArthurBlock] = []
     var para: [String] = []
@@ -80,6 +114,14 @@ enum ArthurMarkdown {
   }
 
   static func inline(_ raw: String, live: Bool) -> Text {
+    let key = "\(live ? 1 : 0)\u{1F}\(raw)" as NSString
+    if let cached = arthurInlineCache.object(forKey: key) { return cached.text }
+    let built = buildInline(raw, live: live)
+    arthurInlineCache.setObject(ArthurInlineBox(built), forKey: key)
+    return built
+  }
+
+  private static func buildInline(_ raw: String, live: Bool) -> Text {
     var result = Text("")
     var buffer = ""
     var bold = false
@@ -122,7 +164,7 @@ enum ArthurMarkdown {
         .foregroundStyle(.primary.opacity(opacity))
     }
     return Text(text)
-      .font(.system(size: 20, weight: bold ? .semibold : .regular, design: .serif))
+      .font(.system(.title3, weight: bold ? .semibold : .regular))
       .foregroundStyle(.primary.opacity(opacity))
   }
 

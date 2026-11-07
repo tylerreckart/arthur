@@ -12,8 +12,6 @@ struct ContentView: View {
   @State private var knownClusterIDs: Set<UUID> = []
   @State private var showReturnHint = false
   @State private var didShowReturnHint = false
-  /// Owned here so the split view can animate. A bool that snaps back to
-  /// `.all` or `.detailOnly` cancels that animation on every frame.
   @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
 
   private static let bottomAnchor = "bottom"
@@ -25,141 +23,8 @@ struct ContentView: View {
     NavigationSplitView(columnVisibility: $columnVisibility) {
       ConversationSidebar()
     } detail: {
-      NavigationStack {
-        transcript
-          .id(model.activeConversationId)
-          .navigationTitle("Arthur")
-          .toolbarTitleDisplayMode(.inline)
-          .toolbarBackground(Color.black, for: .windowToolbar)
-          .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
-          .toolbar {
-            ToolbarItem(placement: .navigation) {
-              HStack(spacing: 6) {
-                ArthurToolbarBead()
-                Button {
-                  withAnimation { columnVisibility = columnVisibility == .detailOnly ? .doubleColumn : .detailOnly }
-                } label: { Label("Conversations", systemImage: "sidebar.left") }
-                .help("Show or hide conversations")
-                .accessibilityLabel("Toggle conversations sidebar")
-              }
-            }
-            ToolbarItemGroup(placement: .primaryAction) {
-              Button {
-                model.newConversation()
-              } label: {
-                Label("New conversation", systemImage: "square.and.pencil")
-              }
-              .disabled(!model.canStartConversation || model.conversationIsEmpty)
-              .help("New conversation")
-              .keyboardShortcut("n", modifiers: .command)
-
-              Button {
-                model.soundOn.toggle()
-              } label: {
-                Label(
-                  model.soundOn ? "Sound on" : "Sound off",
-                  systemImage: model.soundOn ? "speaker.wave.2" : "speaker.slash"
-                )
-              }
-              .help(model.soundOn ? "Mute Arthur" : "Unmute Arthur")
-
-              Button {
-                model.memoryOpen = true
-              } label: {
-                Label("Memory", systemImage: "text.book.closed")
-              }
-              .help("Memory, schedules, and todos")
-
-              Button {
-                model.activityOpen = true
-              } label: {
-                ZStack(alignment: .topTrailing) {
-                  Label("Activity", systemImage: "checklist")
-                  if model.attentionCount > 0 {
-                    Text("\(model.attentionCount)")
-                      .font(.caption2.weight(.bold)).foregroundStyle(.white)
-                      .padding(.horizontal, 4).padding(.vertical, 1)
-                      .background(ArthurTheme.error, in: Capsule())
-                      .offset(x: 8, y: -6)
-                  }
-                }
-              }
-              .help(model.attentionCount > 0 ? "Activity — \(model.attentionCount) need you" : "Activity — needs you, running, done")
-              .accessibilityLabel(model.attentionCount > 0 ? "Activity, \(model.attentionCount) items need you" : "Activity")
-              .keyboardShortcut("a", modifiers: [.command, .shift])
-
-              Button {
-                model.settingsOpen = true
-              } label: {
-                Label("Settings", systemImage: "gearshape")
-              }
-              .help("Settings")
-            }
-          }
-          .safeAreaBar(edge: .top) {
-            VStack(spacing: 6) {
-            HStack(spacing: 8) {
-              Circle().fill(model.phase == .disconnected || model.phase == .connecting ? ArthurTheme.error : Color(red: 0.40, green: 0.72, blue: 0.52))
-                .frame(width: 7, height: 7)
-              Text(model.chromeLabel).font(.caption.weight(.semibold)).foregroundStyle(ArthurTheme.mute)
-              Text(model.chromeDetail).font(.caption).foregroundStyle(ArthurTheme.whisper).lineLimit(1)
-              Spacer()
-              if model.phase == .disconnected || model.phase == .connecting {
-                Button("Reconnect") { model.reconnect() }.font(.caption.weight(.semibold))
-                  .accessibilityLabel("Reconnect to Arthur")
-              }
-            }
-            .padding(.horizontal, 16)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Connection: \(model.chromeDetail)")
-            if let notice = model.speakBack {
-              SpeakBackBanner(notice: notice) {
-                model.dismissSpeakBack()
-              }
-              .padding(.horizontal, 16)
-              .padding(.bottom, 4)
-              .transition(.move(edge: .top).combined(with: .opacity))
-            }
-            }
-          }
-          .animation(.easeInOut(duration: 0.22), value: model.speakBack?.id)
-          .safeAreaBar(edge: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
-              if !model.errorText.isEmpty {
-                ErrorBanner(text: model.errorText) {
-                  model.dismissError()
-                }
-              }
-              ComposerBar(
-                typing: $typing,
-                showReturnHint: showReturnHint && !model.holding
-              )
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 12)
-            .padding(.top, 2)
-          }
-          .sheet(isPresented: $model.memoryOpen) {
-            MemoryDesk()
-              .environment(model)
-          }
-          .sheet(isPresented: $model.activityOpen) {
-            ActivityPanel()
-              .environment(model)
-          }
-          .sheet(isPresented: $model.settingsOpen) {
-            SettingsView()
-              .environment(model)
-          }
-      }
+      detailColumn
     }
-    .navigationSplitViewStyle(.balanced)
-    .toolbarBackground(Color.black, for: .windowToolbar)
-    .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
-    .coordinateSpace(ArthurChrome.space)
-    .preferredColorScheme(.dark)
-    .tint(.white)
-    .background(Color.black)
     .onChange(of: typing) { _, on in
       model.composerFocused = on
       if on, !didShowReturnHint {
@@ -175,6 +40,10 @@ struct ContentView: View {
     .onChange(of: columnVisibility) { _, visibility in
       let open = visibility != .detailOnly
       if model.sidebarOpen != open { model.sidebarOpen = open }
+    }
+    .onChange(of: model.sidebarOpen) { _, open in
+      let target: NavigationSplitViewVisibility = open ? .doubleColumn : .detailOnly
+      if columnVisibility != target { columnVisibility = target }
     }
     .onChange(of: model.composerFocusToken) { _, _ in
       focusComposerIfAllowed()
@@ -197,6 +66,92 @@ struct ContentView: View {
     }
   }
 
+  private var detailColumn: some View {
+    @Bindable var model = model
+    return VStack(spacing: 0) {
+      if let notice = model.speakBack {
+        SpeakBackBanner(notice: notice) {
+          model.dismissSpeakBack()
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+      }
+      transcript
+        .id(model.activeConversationId)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .navigationTitle("Arthur")
+    .toolbar {
+      ToolbarItem(placement: .primaryAction) {
+        Button {
+          model.newConversation()
+        } label: {
+          Label("New conversation", systemImage: "square.and.pencil")
+        }
+        .disabled(!model.canStartConversation || model.conversationIsEmpty)
+        .keyboardShortcut("n", modifiers: .command)
+      }
+      ToolbarItem(placement: .primaryAction) {
+        Button {
+          model.activityOpen = true
+        } label: {
+          Label("Activity", systemImage: "checklist")
+        }
+        .keyboardShortcut("a", modifiers: [.command, .shift])
+        .badge(model.attentionCount > 0 ? Text("\(model.attentionCount)") : nil)
+      }
+      ToolbarItem(placement: .primaryAction) {
+        Menu {
+          Button {
+            model.soundOn.toggle()
+          } label: {
+            Label(
+              model.soundOn ? "Sound on" : "Sound off",
+              systemImage: model.soundOn ? "speaker.wave.2" : "speaker.slash"
+            )
+          }
+          Button {
+            model.memoryOpen = true
+          } label: {
+            Label("Memory", systemImage: "text.book.closed")
+          }
+          Divider()
+          Button("Settings…") { model.settingsOpen = true }
+        } label: {
+          Label("More", systemImage: "ellipsis.circle")
+        }
+      }
+    }
+    .safeAreaBar(edge: .bottom) {
+      VStack(alignment: .leading, spacing: 8) {
+        if !model.errorText.isEmpty {
+          ErrorBanner(text: model.errorText) {
+            model.dismissError()
+          }
+        }
+        ComposerBar(
+          typing: $typing,
+          showReturnHint: showReturnHint && !model.holding
+        )
+      }
+      .padding(.horizontal, 16)
+      .padding(.bottom, 12)
+      .padding(.top, 2)
+    }
+    .sheet(isPresented: $model.memoryOpen) {
+      MemoryDesk()
+        .environment(model)
+    }
+    .sheet(isPresented: $model.activityOpen) {
+      ActivityPanel()
+        .environment(model)
+    }
+    .sheet(isPresented: $model.settingsOpen) {
+      SettingsView()
+        .environment(model)
+    }
+  }
+
   private func focusComposerIfAllowed() {
     guard !model.holding, !model.settingsOpen else { return }
     model.composerFocused = true
@@ -210,6 +165,11 @@ struct ContentView: View {
       emptyState
     } else {
       ScrollViewReader { proxy in
+        // Built once per pass — stopTarget and the compact-card check used to
+        // each rebuild the whole cluster list, once per row on top of that.
+        let clusters = transcriptClusters
+        let lastArthurId = clusters.last(where: { !$0.fromYou })?.id
+        let stopId = model.canCancel ? lastArthurId : nil
         ScrollView {
           // The saved conversation is complete. This window pages from the
           // latest lines so a long thread does not remount the whole history.
@@ -220,18 +180,17 @@ struct ContentView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
             }
-            ForEach(transcriptClusters) { cluster in
+            ForEach(clusters) { cluster in
               TranscriptClusterView(
                 cluster: cluster,
-                showStop: stopTarget == cluster.id,
+                showStop: stopId == cluster.id,
                 playEntrance: seededClusterIDs && !knownClusterIDs.contains(cluster.id),
-                preferCompact: hallwayCompact && cluster.id == lastArthurClusterId,
+                preferCompact: hallwayCompact && cluster.id == lastArthurId,
                 onEdit: { text in
                   model.prefillDraft(text)
                   typing = true
                 }
               )
-              .fadeUnderHeader()
               .background {
                 ForEach(cluster.lineIds, id: \.self) { lineId in
                   Color.clear.frame(height: 0).id(lineId)
@@ -241,12 +200,11 @@ struct ContentView: View {
             }
             if showWorkTrail {
               WorkTrail(line: model.work.line)
-                .fadeUnderHeader()
             }
             Color.clear.frame(height: 1).id(Self.bottomAnchor)
           }
           .padding(.horizontal, 22)
-          .padding(.top, 58)
+          .padding(.top, 12)
           .padding(.bottom, 10)
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
@@ -260,6 +218,9 @@ struct ContentView: View {
           pinToLiveEdgeIfFollowing(proxy)
         }
         .onChange(of: model.formingText) {
+          pinToLiveEdgeIfFollowing(proxy)
+        }
+        .onChange(of: model.streamingReply) {
           pinToLiveEdgeIfFollowing(proxy)
         }
         .onChange(of: model.hearingText) {
@@ -281,10 +242,6 @@ struct ContentView: View {
             suppressScrollTracking = false
           }
         }
-        .scrollContentBackground(.hidden)
-        .scrollIndicators(.automatic)
-        .background { ScrollEdgeEnabler() }
-        .background(.clear)
         .overlay(alignment: .bottom) {
           Group {
             if scrolledAway {
@@ -348,12 +305,26 @@ struct ContentView: View {
         ))
       }
     }
-    if model.pacingReply, let idx = clusters.lastIndex(where: { !$0.fromYou }) {
-      if model.spokenReveal.isEmpty {
-        clusters.remove(at: idx)
-      } else {
-        clusters[idx].texts = [model.spokenReveal]
+    let streaming = model.streamingReply
+    if !streaming.isEmpty {
+      let turnKey = model.liveArthurTurnId
+      if let idx = clusters.lastIndex(where: { cluster in
+        !cluster.fromYou && (
+          cluster.id == model.formingLineId ||
+          (!turnKey.isEmpty && cluster.turnId == turnKey)
+        )
+      }) {
+        clusters[idx].texts = [streaming]
         clusters[idx].liveLast = true
+      } else if !model.formingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        clusters.append(TranscriptCluster(
+          id: model.formingLineId,
+          fromYou: false,
+          texts: [streaming],
+          turnId: turnKey,
+          lineIds: [model.formingLineId],
+          liveLast: true
+        ))
       }
     }
     return clusters
@@ -366,15 +337,6 @@ struct ContentView: View {
     }
   }
 
-  private var stopTarget: UUID? {
-    guard model.canCancel else { return nil }
-    return lastArthurClusterId
-  }
-
-  private var lastArthurClusterId: UUID? {
-    transcriptClusters.last(where: { !$0.fromYou })?.id
-  }
-
   /// Hallway turns (or a narrow desk) should not force a full weather card.
   private var hallwayCompact: Bool {
     model.lastSurface == .hallway
@@ -385,11 +347,10 @@ struct ContentView: View {
       ArthurMarkTile(size: 56, shadows: false)
       VStack(spacing: 10) {
         Text("Hello.")
-          .font(.system(size: 28, weight: .regular, design: .serif))
-          .foregroundStyle(ArthurTheme.paper)
+          .font(.largeTitle)
         Text(emptyHint)
-          .font(.system(size: 15, weight: .regular))
-          .foregroundStyle(ArthurTheme.mute)
+          .font(.body)
+          .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
       }
       if !model.holding {
@@ -398,9 +359,6 @@ struct ContentView: View {
           VStack(spacing: 8) { starterChips }
         }
       }
-      Text(emptyFooter)
-        .font(.system(size: 12))
-        .foregroundStyle(ArthurTheme.whisper)
     }
     .padding(.horizontal, 28)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -421,14 +379,6 @@ struct ContentView: View {
       return "Click the droplet, or \(model.pttHotkey.display)"
     }
   }
-
-  private var emptyFooter: String {
-    if model.quietTextMode {
-      return "Quiet text on · \(model.pttHotkey.display) still talks · ⌘L to type"
-    }
-    return "The droplet talks and shows the reply · \(model.pttHotkey.display) · ⌘L to type"
-  }
-
   @ViewBuilder
   private var starterChips: some View {
     StarterChip("Remind me") {
@@ -501,13 +451,10 @@ struct ContentView: View {
         Text("Jump to latest")
           .font(.caption.weight(.semibold))
       }
-      .foregroundStyle(ArthurTheme.paper)
       .padding(.horizontal, 12)
       .padding(.vertical, 6)
     }
-    .buttonStyle(.plain)
-    .arthurPlate(radius: 14)
-    .padding(.bottom, 6)
+    .glassEffect()
     .help("Scroll to the latest line")
     .accessibilityLabel("Jump to latest")
   }
@@ -526,7 +473,7 @@ private struct WorkTrail: View {
   var body: some View {
     HStack(spacing: 8) {
       Circle()
-        .fill(Color.white.opacity(0.7))
+        .fill(Color.primary.opacity(0.7))
         .frame(width: 6, height: 6)
         .opacity(pulse ? 1 : 0.32)
       Text(line)
@@ -552,7 +499,7 @@ private struct SpeakBackBanner: View {
   var body: some View {
     HStack(alignment: .top, spacing: 10) {
       Image(systemName: notice.muted ? "bell.slash.fill" : "bell.fill")
-        .foregroundStyle(ArthurTheme.paper)
+        .foregroundStyle(.primary)
         .padding(.top, 1)
       VStack(alignment: .leading, spacing: 2) {
         Text(notice.title)
@@ -581,7 +528,7 @@ private struct SpeakBackBanner: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
-    .arthurPlate(radius: 14)
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(notice.title), \(notice.message)")
   }
@@ -619,7 +566,7 @@ private struct ErrorBanner: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
-    .arthurPlate(radius: 14)
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
   }
 }
 
@@ -639,9 +586,7 @@ private struct StarterChip: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
     }
-    .buttonStyle(.plain)
-    .foregroundStyle(ArthurTheme.paper)
-    .arthurPlate(radius: 16)
+    .buttonStyle(.bordered)
     .help(title)
   }
 }
@@ -661,12 +606,7 @@ private struct ComposerBar: View {
       composerRow
     }
     .padding(.horizontal, 12)
-    .padding(.vertical, 10)
-    .animation(.easeInOut(duration: 0.16), value: model.holding)
-    .animation(.easeInOut(duration: 0.16), value: model.canCancel)
-    .animation(.easeInOut(duration: 0.16), value: model.quietTextMode)
-    .animation(.easeInOut(duration: 0.16), value: model.screenStaged)
-    .animation(.easeInOut(duration: 0.16), value: model.stagedFiles.count)
+    .padding(.vertical, 8)
     .onDrop(of: [.fileURL], isTargeted: nil) { providers in
       model.takeDroppedProviders(providers)
       return true
@@ -682,9 +622,8 @@ private struct ComposerBar: View {
       if model.holding {
         listeningAffordance
       } else {
-        QuietModeToggle()
         if model.screenLook {
-          ComposerCircle(systemImage: "viewfinder", enabled: model.canTalk) {
+            ComposerCircle(systemImage: "laptopcomputer", enabled: model.canTalk) {
             model.lookAtScreen()
           }
           .help("Look at the screen once, then ask")
@@ -761,9 +700,8 @@ private struct ComposerBar: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(ArthurTheme.paper)
-        .arthurPlate(radius: 12)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
         .help("Looking at your screen. Click to discard.")
         .accessibilityLabel("Discard screenshot")
       }
@@ -777,9 +715,8 @@ private struct ComposerBar: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(ArthurTheme.paper)
-        .arthurPlate(radius: 12)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
         .help("Remove \(file.label)")
         .accessibilityLabel("Remove \(file.label)")
       }
@@ -791,8 +728,7 @@ private struct ComposerBar: View {
       ListeningMeter(level: model.inputLevel)
       VStack(alignment: .leading, spacing: 1) {
         Text("Listening")
-          .font(.system(size: 20, weight: .regular, design: .serif))
-          .foregroundStyle(ArthurTheme.paper)
+          .font(.title3)
         Text(model.handsFree ? "Pause when you're done" : "Release to send")
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -815,7 +751,7 @@ private struct ListeningMeter: View {
       ForEach(0..<5, id: \.self) { i in
         let lit = level > Double(i) / 5.2
         Capsule()
-          .fill(Color.white.opacity(lit ? 0.92 : 0.22))
+          .fill(Color.primary.opacity(lit ? 0.92 : 0.22))
           .frame(width: 3, height: 7 + CGFloat(i) * 2.4)
       }
     }
@@ -829,58 +765,14 @@ private struct ListeningMeter: View {
   }
 }
 
-private struct QuietModeToggle: View {
-  @Environment(AppModel.self) private var model
-
-  var body: some View {
-    Button {
-      model.toggleQuietTextMode()
-    } label: {
-      HStack(spacing: 4) {
-        Image(systemName: model.quietTextMode ? "keyboard.fill" : "keyboard")
-          .font(.system(size: 12, weight: .semibold))
-        if model.quietTextMode {
-          Text("Text")
-            .font(.caption2.weight(.semibold))
-        }
-      }
-      .foregroundStyle(model.quietTextMode ? ArthurTheme.paper : ArthurTheme.mute)
-      .padding(.horizontal, model.quietTextMode ? 8 : 6)
-      .frame(height: 32)
-      .background(
-        model.quietTextMode ? Color.white.opacity(0.08) : Color.clear,
-        in: Capsule()
-      )
-    }
-    .buttonStyle(.plain)
-    .help(
-      model.quietTextMode
-        ? "Quiet text on — Space types. \(model.pttHotkey.display) still talks."
-        : "Quiet text — Space will not start talk"
-    )
-    .accessibilityLabel(model.quietTextMode ? "Quiet text on" : "Quiet text off")
-    .accessibilityHint("Turns off Space as push-to-talk. Option-Space and the menu-bar droplet still talk.")
-    .accessibilityAddTraits(model.quietTextMode ? [.isSelected] : [])
-  }
-}
-
 private struct ComposerStop: View {
   var action: () -> Void
 
   var body: some View {
     Button(action: action) {
-      HStack(spacing: 5) {
-        Image(systemName: "stop.fill")
-          .font(.system(size: 9, weight: .bold))
-        Text("Stop")
-          .font(.callout.weight(.semibold))
-      }
-      .foregroundStyle(.black)
-      .padding(.horizontal, 11)
-      .frame(height: 32)
-      .background(Color.white, in: Capsule())
+      Label("Stop", systemImage: "stop.fill")
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.borderedProminent)
     .help("Stop Arthur")
     .accessibilityLabel("Stop")
   }
@@ -896,19 +788,13 @@ private struct ComposerCircle: View {
   var body: some View {
     Button(action: action) {
       Image(systemName: systemImage)
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(active ? Color.black : .white)
-        .frame(width: 32, height: 32)
-        .background(circleFill, in: Circle())
+            .foregroundColor(Color(.controlBackgroundColor))
+            .padding(5)
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.bordered)
+    .buttonBorderShape(.circle)
+    .glassEffect(.regular.tint(.primary).interactive())
     .disabled(!enabled)
-  }
-
-  private var circleFill: Color {
-    if !enabled { return Color.white.opacity(0.12) }
-    if active { return .white }
-    return Color.white.opacity(0.14)
   }
 }
 
@@ -996,8 +882,8 @@ private struct UserCopy: View {
         ForEach(Array(texts.enumerated()), id: \.offset) { index, text in
           let live = liveLast && index == texts.count - 1
           Text(text)
-            .font(.system(size: 17, weight: .regular, design: .serif))
-            .foregroundStyle(live ? ArthurTheme.whisper : ArthurTheme.mute)
+            .font(.body)
+            .foregroundStyle(live ? Color.secondary : Color.primary)
             .multilineTextAlignment(.trailing)
             .textSelection(.enabled)
             .padding(.vertical, 2)
@@ -1037,7 +923,7 @@ private struct ArthurCopy: View {
     VStack(alignment: .leading, spacing: 8) {
       Text(live ? "Arthur · writing" : "Arthur")
         .font(.caption2)
-        .foregroundStyle(ArthurTheme.whisper)
+        .foregroundStyle(.secondary)
       VStack(alignment: .leading, spacing: 4) {
         ForEach(Array(texts.enumerated()), id: \.offset) { index, text in
           let streaming = live && index == texts.count - 1
@@ -1092,16 +978,16 @@ private struct ArthurCopy: View {
 
 private struct ArthurReply: View {
   @Environment(AppModel.self) private var model
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let text: String
   var live = false
 
   var body: some View {
-    if live, !reduceMotion {
-      // The animation schedule keeps painting while the transcript is scrolling.
-      // The scroll run loop does not refresh an ordinary body until the gesture ends.
-      TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { _ in
-        blockStack(model.spokenReveal.isEmpty ? text : model.spokenReveal)
+    if live {
+      // Scrolling freezes an ordinary body. The timeline keeps reading the
+      // latest tokens; equatable skips the layout when the string is unchanged.
+      TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { _ in
+        LiveProse(text: model.streamingReply.isEmpty ? text : model.streamingReply)
+          .equatable()
       }
     } else {
       blockStack(text)
@@ -1119,7 +1005,7 @@ private struct ArthurReply: View {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
               HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("•")
-                  .font(.system(.title3, design: .serif))
+                  .font(.body)
                   .foregroundStyle(.secondary)
                 ArthurProse(text: item, live: live)
               }
@@ -1130,7 +1016,7 @@ private struct ArthurReply: View {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
               HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("\(index + 1).")
-                  .font(.system(.title3, design: .serif))
+                  .font(.body)
                   .foregroundStyle(.secondary)
                   .monospacedDigit()
                 ArthurProse(text: item, live: live)
@@ -1145,6 +1031,27 @@ private struct ArthurReply: View {
   }
 }
 
+/// Plain text for the in-flight reply. Markdown is parsed once the turn
+/// settles, so a token does not rebuild the block stack.
+private struct LiveProse: View, Equatable {
+  var text: String
+
+  static func == (lhs: LiveProse, rhs: LiveProse) -> Bool {
+    lhs.text == rhs.text
+  }
+
+  var body: some View {
+    Text(text)
+      .font(.title3)
+      .foregroundStyle(.primary)
+      .multilineTextAlignment(.leading)
+      .textSelection(.enabled)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .fixedSize(horizontal: false, vertical: true)
+      .transaction { $0.animation = nil }
+  }
+}
+
 struct SettingsView: View {
   @Environment(AppModel.self) private var model
   @Environment(\.dismiss) private var dismiss
@@ -1156,7 +1063,7 @@ struct SettingsView: View {
       Form {
         Section {
           Text("Connection and device below apply when you tap Done. Switches, pickers, and voice enrollment further down apply right away.")
-            .font(.caption).foregroundStyle(ArthurTheme.mute)
+            .font(.caption).foregroundStyle(.secondary)
         }
         Section("Connection") {
           LabeledContent("Host") {
@@ -1200,7 +1107,7 @@ struct SettingsView: View {
         Section {
           LabeledContent("Access") {
             Text(model.micGranted ? "Allowed" : "Off")
-              .foregroundStyle(model.micGranted ? ArthurTheme.mute : Color.white.opacity(0.92))
+              .foregroundStyle(model.micGranted ? Color.secondary : Color.primary)
           }
           if !model.micGranted {
             Button(microphoneAccessTitle) {
@@ -1311,8 +1218,6 @@ struct SettingsView: View {
         }
       }
       .formStyle(.grouped)
-      .scrollContentBackground(.hidden)
-      .background(Color.black)
       .navigationTitle("Settings")
       .navigationDestination(for: McpEditorRoute.self) { route in
         McpServerEditor(route: route, server: mcpServer(for: route))
@@ -1327,7 +1232,6 @@ struct SettingsView: View {
               model.applySettings()
               dismiss()
             }
-            .buttonStyle(.plain)
             .font(.system(size: 13, weight: .semibold))
           }
         }
@@ -1342,8 +1246,6 @@ struct SettingsView: View {
       }
     }
     .frame(minWidth: 520, minHeight: 560)
-    .preferredColorScheme(.dark)
-    .tint(ArthurTheme.accent)
   }
 
   private func mcpServer(for route: McpEditorRoute) -> McpServer? {
@@ -1404,14 +1306,14 @@ private struct HouseholdEnrollSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       Text("Teach Arthur a voice").font(.title3.weight(.semibold))
       Text("Say each phrase when asked. Wake word pauses while you record.")
-        .font(.callout).foregroundStyle(ArthurTheme.mute)
+        .font(.callout).foregroundStyle(Color.secondary)
       // 1-2-3 progress
       HStack(spacing: 8) {
         ForEach(0..<HouseholdRoster.phrases.count, id: \.self) { i in
           VStack(spacing: 4) {
             Circle().fill(i < model.teachPhrase || !model.teaching && !model.householdStatus.isEmpty && model.householdStatus.contains("enrolled") ? Color.white : Color.white.opacity(0.18))
               .frame(width: 10, height: 10)
-            Text("\(i + 1)").font(.caption2).foregroundStyle(ArthurTheme.mute)
+            Text("\(i + 1)").font(.caption2).foregroundStyle(Color.secondary)
           }
           if i < HouseholdRoster.phrases.count - 1 { Rectangle().fill(Color.white.opacity(0.18)).frame(height: 1) }
         }
@@ -1426,7 +1328,7 @@ private struct HouseholdEnrollSheet: View {
           .font(.callout).foregroundStyle(.primary)
       }
       if !model.householdStatus.isEmpty {
-        Text(model.householdStatus).font(.callout).foregroundStyle(ArthurTheme.mute)
+        Text(model.householdStatus).font(.callout).foregroundStyle(Color.secondary)
       }
       HStack {
         if model.teaching {
@@ -1441,7 +1343,7 @@ private struct HouseholdEnrollSheet: View {
         }
       }
     }
-    .padding(20).frame(width: 440).background(Color.black).preferredColorScheme(.dark)
+    .padding(20).frame(width: 440)
   }
 }
 

@@ -226,7 +226,7 @@ context frame is used.
 | `{"type":"status","phase"}` | `thinking` while waiting on Arbiter (desk clients) |
 | `{"type":"working","tool"}` | Master tool started; value is the tool name |
 | `{"type":"said","text"}` | Sentence about to be spoken (same text Kokoro hears) |
-| `{"type":"forming","text"}` | Unspoken answer prefix as tokens arrive (~12 Hz, desk presence) |
+| `{"type":"forming","text"}` | Unspoken answer prefix as tokens arrive, coalesced to about 60 Hz. Desk clients show it immediately; it is not paced to speech |
 | `{"type":"surface","turn_id","surface"}` | Versioned desk card for this turn. Voice-only devices ignore it. |
 | `{"type":"approval","id","granted"}` | The user accepted or refused a pending Mac write. `reason` is `replaced` when a later request retires it. Voice-only devices still hear the short reply |
 

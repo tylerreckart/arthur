@@ -143,25 +143,15 @@ struct ArthurMarkTile: View {
 
   var body: some View {
     ZStack {
-      RoundedRectangle(cornerRadius: size * corner, style: .continuous)
-        .fill(Color.black)
       ArthurGlyph()
-        .fill(Color.white.opacity(glyphOpacity))
+        .fill(Color.primary.opacity(glyphOpacity))
         .padding(size * inset)
-      RoundedRectangle(cornerRadius: size * corner, style: .continuous)
-        .strokeBorder(Color.white.opacity(rimOpacity), lineWidth: max(0.5, size * 0.035))
     }
     .frame(width: size, height: size)
-    .shadow(
-      color: shadows ? .black.opacity(0.32) : .clear,
-      radius: shadows ? size * 0.11 : 0,
-      y: shadows ? size * 0.05 : 0
-    )
     .accessibilityHidden(true)
   }
 }
 
-#if DEBUG
 #Preview("Menu bar glyph") {
   ArthurGlyph()
     .fill(Color.primary)
@@ -175,6 +165,5 @@ struct ArthurMarkTile: View {
     ArthurMarkTile(size: 72, shadows: false)
   }
   .padding(28)
-  .background(Color.black)
+  .background(Color.blue)
 }
-#endif

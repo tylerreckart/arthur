@@ -213,6 +213,21 @@ enum ArthurProseJoin {
   }
 }
 
+/// What the desk paints while a reply is still arriving.
+///
+/// `forming` is the unspoken prefix Intercom has already produced. It is
+/// shown in full, immediately. Speech may still be catching up.
+enum ArthurLiveReply {
+  static func shown(committed: String, forming: String) -> String {
+    let left = committed.trimmingCharacters(in: .whitespacesAndNewlines)
+    let right = forming.trimmingCharacters(in: .whitespacesAndNewlines)
+    if right.isEmpty { return left }
+    if left.isEmpty { return right }
+    if ArthurProseJoin.alreadySpoken(left, right) { return left }
+    return ArthurProseJoin.join(left, right)
+  }
+}
+
 enum WorkState: Equatable {
   case none
   case findingWords

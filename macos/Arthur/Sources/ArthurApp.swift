@@ -12,10 +12,6 @@ struct ArthurApp: App {
       ArthurWindowRoot()
         .environment(model)
         .frame(minWidth: 440, minHeight: 520)
-        .containerBackground(for: .window) {
-          Color.black
-        }
-        .background { WindowTransparency() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
           DeskAccessory.shared.detach()
           model.stop()
@@ -23,7 +19,6 @@ struct ArthurApp: App {
     }
     .defaultSize(width: 520, height: 680)
     .windowResizability(.contentMinSize)
-    .windowToolbarStyle(.unified)
     .commands {
       CommandGroup(replacing: .newItem) {}
       CommandMenu("Arthur") {

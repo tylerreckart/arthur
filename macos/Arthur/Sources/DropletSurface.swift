@@ -23,7 +23,7 @@ struct DripSample: Equatable {
 }
 
 enum DripMotion {
-  /// Fades up into the corner. The card is not attached to the toolbar.
+  /// Fades up into the corner under the menu-bar icon.
   static func opening(_ t: Double) -> DripSample {
     if t >= 0.4 { return .settled }
     let reveal = smoother(min(1, t / 0.34))
@@ -76,7 +76,9 @@ struct DropletContent: Equatable {
   var hotkey: String
   var attentionCount: Int = 0
   var attentionTitle: String = ""
-  var attentionSummary: String = "" 
+  var attentionSummary: String = ""
+  /// True while `reply` is still growing. The card keeps the newest lines.
+  var replyLive = false
 
   var live: Bool { stage != .ready }
 
@@ -124,18 +126,20 @@ struct DropletContent: Equatable {
     }
 
     let lastArthur = model.discussion.last(where: { !$0.fromYou })
+    let streaming = model.streamingReply
+    let replyLive = stage != .listening && !streaming.isEmpty
     let reply: String
     if stage == .listening {
       reply = ""
-    } else if model.pacingReply {
-      reply = model.spokenReveal
+    } else if replyLive {
+      reply = tail(streaming, 1200)
     } else if stage == .thinking {
       reply = ""
     } else {
       reply = lastArthur?.text ?? ""
     }
 
-    let surface = (stage == .listening || model.pacingReply || stage == .thinking) ? nil : lastArthur?.surfaces.last
+    let card = (stage == .listening || stage == .thinking) ? nil : lastArthur?.surfaces.last
     let workLine = model.work.line
     let speak = model.speakLevel
     let hotkey = model.pttHotkey.display
@@ -192,9 +196,9 @@ struct DropletContent: Equatable {
       title: title,
       subtitle: subtitle,
       you: clip(you, 280),
-      reply: clip(reply, 700),
-      noteTitle: surface?.title ?? "",
-      noteBody: surface?.summary ?? "",
+      reply: replyLive ? reply : clip(reply, 700),
+      noteTitle: card?.title ?? "",
+      noteBody: card?.summary ?? "",
       approveLabel: model.pendingWriteLabel,
       lookLabel: model.screenLook ? "Look" : "",
       level: model.inputLevel,
@@ -206,8 +210,20 @@ struct DropletContent: Equatable {
       hotkey: hotkey,
       attentionCount: model.attentionCount,
       attentionTitle: urgent?.title ?? "",
-      attentionSummary: urgent?.summary ?? ""
+      attentionSummary: urgent?.summary ?? "",
+      replyLive: replyLive
     )
+  }
+
+  /// Latest words, so a long live reply does not lay out from the first sentence.
+  private static func tail(_ text: String, _ limit: Int) -> String {
+    guard text.count > limit else { return text }
+    let start = text.index(text.endIndex, offsetBy: -limit)
+    let clipped = text[start...]
+    guard let breakAt = clipped.firstIndex(where: { $0 == " " || $0 == "\n" }) else {
+      return String(clipped)
+    }
+    return String(clipped[clipped.index(after: breakAt)...])
   }
 
   private static func clip(_ text: String, _ limit: Int) -> String {
@@ -272,6 +288,9 @@ final class DropletSession {
   var openBegan = Date()
   var closeBegan = Date()
   var closeToken = 0
+  /// Open, close, and drag. Paused once the card is sitting still so reply
+  /// text is not re-laid-out on a 60 fps clock.
+  var chromeAnimating = true
   private let epoch = Date()
 
   var dragging = false
@@ -284,6 +303,17 @@ final class DropletSession {
       return DripMotion.closing(date.timeIntervalSince(closeBegan))
     }
     return DripMotion.opening(date.timeIntervalSince(openBegan))
+  }
+
+  func wantsChromeAnimation(at date: Date) -> Bool {
+    if closing || dragging { return true }
+    if date.timeIntervalSince(openBegan) < 0.42 { return true }
+    if date.timeIntervalSince(dragReleasedAt) < 0.55 { return true }
+    return false
+  }
+
+  func setChromeAnimating(_ on: Bool) {
+    if chromeAnimating != on { chromeAnimating = on }
   }
 
   func shaderTime(at date: Date) -> Float {
@@ -346,23 +376,14 @@ struct ArthurBead: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   var bead: BeadState
   var diameter: CGFloat = 16
-  /// When set, draw this instant instead of running a timeline.
-  /// The menu-bar image is re-rendered from a timer; the toolbar uses the clock.
-  var clock: Date? = nil
 
   private var animating: Bool {
     !reduceMotion && (bead.listening || bead.thinking || bead.speaking || bead.dripping || bead.connected)
   }
 
   var body: some View {
-    Group {
-      if let clock {
-        mark(time: clock.timeIntervalSinceReferenceDate)
-      } else {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animating)) { context in
-          mark(time: context.date.timeIntervalSinceReferenceDate)
-        }
-      }
+    TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animating)) { context in
+      mark(time: context.date.timeIntervalSinceReferenceDate)
     }
     .frame(width: diameter, height: diameter)
     .accessibilityHidden(true)
@@ -390,26 +411,6 @@ struct ArthurBead: View {
   }
 }
 
-struct ArthurToolbarBead: View {
-  private var bead: BeadState { DeskAccessory.shared.bead }
-
-  var body: some View {
-    Button {
-      DeskAccessory.shared.toggleFromToolbar()
-    } label: {
-      ArthurBead(bead: bead, diameter: 15)
-        .frame(width: 28, height: 28)
-        .background {
-          ScreenFrameReader { DeskAccessory.shared.noteToolbarAnchor($0) }
-        }
-    }
-    .buttonStyle(.plain)
-    .help(bead.listening ? "Arthur is listening" : "Arthur — open the droplet")
-    .accessibilityLabel(bead.accessibilityLabel)
-    .accessibilityHint("Opens Arthur. Hold the menu-bar droplet, or use the talk shortcut, to speak.")
-  }
-}
-
 // MARK: - Card
 
 struct DropletCardRoot: View {
@@ -417,7 +418,10 @@ struct DropletCardRoot: View {
   private var bead: BeadState { DeskAccessory.shared.bead }
 
   var body: some View {
-    TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+    let ticking = session.chromeAnimating || session.closing || session.dragging
+    let reply = session.content.reply
+    let height = session.cardHeight
+    TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !ticking)) { timeline in
       let now = timeline.date
       let sample = session.sample(at: now)
       let drag = session.dragOffset(at: now)
@@ -455,7 +459,15 @@ struct DropletCardRoot: View {
       .onChange(of: hitsOpen(sample)) { _, open in
         session.actions.setAcceptsHits(open)
       }
+      .onChange(of: now) { _, date in
+        let wants = session.wantsChromeAnimation(at: date)
+        if wants != session.chromeAnimating {
+          session.setChromeAnimating(wants)
+        }
+      }
     }
+    .onChange(of: reply) { _, _ in }
+    .onChange(of: height) { _, _ in }
     .onChange(of: session.closeToken) { _, token in
       guard token > 0 else { return }
       let expected = token
@@ -582,7 +594,8 @@ private struct DropletCardBody: View {
             .accessibilityLabel(content.subtitle)
         }
       } else {
-        SpokenReply(text: content.reply)
+        SpokenReply(text: content.reply, live: content.replyLive)
+          .equatable()
         if content.stage == .thinking || content.stage == .replying, !content.subtitle.isEmpty {
           Text(content.subtitle)
             .font(.callout).foregroundStyle(ArthurTheme.mute)
@@ -653,7 +666,6 @@ private struct DropletCardBody: View {
     }
     .padding(24)
     .frame(width: DropletMetrics.cardWidth, alignment: .leading)
-    .animation(.easeOut(duration: 0.28), value: content.reply)
     .simultaneousGesture(cardDrag)
   }
 
@@ -676,35 +688,27 @@ private struct DropletCardBody: View {
 
 }
 
-/// Arthur's spoken reply, revealed a few characters at a time as it arrives.
-private struct SpokenReply: View {
+/// Arthur's reply. While it is still arriving, keep the newest lines in view.
+private struct SpokenReply: View, Equatable {
   var text: String
-  @State private var count = 0
-  @State private var reveal: Task<Void, Never>?
+  var live = false
+
+  static func == (lhs: SpokenReply, rhs: SpokenReply) -> Bool {
+    lhs.text == rhs.text && lhs.live == rhs.live
+  }
 
   var body: some View {
-    Text(String(text.prefix(count)))
+    Text(text)
       .font(.system(size: 20, weight: .regular, design: .serif))
       .foregroundStyle(Color.white)
       .lineLimit(8)
+      .truncationMode(live ? .head : .tail)
       .textSelection(.enabled)
       .frame(maxWidth: .infinity, alignment: .leading)
+      .transaction { $0.animation = nil }
       .contextMenu {
         Button("Copy") { ArthurPasteboard.copy(text) }
       }
-      .onAppear { catchUp(to: text) }
-      .onChange(of: text) { old, next in
-        if count > 0, !next.hasPrefix(String(old.prefix(count))) {
-          count = 0
-        }
-        catchUp(to: next)
-      }
-      .onDisappear { reveal?.cancel() }
-  }
-
-  private func catchUp(to next: String) {
-    reveal?.cancel()
-    count = next.count
   }
 }
 
@@ -717,7 +721,7 @@ final class DropletPanel: NSPanel {
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { false }
 
-  /// Clicks outside the card go to the menu-bar and toolbar triggers.
+  /// Clicks outside the card go to the menu-bar icon.
   override func sendEvent(_ event: NSEvent) {
     switch event.type {
     case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp:
@@ -765,6 +769,7 @@ final class DropletController {
     session.closing = false
     if drip || !onScreen || wasClosing {
       session.openBegan = Date()
+      session.chromeAnimating = true
       session.talkArmed = false
     }
     onScreen = true
@@ -781,6 +786,7 @@ final class DropletController {
       return
     }
     session.closing = true
+    session.chromeAnimating = true
     session.closeBegan = Date()
     session.closeToken += 1
     session.releaseTalk()
@@ -793,6 +799,7 @@ final class DropletController {
   }
 
   func update(_ content: DropletContent) {
+    guard content != session.content else { return }
     session.content = content
   }
 
@@ -914,53 +921,6 @@ final class DropletHostingView: NSHostingView<DropletCardRoot> {
     let rect = cardScreenRect().insetBy(dx: -10, dy: -16)
     guard rect.width > 20, rect.contains(screenPoint) else { return nil }
     return super.hitTest(point)
-  }
-}
-
-struct ScreenFrameReader: NSViewRepresentable {
-  var onChange: (NSRect) -> Void
-
-  func makeNSView(context: Context) -> ScreenFrameView {
-    ScreenFrameView(onChange: onChange)
-  }
-
-  func updateNSView(_ view: ScreenFrameView, context: Context) {
-    view.onChange = onChange
-    view.report()
-  }
-}
-
-final class ScreenFrameView: NSView {
-  var onChange: (NSRect) -> Void
-  private var last = NSRect.null
-
-  init(onChange: @escaping (NSRect) -> Void) {
-    self.onChange = onChange
-    super.init(frame: .zero)
-  }
-
-  @available(*, unavailable)
-  required init?(coder: NSCoder) { nil }
-
-  override func viewDidMoveToWindow() {
-    super.viewDidMoveToWindow()
-    report()
-  }
-
-  override func layout() {
-    super.layout()
-    report()
-  }
-
-  func report() {
-    guard let window, bounds.width > 1, bounds.height > 1 else { return }
-    let rect = window.convertToScreen(convert(bounds, to: nil))
-    if abs(rect.minX - last.minX) < 0.5, abs(rect.minY - last.minY) < 0.5,
-       abs(rect.width - last.width) < 0.5, abs(rect.height - last.height) < 0.5 {
-      return
-    }
-    last = rect
-    onChange(rect)
   }
 }
 
