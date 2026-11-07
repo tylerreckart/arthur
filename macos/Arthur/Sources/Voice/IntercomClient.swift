@@ -20,6 +20,13 @@ enum IntercomEvent {
   case disconnected(String)
 }
 
+private struct Outbound {
+  var message: URLSessionWebSocketTask.Message
+  var failure: String
+  var generation: Int
+  var task: URLSessionWebSocketTask
+}
+
 final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
   private let lock = NSLock()
   private var session: URLSession?
@@ -27,7 +34,10 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
   private var pingTimer: DispatchSourceTimer?
   private var generation = 0
   private let callbackQueue = DispatchQueue(label: "run.intercom.arthur.ws")
-  private let sendQueue = DispatchQueue(label: "run.intercom.arthur.ws.send")
+  /// Outbound frames. Completed in order so a context frame stays ahead of
+  /// the PCM that follows it, without blocking on the session callback.
+  private var outbound: [Outbound] = []
+  private var outboundActive = false
   var onEvent: ((IntercomEvent) -> Void)?
 
   var isConnected: Bool {
@@ -77,6 +87,8 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
   func disconnect() {
     lock.lock()
     generation += 1
+    outbound.removeAll()
+    outboundActive = false
     let oldTask = task
     let oldSession = session
     task = nil
@@ -157,19 +169,39 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
   private func send(_ message: URLSessionWebSocketTask.Message, failure: String) {
     lock.lock()
     let gen = generation
-    let task = self.task
+    guard let task else {
+      lock.unlock()
+      return
+    }
+    outbound.append(Outbound(message: message, failure: failure, generation: gen, task: task))
+    let start = !outboundActive
+    if start { outboundActive = true }
     lock.unlock()
-    guard let task else { return }
-    // One queue keeps a context frame ahead of the PCM that follows it.
-    sendQueue.async { [weak self] in
-      let sem = DispatchSemaphore(value: 0)
-      task.send(message) { error in
-        if let self, let error, !self.isCancellation(error) {
-          self.fail(gen, "\(failure): \(error.localizedDescription)")
-        }
-        sem.signal()
+    if start { writeNext(generation: gen) }
+  }
+
+  /// Writes the next frame only after the previous send finishes, so frames
+  /// stay ordered. The session callback resumes the chain instead of a
+  /// higher-priority thread waiting on it. A stale callback, from a socket
+  /// that already failed, does not touch the new chain.
+  private func writeNext(generation expected: Int) {
+    lock.lock()
+    guard expected == generation else {
+      lock.unlock()
+      return
+    }
+    guard !outbound.isEmpty else {
+      outboundActive = false
+      lock.unlock()
+      return
+    }
+    let item = outbound.removeFirst()
+    lock.unlock()
+    item.task.send(item.message) { [weak self] error in
+      if let self, let error, !self.isCancellation(error) {
+        self.fail(item.generation, "\(item.failure): \(error.localizedDescription)")
       }
-      sem.wait()
+      self?.writeNext(generation: expected)
     }
   }
 
@@ -225,6 +257,8 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
       return
     }
     generation += 1
+    outbound.removeAll()
+    outboundActive = false
     let oldTask = task
     let oldSession = session
     task = nil

@@ -141,3 +141,17 @@ struct ActivityPanel: View {
     .padding().background(Color.black).preferredColorScheme(.dark)
 }
 #endif
+
+#if DEBUG
+#Preview("Activity · error offline") {
+  let m = AppModel.previewCanvas(phase: .disconnected); m.errorText = "Disconnected from intercom."
+  return ActivityPanel().environment(m).frame(width: 520, height: 620)
+}
+#Preview("Activity · approval pending") {
+  let m = AppModel.previewCanvas()
+  m.pendingWriteTitle = "Add calendar event"; m.pendingWriteSummary = "Dentist tomorrow at 9am"
+  // pendingWriteLabel is derived from private phase; surface via schedules as fallback rows
+  m.deskSchedules = [DeskSchedule(id: 3, message: "Water the plants", phrase: "tomorrow at 9:00 am", status: "active")]
+  return ActivityPanel().environment(m).frame(width: 520, height: 620)
+}
+#endif
