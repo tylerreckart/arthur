@@ -23,13 +23,13 @@ struct WhisperConfig {
 struct SpeechDspConfig {
   bool enabled = true;
   double highpass_hz = 70.0;
-  double presence_hz = 2600.0;
-  double presence_db = 1.5;
-  double presence_q = 0.8;
-  double compressor_threshold_db = -16.0;
-  double compressor_ratio = 2.2;
-  double compressor_attack_ms = 8.0;
-  double compressor_release_ms = 90.0;
+  double presence_hz = 3200.0;
+  double presence_db = 2.0;
+  double presence_q = 1.0;
+  double compressor_threshold_db = -13.0;
+  double compressor_ratio = 1.8;
+  double compressor_attack_ms = 5.0;
+  double compressor_release_ms = 45.0;
   double makeup_db = 1.0;
   double limiter_db = -1.0;
 };
@@ -38,7 +38,7 @@ struct KokoroConfig {
   std::string binary = "kokoro-tts";
   // Single Kokoro name, legacy `left+right:weight`, or N-way `name:w+name:w`.
   std::string voice = "bm_lewis";
-  double speed = 0.96;
+  double speed = 1.1;
   std::string model;
   std::string voices;
   bool use_server = true;

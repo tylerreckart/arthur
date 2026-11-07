@@ -56,13 +56,15 @@ SpeechDelivery classify_speech_delivery(std::string_view text) {
 }
 
 double delivery_speed_multiplier(SpeechDelivery delivery) {
+  // Stay at or above 1. Kokoro's speed is a phoneme-duration divisor, so a
+  // multiplier under 1 stretches vowels and is what reads as slurred.
   switch (delivery) {
     case SpeechDelivery::Warm:
-      return 0.98;
+      return 1.0;
     case SpeechDelivery::Subdued:
-      return 1.02;
+      return 1.05;
     case SpeechDelivery::Firm:
-      return 0.97;
+      return 1.0;
     case SpeechDelivery::Neutral:
       return 1.0;
   }

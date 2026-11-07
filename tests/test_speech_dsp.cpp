@@ -98,6 +98,9 @@ int main() {
         intercom::SpeechDelivery::Neutral);
   CHECK(intercom::delivery_gain_db(intercom::SpeechDelivery::Subdued) < 0.0);
   CHECK(intercom::delivery_gain_db(intercom::SpeechDelivery::Firm) > 0.0);
+  CHECK(intercom::delivery_speed_multiplier(intercom::SpeechDelivery::Warm) >= 1.0);
+  CHECK(intercom::delivery_speed_multiplier(intercom::SpeechDelivery::Firm) >= 1.0);
+  CHECK(intercom::delivery_speed_multiplier(intercom::SpeechDelivery::Subdued) >= 1.0);
 
   constexpr int kRate = 24000;
   auto burst = [](int ms, int amplitude) {

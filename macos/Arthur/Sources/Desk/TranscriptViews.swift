@@ -313,10 +313,13 @@ struct ComposerStop: View {
   var body: some View {
     Button(action: action) {
       Label("Stop", systemImage: "stop.fill")
+            .foregroundColor(Color(.controlBackgroundColor))
+            .padding(5)
     }
-    .glassEffect(.regular.tint(.white).interactive())
+    .glassEffect(.regular.tint(.primary).interactive())
     .help("Stop Arthur")
     .accessibilityLabel("Stop")
+    .transition(.opacity.combined(with: .move(edge: .bottom)))
   }
 }
 
@@ -333,8 +336,6 @@ struct ComposerCircle: View {
             .foregroundColor(Color(.controlBackgroundColor))
             .padding(5)
     }
-    .buttonStyle(.bordered)
-    .buttonBorderShape(.circle)
     .glassEffect(.regular.tint(.primary).interactive())
     .disabled(!enabled)
   }

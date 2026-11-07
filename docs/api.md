@@ -440,9 +440,10 @@ and configurations requiring resampling, fall back to the complete-WAV
 endpoint.
 
 Arthur's delivery is inferred from each spoken phrase. Greetings and courtesies
-are slightly warmer and more measured; tool-wait asides are quieter and briefer;
-warnings are firmer and leave a little more space. The adjustments are subtle
-speed, gain, and pause changes on top of the selected Kokoro voice.
+leave a little more space; tool-wait asides are quieter and briefer; warnings
+are firmer and leave a little more space. Pace stays at or above the Kokoro
+speed (`1.1` by default). A multiplier under 1 stretches phonemes and sounds
+slurred, so warmth and firmness are gain and pause only.
 
 The default `kokoro.voice` is `bm_lewis` (language `en-gb`), matching Arthur's 
 persona. Other single names and weighted blends remain valid.
@@ -454,8 +455,9 @@ A gitignored local `intercom.json` is not overwritten — update `kokoro.voice`
 there if you want the new default.
 
 Kokoro output passes through a stateful speech DSP chain before reaching the
-device: a 70 Hz high-pass filter, a gentle 2.6 kHz presence lift, envelope
-compression, makeup gain, and a minus-one-decibel limiter. All parameters are
+device: a 70 Hz high-pass filter, a 3.2 kHz presence lift, light envelope
+compression with a short release so consonants are not ducked, makeup gain,
+and a minus-one-decibel limiter. All parameters are
 under `kokoro.dsp`; set `enabled` to `false` for a bit-exact bypass.
 
 ## Household voices

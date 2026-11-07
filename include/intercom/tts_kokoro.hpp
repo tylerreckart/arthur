@@ -49,7 +49,7 @@ class KokoroTts : public TtsProvider {
   std::mutex synthesize_mu_;
   mutable std::mutex mu_;
   int pending_pause_ms_ = 200;
-  double pending_speed_ = 0.96;
+  double pending_speed_ = 1.1;
   SpeechDelivery pending_delivery_ = SpeechDelivery::Neutral;
   std::unordered_map<std::string, std::vector<std::uint8_t>> cache_;
 };

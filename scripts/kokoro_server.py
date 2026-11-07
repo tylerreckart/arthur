@@ -44,7 +44,7 @@ def current_epoch() -> int:
 DEFAULT_VOICE = "bm_lewis"
 VOICE = DEFAULT_VOICE
 VOICE_STYLE = DEFAULT_VOICE
-SPEED = 0.96
+SPEED = 1.1
 LANG = "en-us"
 
 _LANG_BY_PREFIX = {
@@ -419,7 +419,7 @@ def main() -> int:
         default=DEFAULT_VOICE,
         help="Kokoro voice name or + blend (name:w+name:w; weights auto-normalized)",
     )
-    parser.add_argument("--speed", type=float, default=0.96)
+    parser.add_argument("--speed", type=float, default=1.1)
     parser.add_argument("--lang", default="")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8091)
