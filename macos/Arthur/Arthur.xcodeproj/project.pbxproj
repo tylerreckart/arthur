@@ -19,6 +19,10 @@
 		A10000000000000000000045 /* HistorySearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000044 /* HistorySearch.swift */; };
 		A10000000000000000000047 /* DeskLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000046 /* DeskLibrary.swift */; };
 		A10000000000000000000049 /* Activity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000048 /* Activity.swift */; };
+		A10000000000000000000050 /* SurfaceWeather.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000051 /* SurfaceWeather.swift */; };
+		A10000000000000000000052 /* SurfaceNews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000053 /* SurfaceNews.swift */; };
+		A10000000000000000000054 /* SurfaceMarkets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000055 /* SurfaceMarkets.swift */; };
+		A10000000000000000000056 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000057 /* JSONValue.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -27,17 +31,21 @@
 		A10000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1000000000000000000000A /* Arthur.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Arthur.entitlements; sourceTree = "<group>"; };
 		A10000000000000000000024 /* ArthurTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ArthurTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		A10000000000000000000025 /* ChatSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSurface.swift; sourceTree = "<group>"; };
-		A10000000000000000000026 /* Notebook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notebook.swift; sourceTree = "<group>"; };
-		A10000000000000000000032 /* CalendarAgenda.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarAgenda.swift; sourceTree = "<group>"; };
-		A10000000000000000000033 /* LocalToolHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalToolHost.swift; sourceTree = "<group>"; };
-		A10000000000000000000036 /* ActionGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionGate.swift; sourceTree = "<group>"; };
-		A10000000000000000000038 /* LocalDesk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDesk.swift; sourceTree = "<group>"; };
-		A10000000000000000000040 /* WakePhrase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakePhrase.swift; sourceTree = "<group>"; };
-		A10000000000000000000042 /* HouseholdRoster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HouseholdRoster.swift; sourceTree = "<group>"; };
-		A10000000000000000000044 /* HistorySearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistorySearch.swift; sourceTree = "<group>"; };
-		A10000000000000000000046 /* DeskLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeskLibrary.swift; sourceTree = "<group>"; };
-		A10000000000000000000048 /* Activity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Activity.swift; sourceTree = "<group>"; };
+		A10000000000000000000025 /* ChatSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Surface/ChatSurface.swift; sourceTree = "<group>"; };
+		A10000000000000000000026 /* Notebook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Desk/Notebook.swift; sourceTree = "<group>"; };
+		A10000000000000000000032 /* CalendarAgenda.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarAgenda.swift; sourceTree = "<group>"; };
+		A10000000000000000000033 /* LocalToolHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Mac/LocalToolHost.swift; sourceTree = "<group>"; };
+		A10000000000000000000036 /* ActionGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Mac/ActionGate.swift; sourceTree = "<group>"; };
+		A10000000000000000000038 /* LocalDesk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Mac/LocalDesk.swift; sourceTree = "<group>"; };
+		A10000000000000000000040 /* WakePhrase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice/WakePhrase.swift; sourceTree = "<group>"; };
+		A10000000000000000000042 /* HouseholdRoster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Desk/HouseholdRoster.swift; sourceTree = "<group>"; };
+		A10000000000000000000044 /* HistorySearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Desk/HistorySearch.swift; sourceTree = "<group>"; };
+		A10000000000000000000046 /* DeskLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Desk/DeskLibrary.swift; sourceTree = "<group>"; };
+		A10000000000000000000048 /* Activity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Desk/Activity.swift; sourceTree = "<group>"; };
+		A10000000000000000000051 /* SurfaceWeather.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Surface/SurfaceWeather.swift; sourceTree = "<group>"; };
+		A10000000000000000000053 /* SurfaceNews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Surface/SurfaceNews.swift; sourceTree = "<group>"; };
+		A10000000000000000000055 /* SurfaceMarkets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Surface/SurfaceMarkets.swift; sourceTree = "<group>"; };
+		A10000000000000000000057 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Surface/JSONValue.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -115,6 +123,10 @@
 				A10000000000000000000044 /* HistorySearch.swift */,
 				A10000000000000000000046 /* DeskLibrary.swift */,
 				A10000000000000000000048 /* Activity.swift */,
+				A10000000000000000000051 /* SurfaceWeather.swift */,
+				A10000000000000000000053 /* SurfaceNews.swift */,
+				A10000000000000000000055 /* SurfaceMarkets.swift */,
+				A10000000000000000000057 /* JSONValue.swift */,
 			);
 			name = TestSupport;
 			path = Sources;
@@ -239,6 +251,10 @@
 				A10000000000000000000045 /* HistorySearch.swift in Sources */,
 				A10000000000000000000047 /* DeskLibrary.swift in Sources */,
 				A10000000000000000000049 /* Activity.swift in Sources */,
+				A10000000000000000000050 /* SurfaceWeather.swift in Sources */,
+				A10000000000000000000052 /* SurfaceNews.swift in Sources */,
+				A10000000000000000000054 /* SurfaceMarkets.swift in Sources */,
+				A10000000000000000000056 /* JSONValue.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

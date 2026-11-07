@@ -234,3 +234,26 @@ enum ArthurPasteboard {
     board.setString(text, forType: .string)
   }
 }
+
+#if DEBUG
+#Preview("Prose") {
+  ArthurProse(text: "Clear this evening. **Cooler** than yesterday, and `standup` stays.")
+    .padding(24)
+    .frame(width: 360, alignment: .topLeading)
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Prose · live") {
+  ArthurProse(text: "Looking that up…", live: true)
+    .padding(24)
+    .frame(width: 360, alignment: .topLeading)
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Code") {
+  ArthurCodeBlock(code: "curl -s http://127.0.0.1:8090/health")
+    .padding(24)
+    .frame(width: 360, alignment: .topLeading)
+    .preferredColorScheme(.dark)
+}
+#endif
