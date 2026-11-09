@@ -51,14 +51,14 @@ struct MarketsCard: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 14)
     .frame(maxWidth: 360, alignment: .leading)
-    .arthurPlate(radius: 20)
+    .arthurPlate(radius: 20, tint: Self.up.opacity(0.45))
   }
 
   private var compactBody: some View {
     HStack(spacing: 10) {
       Image(systemName: "chart.line.uptrend.xyaxis")
         .font(.body)
-        .foregroundStyle(ArthurTheme.accent)
+        .foregroundStyle(Self.up)
         .symbolRenderingMode(.hierarchical)
       VStack(alignment: .leading, spacing: 1) {
         Text(surface.title.isEmpty ? "Markets" : surface.title)
@@ -74,7 +74,7 @@ struct MarketsCard: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .arthurPlate(radius: 16)
+    .arthurPlate(radius: 16, tint: Self.up.opacity(0.45))
   }
 
   private var compactSummary: String {
@@ -102,6 +102,7 @@ struct MarketsCard: View {
             .foregroundStyle(.tertiary)
             .lineLimit(1)
         }
+        .arthurQuietLink()
       } else if !source.title.isEmpty {
         Text(source.title)
           .font(.caption2)

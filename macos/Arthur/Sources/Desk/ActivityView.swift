@@ -58,7 +58,10 @@ struct JobCard: View {
     }
     .padding(compact ? 10 : 14)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .arthurPlate(radius: compact ? 16 : 20)
+    .arthurPlate(
+      radius: compact ? 16 : 20,
+      tint: job.state.needsAttention ? ArthurTheme.error.opacity(0.5) : nil
+    )
     .modifier(CompactCardTap(enabled: compact, action: onTap))
   }
 

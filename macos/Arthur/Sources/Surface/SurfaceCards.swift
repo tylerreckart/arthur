@@ -161,6 +161,7 @@ private struct GenericSurfaceCard: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
             }
+            .arthurQuietLink()
           } else if !source.title.isEmpty {
             Text(source.title)
               .font(.caption2)
@@ -172,7 +173,10 @@ private struct GenericSurfaceCard: View {
     .padding(.horizontal, compact ? 12 : 16)
     .padding(.vertical, compact ? 8 : 14)
     .frame(maxWidth: compact ? .infinity : 360, alignment: .leading)
-    .arthurPlate(radius: compact ? 16 : 20)
+    .arthurPlate(
+      radius: compact ? 16 : 20,
+      tint: awaitsApproval ? ArthurTheme.error.opacity(0.55) : nil
+    )
   }
 }
 

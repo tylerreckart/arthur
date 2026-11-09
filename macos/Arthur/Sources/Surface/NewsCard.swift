@@ -5,6 +5,8 @@ struct NewsCard: View {
   let news: NewsPayload
   var compact = false
 
+  private static let paper = Color(red: 0.93, green: 0.72, blue: 0.38)
+
   var body: some View {
     if compact {
       compactBody
@@ -17,9 +19,9 @@ struct NewsCard: View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-          Image(systemName: "newspaper")
+          Image(systemName: "newspaper.fill")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Self.paper)
             .accessibilityHidden(true)
           Text(surface.title.isEmpty ? "News" : surface.title)
             .font(.system(.subheadline, design: .serif).weight(.semibold))
@@ -51,14 +53,14 @@ struct NewsCard: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 14)
     .frame(maxWidth: 360, alignment: .leading)
-    .arthurPlate(radius: 20)
+    .arthurPlate(radius: 20, tint: Self.paper.opacity(0.55))
   }
 
   private var compactBody: some View {
     HStack(alignment: .top, spacing: 10) {
-      Image(systemName: "newspaper")
+      Image(systemName: "newspaper.fill")
         .font(.body)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Self.paper)
         .padding(.top, 2)
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
@@ -86,7 +88,7 @@ struct NewsCard: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .arthurPlate(radius: 16)
+    .arthurPlate(radius: 16, tint: Self.paper.opacity(0.55))
   }
 
   @ViewBuilder
@@ -119,6 +121,7 @@ struct NewsCard: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     if let url = item.link {
       Link(destination: url) { content }
+        .arthurQuietLink()
     } else {
       content
     }
@@ -135,6 +138,7 @@ struct NewsCard: View {
         Link(destination: url) {
           sourceLabel(source.title.isEmpty ? url.host ?? "Source" : source.title, linked: true)
         }
+        .arthurQuietLink()
       } else if !source.title.isEmpty {
         sourceLabel(source.title, linked: false)
       }

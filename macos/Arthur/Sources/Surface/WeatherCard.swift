@@ -41,13 +41,7 @@ struct WeatherCard: View {
           }
         }
         Spacer(minLength: 8)
-        Image(systemName: WeatherSymbol.systemImage(for: weather.condition))
-          .font(.system(size: 30, weight: .regular))
-          .foregroundStyle(ArthurTheme.accent)
-          .symbolRenderingMode(.hierarchical)
-          .frame(width: 56, height: 56)
-          .background(Color.primary.opacity(0.08), in: Circle())
-          .accessibilityHidden(true)
+        conditionBadge(weather.condition, diameter: 58, symbol: 32)
       }
 
       if hasMeta {
@@ -64,18 +58,12 @@ struct WeatherCard: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 14)
     .frame(maxWidth: 360, alignment: .leading)
-    .arthurPlate(radius: 20)
+    .arthurPlate(radius: 20, tint: WeatherColor.plate(for: weather.condition))
   }
 
   private var compactBody: some View {
     HStack(spacing: 10) {
-      Image(systemName: WeatherSymbol.systemImage(for: weather.condition))
-        .font(.body)
-        .foregroundStyle(ArthurTheme.accent)
-        .symbolRenderingMode(.hierarchical)
-        .frame(width: 28, height: 28)
-        .background(Color.primary.opacity(0.08), in: Circle())
-        .accessibilityHidden(true)
+      conditionBadge(weather.condition, diameter: 28, symbol: 15)
       VStack(alignment: .leading, spacing: 1) {
         Text(place)
           .font(.caption.weight(.semibold))
@@ -90,7 +78,7 @@ struct WeatherCard: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .arthurPlate(radius: 16)
+    .arthurPlate(radius: 16, tint: WeatherColor.plate(for: weather.condition))
   }
 
   private var place: String {
@@ -116,15 +104,32 @@ struct WeatherCard: View {
   private var metaRow: some View {
     HStack(spacing: 14) {
       if let humidity = weather.humidity {
-        Label("\(humidity)%", systemImage: "humidity")
+        metaItem("\(humidity)%", systemImage: "humidity.fill", color: WeatherColor.rain)
       }
       if let wind = windText {
-        Label(wind, systemImage: "wind")
+        metaItem(wind, systemImage: "wind", color: WeatherColor.wind)
       }
     }
     .font(.caption)
-    .foregroundStyle(.secondary)
     .accessibilityElement(children: .combine)
+  }
+
+  private func metaItem(_ title: String, systemImage: String, color: Color) -> some View {
+    HStack(spacing: 4) {
+      Image(systemName: systemImage)
+        .foregroundStyle(color)
+      Text(title)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private func conditionBadge(_ condition: String, diameter: CGFloat, symbol: CGFloat) -> some View {
+    Image(systemName: WeatherSymbol.systemImage(for: condition))
+      .font(.system(size: symbol, weight: .regular))
+      .symbolRenderingMode(.multicolor)
+      .frame(width: diameter, height: diameter)
+      .background(WeatherColor.glow(for: condition), in: Circle())
+      .accessibilityHidden(true)
   }
 
   private var windText: String? {
@@ -173,8 +178,7 @@ struct WeatherCard: View {
         .lineLimit(1)
       Image(systemName: WeatherSymbol.systemImage(for: slot.condition))
         .font(.body)
-        .foregroundStyle(ArthurTheme.accent.opacity(0.92))
-        .symbolRenderingMode(.hierarchical)
+        .symbolRenderingMode(.multicolor)
       Text(slot.temperatureText)
         .font(.caption.monospacedDigit())
         .foregroundStyle(.primary)
@@ -199,6 +203,7 @@ struct WeatherCard: View {
         Link(destination: url) {
           sourceLabel(name, linked: true)
         }
+        .arthurQuietLink()
       } else if !name.isEmpty {
         sourceLabel(name, linked: false)
       }
@@ -226,6 +231,49 @@ struct WeatherCard: View {
     }
     .font(.caption2)
     .foregroundStyle(.tertiary)
+  }
+}
+
+/// Condition colors for the weather plate, the symbol disc, and the meta icons.
+private enum WeatherColor {
+  static let sun = Color(red: 0.98, green: 0.74, blue: 0.28)
+  static let sky = Color(red: 0.36, green: 0.58, blue: 0.92)
+  static let rain = Color(red: 0.32, green: 0.62, blue: 0.98)
+  static let storm = Color(red: 0.58, green: 0.46, blue: 0.95)
+  static let snow = Color(red: 0.68, green: 0.84, blue: 0.98)
+  static let night = Color(red: 0.52, green: 0.54, blue: 0.92)
+  static let fog = Color(red: 0.68, green: 0.74, blue: 0.82)
+  static let wind = Color(red: 0.46, green: 0.82, blue: 0.78)
+
+  static func plate(for condition: String) -> Color {
+    switch kind(condition) {
+    case .night: return night
+    case .storm: return storm
+    case .rain: return rain
+    case .snow: return snow
+    case .fog: return fog
+    case .sun: return sun
+    case .cloud: return sky
+    }
+  }
+
+  static func glow(for condition: String) -> Color {
+    plate(for: condition).opacity(0.42)
+  }
+
+  private enum Kind { case sun, cloud, rain, snow, storm, night, fog }
+
+  private static func kind(_ condition: String) -> Kind {
+    let key = condition.lowercased()
+      .replacingOccurrences(of: "_", with: " ")
+      .replacingOccurrences(of: "-", with: " ")
+    if key.contains("clear night") || key == "clearnight" || key.contains("night") { return .night }
+    if key.contains("lightning") || key.contains("thunder") { return .storm }
+    if key.contains("snow") { return .snow }
+    if key.contains("rain") || key.contains("hail") || key.contains("pouring") { return .rain }
+    if key.contains("fog") { return .fog }
+    if key.contains("partly") || (key.contains("cloud") && !key.contains("sun")) { return .cloud }
+    return .sun
   }
 }
 

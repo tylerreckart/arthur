@@ -17,8 +17,15 @@ enum ArthurTheme {
 extension View {
   /// Liquid Glass plate for a card that floats on the desk or droplet.
   /// The system draws the edge, so this does not add a fill or stroke.
-  func arthurPlate(radius: CGFloat = 20) -> some View {
-    glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+  /// `tint` washes the glass with a card color. It is not a second fill.
+  func arthurPlate(radius: CGFloat = 20, tint: Color? = nil) -> some View {
+    let glass: Glass = tint.map { .regular.tint($0) } ?? .regular
+    return glassEffect(glass, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+  }
+
+  /// A link that stays in the card's text color instead of the system accent.
+  func arthurQuietLink() -> some View {
+    buttonStyle(.plain).tint(.primary)
   }
 
   /// Primary card actions take prominent glass. Secondary actions stay regular.
