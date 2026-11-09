@@ -14,19 +14,24 @@ struct WeatherCard: View {
   }
 
   private var fullBody: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(alignment: .top, spacing: 12) {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text(place)
+          .font(.system(.subheadline, design: .serif).weight(.semibold))
+          .foregroundStyle(.primary)
+        Spacer(minLength: 8)
+        sourceLink
+      }
+
+      HStack(alignment: .center, spacing: 12) {
         VStack(alignment: .leading, spacing: 2) {
-          Text(surface.title.isEmpty ? "Home" : surface.title)
-            .font(.system(.caption, design: .serif).weight(.semibold))
-            .foregroundStyle(.secondary)
           if let temp = weather.temperature {
             Text("\(temp)°")
-              .font(.system(size: 34, weight: .regular, design: .serif))
+              .font(.system(size: 44, weight: .light, design: .serif))
               .monospacedDigit()
               .foregroundStyle(.primary)
           }
-          Text(weather.conditionLabel.isEmpty ? surface.summary : weather.conditionLabel)
+          Text(conditionText)
             .font(.callout)
             .foregroundStyle(.primary)
           if let feel = weather.feelsLike {
@@ -37,31 +42,29 @@ struct WeatherCard: View {
         }
         Spacer(minLength: 8)
         Image(systemName: WeatherSymbol.systemImage(for: weather.condition))
-          .font(.system(size: 28, weight: .regular))
+          .font(.system(size: 30, weight: .regular))
           .foregroundStyle(ArthurTheme.accent)
           .symbolRenderingMode(.hierarchical)
-          .padding(.top, 2)
+          .frame(width: 56, height: 56)
+          .background(Color.primary.opacity(0.08), in: Circle())
+          .accessibilityHidden(true)
       }
 
-      if let extras = metaLine, !extras.isEmpty {
-        Text(extras)
-          .font(.caption)
-          .foregroundStyle(.tertiary)
+      if hasMeta {
+        metaRow
       }
 
       if !weather.hours.isEmpty {
-        forecastStrip(weather.hours, daily: false)
+        forecastBlock(weather.hours, daily: false)
       }
       if !weather.days.isEmpty {
-        forecastStrip(weather.days, daily: true)
+        forecastBlock(weather.days, daily: true)
       }
-
-      sourceRow
     }
-    .padding(.horizontal, 14)
-    .padding(.vertical, 12)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 14)
     .frame(maxWidth: 360, alignment: .leading)
-    .arthurPlate(radius: 16)
+    .arthurPlate(radius: 20)
   }
 
   private var compactBody: some View {
@@ -70,8 +73,11 @@ struct WeatherCard: View {
         .font(.body)
         .foregroundStyle(ArthurTheme.accent)
         .symbolRenderingMode(.hierarchical)
+        .frame(width: 28, height: 28)
+        .background(Color.primary.opacity(0.08), in: Circle())
+        .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 1) {
-        Text(surface.title.isEmpty ? "Home" : surface.title)
+        Text(place)
           .font(.caption.weight(.semibold))
           .foregroundStyle(.secondary)
         Text(compactSummary)
@@ -84,7 +90,15 @@ struct WeatherCard: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .arthurPlate(radius: 14)
+    .arthurPlate(radius: 16)
+  }
+
+  private var place: String {
+    surface.title.isEmpty ? "Home" : surface.title
+  }
+
+  private var conditionText: String {
+    weather.conditionLabel.isEmpty ? surface.summary : weather.conditionLabel
   }
 
   private var compactSummary: String {
@@ -95,61 +109,123 @@ struct WeatherCard: View {
     return weather.conditionLabel
   }
 
-  private var metaLine: String? {
-    var bits: [String] = []
-    if let humidity = weather.humidity {
-      bits.append("Humidity \(humidity)%")
-    }
-    if let wind = weather.windSpeed {
-      let unit = weather.windUnit.isEmpty ? "" : " \(weather.windUnit)"
-      if wind.rounded() == wind {
-        bits.append("Wind \(Int(wind))\(unit)")
-      } else {
-        bits.append("Wind \(String(format: "%.1f", wind))\(unit)")
-      }
-    }
-    return bits.isEmpty ? nil : bits.joined(separator: "  ·  ")
+  private var hasMeta: Bool {
+    weather.humidity != nil || weather.windSpeed != nil
   }
 
-  private func forecastStrip(_ slots: [WeatherSlot], daily: Bool) -> some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 12) {
-        ForEach(slots) { slot in
-          VStack(spacing: 3) {
-            Text(slot.label)
-              .font(.caption2.weight(.semibold))
-              .foregroundStyle(.secondary)
-            Image(systemName: WeatherSymbol.systemImage(for: slot.condition))
-              .font(.caption)
-              .foregroundStyle(ArthurTheme.accent.opacity(0.9))
-              .symbolRenderingMode(.hierarchical)
-            Text(slot.temperatureText)
-              .font(.caption.monospacedDigit())
-              .foregroundStyle(.primary)
-          }
-          .frame(minWidth: daily ? 44 : 36)
-        }
+  private var metaRow: some View {
+    HStack(spacing: 14) {
+      if let humidity = weather.humidity {
+        Label("\(humidity)%", systemImage: "humidity")
       }
+      if let wind = windText {
+        Label(wind, systemImage: "wind")
+      }
+    }
+    .font(.caption)
+    .foregroundStyle(.secondary)
+    .accessibilityElement(children: .combine)
+  }
+
+  private var windText: String? {
+    guard let wind = weather.windSpeed else { return nil }
+    let unit = weather.windUnit.isEmpty ? "" : " \(weather.windUnit)"
+    if wind.rounded() == wind {
+      return "\(Int(wind))\(unit)"
+    }
+    return "\(String(format: "%.1f", wind))\(unit)"
+  }
+
+  private func forecastBlock(_ slots: [WeatherSlot], daily: Bool) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(daily ? "Daily" : "Hourly")
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.tertiary)
+      forecastStrip(slots, daily: daily)
     }
   }
 
   @ViewBuilder
-  private var sourceRow: some View {
-    if let source = surface.sources.first {
-      if let url = source.link {
-        Link(destination: url) {
-          Text(source.title.isEmpty ? url.host ?? "Source" : source.title)
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-            .lineLimit(1)
+  private func forecastStrip(_ slots: [WeatherSlot], daily: Bool) -> some View {
+    if slots.count > 6 {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 4) {
+          ForEach(slots) { slot in
+            forecastCell(slot, daily: daily)
+          }
         }
-      } else if !source.title.isEmpty {
-        Text(source.title)
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-          .lineLimit(1)
+      }
+    } else {
+      HStack(spacing: 4) {
+        ForEach(slots) { slot in
+          forecastCell(slot, daily: daily)
+            .frame(maxWidth: .infinity)
+        }
       }
     }
+  }
+
+  private func forecastCell(_ slot: WeatherSlot, daily: Bool) -> some View {
+    VStack(spacing: 4) {
+      Text(slot.label)
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+      Image(systemName: WeatherSymbol.systemImage(for: slot.condition))
+        .font(.body)
+        .foregroundStyle(ArthurTheme.accent.opacity(0.92))
+        .symbolRenderingMode(.hierarchical)
+      Text(slot.temperatureText)
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.primary)
+        .lineLimit(1)
+    }
+    .frame(minWidth: daily ? 52 : 40)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(forecastLabel(slot))
+  }
+
+  private func forecastLabel(_ slot: WeatherSlot) -> String {
+    [slot.label, slot.conditionLabel, slot.temperatureText]
+      .filter { !$0.isEmpty }
+      .joined(separator: ", ")
+  }
+
+  @ViewBuilder
+  private var sourceLink: some View {
+    if let source = surface.sources.first {
+      let name = sourceName(source)
+      if let url = source.link, !name.isEmpty {
+        Link(destination: url) {
+          sourceLabel(name, linked: true)
+        }
+      } else if !name.isEmpty {
+        sourceLabel(name, linked: false)
+      }
+    }
+  }
+
+  /// Skip a source title that only repeats the place name. Show the host instead.
+  private func sourceName(_ source: SurfaceSource) -> String {
+    let title = source.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let repeatsPlace = title.isEmpty || title.caseInsensitiveCompare(place) == .orderedSame
+    if repeatsPlace {
+      return source.link?.host ?? ""
+    }
+    return title
+  }
+
+  private func sourceLabel(_ title: String, linked: Bool) -> some View {
+    HStack(spacing: 3) {
+      Text(title)
+        .lineLimit(1)
+      if linked {
+        Image(systemName: "arrow.up.right")
+          .font(.system(size: 8, weight: .semibold))
+      }
+    }
+    .font(.caption2)
+    .foregroundStyle(.tertiary)
   }
 }
 
@@ -157,9 +233,7 @@ struct WeatherCard: View {
 private func weatherPreview(compact: Bool, width: CGFloat) -> some View {
   let surface = ArthurPreviews.weatherSurface
   return WeatherCard(surface: surface, weather: WeatherPayload(surface.payload), compact: compact)
-    .padding(24)
-    .frame(width: width, alignment: .topLeading)
-    .preferredColorScheme(.dark)
+    .arthurPreviewDesk(width: width)
 }
 
 #Preview("Weather") {

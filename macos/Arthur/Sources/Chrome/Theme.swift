@@ -15,15 +15,43 @@ enum ArthurTheme {
 }
 
 extension View {
-  /// A card used on the droplet, which is always dark. `primary` is white there.
-  func arthurPlate(radius: CGFloat = 16) -> some View {
-    background(
-      Color.primary.opacity(0.06),
-      in: RoundedRectangle(cornerRadius: radius, style: .continuous)
-    )
-    .overlay {
-      RoundedRectangle(cornerRadius: radius, style: .continuous)
-        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+  /// Liquid Glass plate for a card that floats on the desk or droplet.
+  /// The system draws the edge, so this does not add a fill or stroke.
+  func arthurPlate(radius: CGFloat = 20) -> some View {
+    glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+  }
+
+  /// Primary card actions take prominent glass. Secondary actions stay regular.
+  func arthurAction(prominent: Bool) -> some View {
+    modifier(ArthurActionStyle(prominent: prominent))
+  }
+}
+
+/// State label on a status card. A solid capsule, not a second glass layer.
+struct ArthurStatusChip: View {
+  var label: String
+  var urgent = false
+
+  var body: some View {
+    Text(label)
+      .font(.caption2.weight(.semibold))
+      .padding(.horizontal, 7)
+      .padding(.vertical, 3)
+      .foregroundStyle(urgent ? Color.white : Color.primary)
+      .background(urgent ? ArthurTheme.error : Color.primary.opacity(0.14), in: Capsule())
+      .accessibilityLabel("State: \(label)")
+  }
+}
+
+private struct ArthurActionStyle: ViewModifier {
+  var prominent: Bool
+
+  @ViewBuilder
+  func body(content: Content) -> some View {
+    if prominent {
+      content.buttonStyle(.glassProminent)
+    } else {
+      content.buttonStyle(.glass)
     }
   }
 }

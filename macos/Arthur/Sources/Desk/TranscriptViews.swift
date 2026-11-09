@@ -486,6 +486,8 @@ struct ArthurCopy: View {
                              state: .needsApproval,
                              primaryLabel: surface.actions.first(where: { $0.kind == "approve" || $0.kind == "undo" })?.label ?? "",
                              secondaryLabel: surface.actions.first(where: { $0.kind == "dismiss" })?.label ?? ""),
+                compact: preferCompact,
+                maxCardWidth: preferCompact ? .infinity : 360,
                 onPrimary: { if let a = surface.actions.first(where: { $0.kind == "approve" || $0.kind == "undo" }) { model.resolveSurfaceAction(a) } },
                 onSecondary: { if let a = surface.actions.first(where: { $0.kind == "dismiss" }) { model.resolveSurfaceAction(a) } }
               )

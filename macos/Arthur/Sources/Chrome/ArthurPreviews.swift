@@ -1,6 +1,19 @@
 import SwiftUI
 
 enum ArthurPreviews {
+  /// Dark desk behind a card preview so Liquid Glass has a surface to sample.
+  static var deskBackdrop: LinearGradient {
+    LinearGradient(
+      colors: [
+        Color(red: 0.20, green: 0.21, blue: 0.23),
+        Color(red: 0.10, green: 0.10, blue: 0.11),
+        Color(red: 0.14, green: 0.15, blue: 0.16),
+      ],
+      startPoint: .topLeading,
+      endPoint: .bottomTrailing
+    )
+  }
+
   @MainActor
   static var listening: AppModel {
     let model = AppModel.previewCanvas(phase: .listening)
@@ -105,9 +118,12 @@ enum ArthurPreviews {
 
   static var newsSurface: ChatSurface {
     let iso = ISO8601DateFormatter()
-    func item(_ title: String, _ source: String, _ host: String, _ ago: TimeInterval) -> JSONValue {
+    func item(
+      _ title: String, _ source: String, _ host: String, _ ago: TimeInterval, _ summary: String
+    ) -> JSONValue {
       .object([
         "title": .string(title),
+        "summary": .string(summary),
         "source": .string(source),
         "url": .string("https://\(host)/story"),
         "published_at": .string(iso.string(from: Date().addingTimeInterval(-ago))),
@@ -120,9 +136,12 @@ enum ArthurPreviews {
       payload: .object([
         "topic": .string("desk"),
         "items": .array([
-          item("Harbor fog lifts before noon", "Gazette", "gazette.example", 5_400),
-          item("Market square closes for the parade", "City Desk", "citydesk.example", 28_800),
-          item("Night train adds a late Friday car", "Rail Notes", "railnotes.example", 86_400),
+          item("Harbor fog lifts before noon", "Gazette", "gazette.example", 5_400,
+               "The harbor is clear enough for the morning ferry."),
+          item("Market square closes for the parade", "City Desk", "citydesk.example", 28_800,
+               "Streets around the square stay shut until evening."),
+          item("Night train adds a late Friday car", "Rail Notes", "railnotes.example", 86_400,
+               "The extra car runs after the last scheduled departure."),
         ]),
       ]),
       sources: [SurfaceSource(title: "Feeds", url: "https://feeds.example/news")]
@@ -189,6 +208,16 @@ enum ArthurPreviews {
     ]
     if let low { fields["temperature_low"] = .number(Double(low)) }
     return .object(fields)
+  }
+}
+
+extension View {
+  /// Pins a card on the preview desk so glass samples the backdrop.
+  func arthurPreviewDesk(width: CGFloat) -> some View {
+    padding(24)
+      .frame(width: width, alignment: .topLeading)
+      .background(ArthurPreviews.deskBackdrop)
+      .preferredColorScheme(.dark)
   }
 }
 

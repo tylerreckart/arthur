@@ -8,23 +8,32 @@ struct SurfaceCard: View {
   var preferCompact = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Group {
-        if preferCompact {
-          compact
-        } else {
-          ViewThatFits(in: .horizontal) {
-            full
-            compact
+    Group {
+      if shownActions.isEmpty {
+        card
+      } else {
+        GlassEffectContainer(spacing: 12) {
+          VStack(alignment: .leading, spacing: 8) {
+            card
+            SurfaceActionRow(actions: shownActions, cardTitle: surface.title)
           }
         }
-      }
-      if !surface.actions.isEmpty {
-        SurfaceActionRow(actions: shownActions, cardTitle: surface.title)
       }
     }
     .accessibilityElement(children: .contain)
     .accessibilityLabel(accessibility)
+  }
+
+  @ViewBuilder
+  private var card: some View {
+    if preferCompact {
+      compact
+    } else {
+      ViewThatFits(in: .horizontal) {
+        full
+        compact
+      }
+    }
   }
 
   private var shownActions: [SurfaceAction] {
@@ -77,8 +86,8 @@ private struct SurfaceActionRow: View {
           model.resolveSurfaceAction(action)
         }
         .accessibilityLabel(cardTitle.isEmpty ? action.label : "\(action.label), \(cardTitle)")
+        .arthurAction(prominent: fills(action))
         .controlSize(.small)
-        .modifier(SurfaceActionStyle(prominent: fills(action)))
       }
     }
   }
@@ -88,35 +97,42 @@ private struct SurfaceActionRow: View {
   }
 }
 
-private struct SurfaceActionStyle: ViewModifier {
-  var prominent: Bool
-
-  @ViewBuilder
-  func body(content: Content) -> some View {
-    if prominent {
-      content.buttonStyle(.borderedProminent)
-    } else {
-      content.buttonStyle(.bordered)
-    }
-  }
-}
-
 private struct GenericSurfaceCard: View {
   let surface: ChatSurface
   var compact = false
 
+  private var awaitsApproval: Bool {
+    surface.actions.contains { $0.kind == "approve" || $0.kind == "undo" }
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: compact ? 4 : 8) {
-      if !surface.title.isEmpty {
-        Text(surface.title)
-          .font(.system(compact ? .callout : .body, design: .serif).weight(.semibold))
-          .foregroundStyle(.primary)
+      if !surface.title.isEmpty || awaitsApproval {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          if awaitsApproval {
+            Image(systemName: "checkmark.circle")
+              .font(compact ? .caption : .body)
+              .foregroundStyle(.secondary)
+              .accessibilityHidden(true)
+          }
+          if !surface.title.isEmpty {
+            Text(surface.title)
+              .font(.system(compact ? .callout : .body, design: .serif).weight(.semibold))
+              .foregroundStyle(.primary)
+              .lineLimit(compact ? 2 : 3)
+          }
+          Spacer(minLength: 4)
+          if awaitsApproval {
+            ArthurStatusChip(label: "Needs you", urgent: true)
+          }
+        }
       }
       if !surface.summary.isEmpty {
         Text(surface.summary)
-          .font(.callout)
+          .font(compact ? .caption : .callout)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
+          .lineLimit(compact ? 2 : 8)
       }
       if !compact {
         if !surface.fields.isEmpty {
@@ -153,10 +169,10 @@ private struct GenericSurfaceCard: View {
         }
       }
     }
-    .padding(.horizontal, compact ? 12 : 14)
-    .padding(.vertical, compact ? 8 : 12)
+    .padding(.horizontal, compact ? 12 : 16)
+    .padding(.vertical, compact ? 8 : 14)
     .frame(maxWidth: compact ? .infinity : 360, alignment: .leading)
-    .arthurPlate(radius: compact ? 14 : 16)
+    .arthurPlate(radius: compact ? 16 : 20)
   }
 }
 
@@ -165,9 +181,7 @@ private struct GenericSurfaceCard: View {
 private func surfacePreview(_ surface: ChatSurface, compact: Bool = false, width: CGFloat = 400) -> some View {
   SurfaceCard(surface: surface, preferCompact: compact)
     .environment(AppModel.previewCanvas())
-    .padding(24)
-    .frame(width: width, alignment: .topLeading)
-    .preferredColorScheme(.dark)
+    .arthurPreviewDesk(width: width)
 }
 
 #Preview("Surface card · note") {
@@ -196,5 +210,20 @@ private func surfacePreview(_ surface: ChatSurface, compact: Bool = false, width
 
 #Preview("Surface card · markets") {
   surfacePreview(ArthurPreviews.marketsSurface)
+}
+
+#Preview("Info cards") {
+  ScrollView {
+    VStack(alignment: .leading, spacing: 20) {
+      SurfaceCard(surface: ArthurPreviews.weatherSurface)
+      SurfaceCard(surface: ArthurPreviews.newsSurface)
+      SurfaceCard(surface: ArthurPreviews.approvalSurface)
+    }
+    .padding(24)
+  }
+  .environment(AppModel.previewCanvas())
+  .frame(width: 420, height: 920)
+  .background(ArthurPreviews.deskBackdrop)
+  .preferredColorScheme(.dark)
 }
 #endif

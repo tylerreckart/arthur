@@ -48,10 +48,10 @@ struct MarketsCard: View {
       }
       sourceRow
     }
-    .padding(.horizontal, 14)
-    .padding(.vertical, 12)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 14)
     .frame(maxWidth: 360, alignment: .leading)
-    .arthurPlate(radius: 16)
+    .arthurPlate(radius: 20)
   }
 
   private var compactBody: some View {
@@ -74,7 +74,7 @@ struct MarketsCard: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .arthurPlate(radius: 14)
+    .arthurPlate(radius: 16)
   }
 
   private var compactSummary: String {
@@ -116,9 +116,7 @@ struct MarketsCard: View {
 private func marketsPreview(compact: Bool, width: CGFloat) -> some View {
   let surface = ArthurPreviews.marketsSurface
   return MarketsCard(surface: surface, markets: MarketsPayload(surface.payload), compact: compact)
-    .padding(24)
-    .frame(width: width, alignment: .topLeading)
-    .preferredColorScheme(.dark)
+    .arthurPreviewDesk(width: width)
 }
 
 #Preview("Markets") {
