@@ -56,14 +56,92 @@ struct NewsPayload: Equatable, Hashable {
 private extension NewsItem {
   init?(_ value: JSONValue) {
     let obj = value.object
-    let title = obj["title"]?.displayString ?? ""
+    let source = FeedPlainText.plain(obj["source"]?.displayString ?? "")
+    let title = FeedPlainText.strippingSource(FeedPlainText.plain(obj["title"]?.displayString ?? ""), source: source)
     if title.isEmpty { return nil }
     self.init(
       title: title,
-      summary: obj["summary"]?.displayString ?? "",
-      source: obj["source"]?.displayString ?? "",
+      summary: FeedPlainText.usefulSummary(obj["summary"]?.displayString ?? "", title: title, source: source),
+      source: source,
       url: obj["url"]?.displayString ?? "",
       publishedAt: obj["published_at"]?.displayString ?? ""
     )
+  }
+}
+
+/// Feed blurbs often arrive as escaped markup (`&lt;ol&gt;...`). Turn that
+/// into text, and drop a blurb that only repeats the headline.
+private enum FeedPlainText {
+  static func plain(_ raw: String) -> String {
+    let decoded = decode(decode(raw))
+    return collapse(decode(stripTags(decoded)))
+  }
+
+  static func strippingSource(_ title: String, source: String) -> String {
+    let suffix = " - \(source)"
+    guard !source.isEmpty, title.count > suffix.count else { return title }
+    let end = title.suffix(suffix.count)
+    guard end.lowercased() == suffix.lowercased() else { return title }
+    return title.dropLast(suffix.count).trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  static func usefulSummary(_ raw: String, title: String, source: String) -> String {
+    let text = plain(raw)
+    if text.isEmpty { return "" }
+    let folded = text.lowercased()
+    if folded.contains("<") || folded.contains("http://") || folded.contains("https://") {
+      return ""
+    }
+    var rest = folded
+    let titleFolded = title.lowercased()
+    if !titleFolded.isEmpty {
+      rest = rest.replacingOccurrences(of: titleFolded, with: "")
+    }
+    let sourceFolded = source.lowercased()
+    if !sourceFolded.isEmpty {
+      rest = rest.replacingOccurrences(of: sourceFolded, with: "")
+    }
+    if rest.contains(where: { $0.isLetter || $0.isNumber }) { return text }
+    return ""
+  }
+
+  private static func decode(_ raw: String) -> String {
+    var text = raw
+    let entities = [
+      ("&amp;", "&"),
+      ("&lt;", "<"),
+      ("&gt;", ">"),
+      ("&quot;", "\""),
+      ("&apos;", "'"),
+      ("&#39;", "'"),
+      ("&#x27;", "'"),
+      ("&nbsp;", " "),
+    ]
+    for (from, to) in entities {
+      text = text.replacingOccurrences(of: from, with: to)
+    }
+    return text
+  }
+
+  private static func stripTags(_ raw: String) -> String {
+    var out = ""
+    var inTag = false
+    for ch in raw {
+      if ch == "<" {
+        inTag = true
+        continue
+      }
+      if ch == ">" {
+        inTag = false
+        if let last = out.last, !last.isWhitespace { out.append(" ") }
+        continue
+      }
+      if !inTag { out.append(ch) }
+    }
+    return out
+  }
+
+  private static func collapse(_ raw: String) -> String {
+    raw.split(whereSeparator: \.isWhitespace).joined(separator: " ")
   }
 }

@@ -105,6 +105,7 @@ struct DropletCardRoot: View {
       .overlay {
         RoundedRectangle(cornerRadius: DropletMetrics.corner, style: .continuous)
           .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+          .allowsHitTesting(false)
       }
       .shadow(color: .black.opacity(0.45), radius: 16, y: 8)
       .clipShape(RoundedRectangle(cornerRadius: DropletMetrics.corner, style: .continuous))
@@ -129,6 +130,113 @@ private struct DropletHeightKey: PreferenceKey {
   }
 }
 
+/// Click target for the droplet's close control. SwiftUI `Button` in this
+/// nonactivating panel does not fire: the window will not become key, and the
+/// card's drag gesture keeps the mouse. A short click dismisses. A longer
+/// pull still drives the card drag, including drag-to-dismiss.
+private struct CloseCatcher<Label: View>: View {
+  var session: DropletSession
+  var label: Label
+
+  init(session: DropletSession, @ViewBuilder label: () -> Label) {
+    self.session = session
+    self.label = label()
+  }
+
+  var body: some View {
+    label
+      .overlay { CloseClick(session: session) }
+      .accessibilityAddTraits(.isButton)
+      .accessibilityAction(.default) { session.actions.dismiss() }
+  }
+}
+
+private struct CloseClick: NSViewRepresentable {
+  var session: DropletSession
+
+  func makeNSView(context: Context) -> CloseCatcherView {
+    let view = CloseCatcherView()
+    bind(view)
+    return view
+  }
+
+  func updateNSView(_ view: CloseCatcherView, context: Context) {
+    bind(view)
+  }
+
+  private func bind(_ view: CloseCatcherView) {
+    let session = session
+    view.onClick = { session.actions.dismiss() }
+    view.onPull = { translation in
+      guard !session.talkArmed, !session.closing else { return }
+      guard session.sample(at: Date()).morph > 0.92 else { return }
+      session.updateDrag(translation)
+    }
+    view.onPullEnd = {
+      guard session.dragging else { return }
+      let drop = session.endDrag()
+      if drop > 108, !session.content.live {
+        session.actions.dismiss()
+      }
+    }
+  }
+}
+
+final class CloseCatcherView: NSView {
+  var onClick: () -> Void = {}
+  var onPull: (CGSize) -> Void = { _ in }
+  var onPullEnd: () -> Void = {}
+  private var origin: NSPoint?
+  private var pulling = false
+
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+  override var acceptsFirstResponder: Bool { false }
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    setAccessibilityElement(false)
+  }
+
+  required init?(coder: NSCoder) { nil }
+
+  override func mouseDown(with event: NSEvent) {
+    origin = event.locationInWindow
+    pulling = false
+  }
+
+  override func mouseDragged(with event: NSEvent) {
+    guard let origin else { return }
+    let translation = translation(from: origin, to: event.locationInWindow)
+    guard travel(translation) >= 18 else { return }
+    pulling = true
+    onPull(translation)
+  }
+
+  override func mouseUp(with event: NSEvent) {
+    defer {
+      origin = nil
+      pulling = false
+    }
+    guard let origin else { return }
+    let translation = translation(from: origin, to: event.locationInWindow)
+    if pulling || travel(translation) >= 18 {
+      if !pulling { onPull(translation) }
+      onPullEnd()
+      return
+    }
+    onClick()
+  }
+
+  /// AppKit y grows upward. The card drag treats positive height as downward.
+  private func translation(from start: NSPoint, to end: NSPoint) -> CGSize {
+    CGSize(width: end.x - start.x, height: start.y - end.y)
+  }
+
+  private func travel(_ translation: CGSize) -> CGFloat {
+    hypot(translation.width, translation.height)
+  }
+}
+
 private struct DropletCardBody: View {
   var session: DropletSession
 
@@ -147,14 +255,14 @@ private struct DropletCardBody: View {
         .help("Open the conversation")
         .accessibilityLabel("Open Arthur")
         Spacer(minLength: 0)
-        Button(action: { session.actions.dismiss() }) {
+        // A plain SwiftUI button in this nonactivating panel loses the click:
+        // the window will not become key, and the card drag keeps the mouse.
+        CloseCatcher(session: session) {
           Image(systemName: "xmark")
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(Color.white.opacity(0.82))
             .frame(width: 36, height: 32)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
         .help("Dismiss")
         .accessibilityLabel("Dismiss")
       }
@@ -184,7 +292,11 @@ private struct DropletCardBody: View {
             .accessibilityLabel(content.subtitle)
         }
       } else {
-        SpokenReply(text: content.reply, live: content.replyLive)
+        SpokenReply(
+          text: content.reply,
+          live: content.replyLive,
+          speaking: content.stage == .replying
+        )
           .equatable()
         if content.stage == .thinking || content.stage == .replying, !content.subtitle.isEmpty {
           Text(content.subtitle)
@@ -278,27 +390,114 @@ private struct DropletCardBody: View {
 
 }
 
-/// Arthur's reply. While it is still arriving, keep the newest lines in view.
+/// Arthur's reply. Words arrive one at a time on the last line. The block
+/// stays a few whole lines tall, so the buttons under it are never clipped.
 private struct SpokenReply: View, Equatable {
   var text: String
   var live = false
+  var speaking = false
+
+  /// Close to a conversational pace, so the last word lands as it is spoken.
+  private static let wordsPerSecond = 2.6
+  /// Whole lines. Older lines drop off once the reply is longer than this.
+  private static let lineCount = 4
+
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var shownWords = 0
+  @State private var nextWordAt = Date()
 
   static func == (lhs: SpokenReply, rhs: SpokenReply) -> Bool {
-    lhs.text == rhs.text && lhs.live == rhs.live
+    lhs.text == rhs.text && lhs.live == rhs.live && lhs.speaking == rhs.speaking
+  }
+
+  /// Whitespace words, so the counter matches what we print.
+  private static func tokens(_ text: String) -> [String] {
+    text.split(whereSeparator: \.isWhitespace).map(String.init)
+  }
+
+  /// Letters and digits only, so "sir." and "sir," count as the same word.
+  private static func key(_ word: String) -> String {
+    word.lowercased().filter { $0.isLetter || $0.isNumber }
+  }
+
+  private static func sharedPrefix(_ old: [String], _ new: [String]) -> Int {
+    let count = min(old.count, new.count)
+    var index = 0
+    while index < count, key(old[index]) == key(new[index]) { index += 1 }
+    return index
+  }
+
+  private var words: [String] { Self.tokens(text) }
+
+  private var streams: Bool { (speaking || live) && !reduceMotion }
+
+  private var shownText: String {
+    let source = words
+    let count = streams ? min(shownWords, source.count) : source.count
+    guard count > 0 else { return "" }
+    return source.prefix(count).joined(separator: " ")
   }
 
   var body: some View {
-    Text(text)
+    Text(shownText)
       .font(.system(size: 20, weight: .regular, design: .serif))
       .foregroundStyle(Color.white)
-      .lineLimit(8)
-      .truncationMode(live ? .head : .tail)
       .textSelection(.enabled)
+      .lineLimit(Self.lineCount)
+      .truncationMode(.head)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .transaction { $0.animation = nil }
       .contextMenu {
         Button("Copy") { ArthurPasteboard.copy(text) }
       }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(text)
+      .background { wordClock }
+      .onAppear {
+        guard shownWords == 0 else { return }
+        if streams {
+          shownWords = min(1, words.count)
+          nextWordAt = Date().addingTimeInterval(1.0 / Self.wordsPerSecond)
+        } else {
+          shownWords = words.count
+        }
+      }
+      .onChange(of: text) { old, new in
+        adopt(new, replacing: old)
+      }
+  }
+
+  @ViewBuilder
+  private var wordClock: some View {
+    TimelineView(.animation(minimumInterval: 0.12, paused: !streams || shownWords >= words.count)) { timeline in
+      Color.clear
+        .onChange(of: timeline.date) { _, date in
+          guard streams, shownWords < words.count, date >= nextWordAt else { return }
+          shownWords += 1
+          nextWordAt = date.addingTimeInterval(1.0 / Self.wordsPerSecond)
+        }
+    }
+  }
+
+  /// Keep printing forward. A forming chunk often rewrites the tail
+  /// ("sir." becomes "sir, and"), which is still this reply.
+  private func adopt(_ new: String, replacing old: String) {
+    let newWords = Self.tokens(new)
+    guard streams else {
+      shownWords = newWords.count
+      return
+    }
+    let oldWords = Self.tokens(old)
+    let shared = Self.sharedPrefix(oldWords, newWords)
+    let seen = min(shownWords, oldWords.count)
+    let sameReply = shared > 0 && (shared >= seen || (oldWords.count >= 4 && shared * 2 >= oldWords.count))
+    guard sameReply else {
+      shownWords = min(1, newWords.count)
+      nextWordAt = Date().addingTimeInterval(1.0 / Self.wordsPerSecond)
+      return
+    }
+    if shared < shownWords { shownWords = shared }
+    if shownWords > newWords.count { shownWords = newWords.count }
+    if shownWords == 0, !newWords.isEmpty { shownWords = 1 }
   }
 }
 
@@ -318,6 +517,8 @@ private struct DropletCardPreview: View {
   var body: some View {
     DropletCardBody(session: session)
       .background(Color.black, in: RoundedRectangle(cornerRadius: DropletMetrics.corner, style: .continuous))
+      .fixedSize(horizontal: true, vertical: true)
+      .padding(16)
       .preferredColorScheme(.dark)
   }
 }
@@ -332,6 +533,10 @@ private struct DropletCardPreview: View {
 
 #Preview("Droplet · reply") {
   DropletCardPreview(content: ArthurPreviews.replyDroplet)
+}
+
+#Preview("Droplet · long reply") {
+  DropletCardPreview(content: ArthurPreviews.longReplyDroplet)
 }
 
 #Preview("Droplet · thinking") {

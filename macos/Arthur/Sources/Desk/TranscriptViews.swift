@@ -128,7 +128,10 @@ struct StarterChip: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
     }
-    .buttonStyle(.bordered)
+    .buttonStyle(.plain)
+    .buttonBorderShape(.capsule)
+    .glassEffect(.regular.interactive(), in: Capsule())
+    .clipShape(Capsule())
     .help(title)
   }
 }
@@ -316,7 +319,10 @@ struct ComposerStop: View {
             .foregroundColor(Color(.controlBackgroundColor))
             .padding(5)
     }
-    .glassEffect(.regular.tint(.primary).interactive())
+    .buttonStyle(.plain)
+    .buttonBorderShape(.capsule)
+    .glassEffect(.regular.tint(.primary).interactive(), in: Capsule())
+    .clipShape(Capsule())
     .help("Stop Arthur")
     .accessibilityLabel("Stop")
     .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -336,7 +342,10 @@ struct ComposerCircle: View {
             .foregroundColor(Color(.controlBackgroundColor))
             .padding(5)
     }
-    .glassEffect(.regular.tint(.primary).interactive())
+    .buttonStyle(.plain)
+    .buttonBorderShape(.capsule)
+    .glassEffect(.regular.tint(.primary).interactive(), in: Capsule())
+    .clipShape(Capsule())
     .disabled(!enabled)
   }
 }

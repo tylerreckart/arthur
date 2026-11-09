@@ -2157,7 +2157,15 @@ TurnResult TurnPipeline::run_text_utterance(const std::string& device_id,
     }
     arb_state.tool_started_ms.store(elapsed_now());
     arb_state.saw_tool.store(true);
-    sink.event("working", tool);
+    // agent/parallel finish when the clones return. The desk should
+    // show the combine beat, not "still looking".
+    const char* shown =
+        (tool == "agent" || tool == "parallel") ? "synthesis" : tool.c_str();
+    sink.event("working", shown);
+  };
+  cbs.on_workers = [&](int open) {
+    if (handle->cancel.load()) return;
+    sink.event("working", open > 1 ? "parallel" : open == 1 ? "delegate" : "synthesis");
   };
   cbs.on_done = [&](bool ok, const std::string& content, const std::string& error) {
     arb_state.done_ok = ok;

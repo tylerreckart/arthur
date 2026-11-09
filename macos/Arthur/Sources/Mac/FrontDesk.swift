@@ -8,6 +8,7 @@ enum FrontDesk {
   static var trusted: Bool { AXIsProcessTrusted() }
 
   static func prompt() {
+    guard !trusted else { return }
     let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
     let options = [key: true] as CFDictionary
     _ = AXIsProcessTrustedWithOptions(options)

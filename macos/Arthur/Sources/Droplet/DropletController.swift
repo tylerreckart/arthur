@@ -203,12 +203,28 @@ final class DropletHostingView: NSHostingView<DropletCardRoot> {
   var acceptsHits: () -> Bool = { false }
 
   override func hitTest(_ point: NSPoint) -> NSView? {
-    guard acceptsHits(), let window else { return nil }
+    guard acceptsHits() else { return nil }
     let local = convert(point, from: superview)
+    if let catcher = Self.closeCatcher(in: self, at: local) {
+      return catcher
+    }
+    guard let window else { return nil }
     let windowPoint = convert(local, to: nil)
     let screenPoint = window.convertToScreen(NSRect(origin: windowPoint, size: .zero)).origin
     let rect = cardScreenRect().insetBy(dx: -10, dy: -16)
     guard rect.width > 20, rect.contains(screenPoint) else { return nil }
     return super.hitTest(point)
+  }
+
+  /// The close control sits in the card's top corner. Prefer it even when the
+  /// settled card rect has not caught up, so the xmark is not passed through.
+  private static func closeCatcher(in view: NSView, at point: NSPoint) -> CloseCatcherView? {
+    for subview in view.subviews.reversed() {
+      let local = subview.convert(point, from: view)
+      guard subview.bounds.contains(local) else { continue }
+      if let catcher = subview as? CloseCatcherView { return catcher }
+      if let found = closeCatcher(in: subview, at: local) { return found }
+    }
+    return nil
   }
 }

@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace intercom {
 
@@ -22,5 +23,17 @@ class ToolSpeechGate {
 // Rewrite assistant text so TTS speaks it the way a person would say it:
 // no markdown, no LaTeX, spoken ordinals, compound hyphens (not "minus").
 std::string to_speakable(std::string_view text);
+
+// Open depth>0 streams on one Arbiter turn. `/parallel` children and
+// reconcile JIT clones both show up here; the master (depth 0) does not.
+class DelegationRoster {
+ public:
+  void start(int stream_id, int depth);
+  void end(int stream_id, int depth);
+  int open() const { return static_cast<int>(ids_.size()); }
+
+ private:
+  std::vector<int> ids_;
+};
 
 }  // namespace intercom

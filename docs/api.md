@@ -162,7 +162,7 @@ durable `/mem` facts.
 | Each turn | `POST /v1/conversations/:id/messages` + SSE |
 | `message` | STT transcript only (no voice-intercom suffix) |
 | body | `{ "message", "channel": "voice", "agent_def" }` — `agent_def` includes a fresh local date/time rule each turn |
-| Arthur | `mode: "spoken"`, `intent.mode: "off"`. Spoken cadence is owned by Arbiter's constitution — Arthur's `agent_def` does not restack a sentence-count cap. Durable user facts are searched and written via `/mem`, then used as something Arthur simply knows — never entries, titles, ids, or search hits spoken aloud. |
+| Arthur | `mode: "spoken"`, `intent.mode: "off"`. Spoken cadence is owned by Arbiter's constitution — Arthur's `agent_def` does not restack a sentence-count cap. Durable user facts are searched and written via `/mem`, then used as something Arthur simply knows — never entries, titles, ids, or search hits spoken aloud. Independent parts of one request go out as `/parallel` so Arbiter runs them on ephemeral JIT clones (spawn, work, tear down) and Arthur speaks only the synthesis. |
 | Cancel | `POST /v1/requests/:id/cancel` |
 | Idempotency-Key | Intercom `turn_id` |
 
@@ -224,7 +224,7 @@ context frame is used.
 | `{"type":"done","ok","error"}` | Terminal |
 | `{"type":"speak","kind","run_id","text"}` | Unsolicited speak-back (scheduled reminder) about to stream PCM. `text` is the spoken line when known. |
 | `{"type":"status","phase"}` | `thinking` while waiting on Arbiter (desk clients) |
-| `{"type":"working","tool"}` | Master tool started; value is the tool name |
+| `{"type":"working","tool"}` | Master tool, or a delegation beat. `delegate` is one child stream, `parallel` is two or more JIT clones still open, `synthesis` means they have closed and Arthur is combining the results. Other values are the master tool name. `→ delegating:` status lines are not spoken |
 | `{"type":"said","text"}` | Sentence about to be spoken (same text Kokoro hears) |
 | `{"type":"forming","text"}` | Unspoken answer prefix as tokens arrive, coalesced to about 60 Hz. Desk clients show it immediately; it is not paced to speech |
 | `{"type":"surface","turn_id","surface"}` | Versioned desk card for this turn. Voice-only devices ignore it. |

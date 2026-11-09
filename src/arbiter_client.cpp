@@ -1,6 +1,7 @@
 #include "intercom/arbiter_client.hpp"
 #include "intercom/desk_proxy.hpp"
 #include "intercom/clock.hpp"
+#include "intercom/speakable.hpp"
 #include "intercom/util.hpp"
 
 #include <httplib.h>
@@ -61,7 +62,9 @@ void parse_sse_buffer(std::string& buf,
                       std::string& event_name,
                       const ArbiterStreamCallbacks& cbs,
                       std::string* request_id_out,
-                      bool* got_done) {
+                      bool* got_done,
+                      DelegationRoster* roster,
+                      int* workers_published) {
   for (;;) {
     const auto pos = buf.find("\n\n");
     if (pos == std::string::npos) break;
@@ -109,7 +112,25 @@ void parse_sse_buffer(std::string& buf,
     const bool master_text =
         j.contains("depth") && j["depth"].is_number() && event_depth() == 0;
 
-    if (event_name == "text" && cbs.on_text_delta) {
+    if (event_name == "stream_start" || event_name == "stream_end") {
+      int sid = -1;
+      if (j.contains("stream_id") && j["stream_id"].is_number()) {
+        sid = static_cast<int>(j["stream_id"].get<double>());
+      }
+      const bool have_depth = j.contains("depth") && j["depth"].is_number();
+      int depth = 0;
+      if (have_depth) depth = event_depth();
+      else if (sid > 0) depth = 1;
+      if (roster && sid >= 0) {
+        if (event_name == "stream_start") roster->start(sid, depth);
+        else roster->end(sid, have_depth ? depth : -1);
+        const int n = roster->open();
+        if (workers_published && *workers_published != n) {
+          *workers_published = n;
+          if (cbs.on_workers) cbs.on_workers(n);
+        }
+      }
+    } else if (event_name == "text" && cbs.on_text_delta) {
       if (master_text && j.contains("delta") && j["delta"].is_string()) {
         cbs.on_text_delta(j["delta"].get<std::string>());
       }
@@ -274,6 +295,8 @@ bool ArbiterClient::post_turn(std::int64_t conversation_id,
   std::string request_id;
   bool got_done = false;
   bool aborted = false;
+  DelegationRoster roster;
+  int workers_published = 0;
 
   req.content_receiver = [&](const char* data, size_t len, uint64_t, uint64_t) {
     if (cancel_flag && cancel_flag->load()) {
@@ -286,7 +309,8 @@ bool ArbiterClient::post_turn(std::int64_t conversation_id,
         sse_buf.erase(i, 1);
       }
     }
-    parse_sse_buffer(sse_buf, event_name, cbs, &request_id, &got_done);
+    parse_sse_buffer(sse_buf, event_name, cbs, &request_id, &got_done, &roster,
+                     &workers_published);
     return !got_done;
   };
 
@@ -319,10 +343,12 @@ bool ArbiterClient::post_turn(std::int64_t conversation_id,
     return false;
   }
   if (!got_done) {
-    parse_sse_buffer(sse_buf, event_name, cbs, &request_id, &got_done);
+    parse_sse_buffer(sse_buf, event_name, cbs, &request_id, &got_done, &roster,
+                     &workers_published);
     if (!sse_buf.empty()) {
       sse_buf.append("\n\n");
-      parse_sse_buffer(sse_buf, event_name, cbs, &request_id, &got_done);
+      parse_sse_buffer(sse_buf, event_name, cbs, &request_id, &got_done, &roster,
+                       &workers_published);
     }
   }
   return got_done;

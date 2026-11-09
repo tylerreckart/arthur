@@ -258,11 +258,20 @@ extension AppModel {
   }
 
   func sendEndedUtterance() {
-    if stagedToken != sentToken { publishTurnContext() }
+    let refresh = stagedToken != sentToken
+    if refresh { publishTurnContext() }
     expectingReply = true
     setWork(.findingWords)
     become(.thinking)
-    client.sendEnd()
+    // Repeat a staged shot on the end frame so the utterance still has the
+    // pixels if the earlier context frame left before the grab finished.
+    // An Ask-calendar turn already published its agenda; leave that frame
+    // in place when it already includes this shot.
+    if stagedShot != nil, calendarSharing != .ask || refresh {
+      client.sendEnd(context: turnContext(calendar: immediateCalendarContext()))
+    } else {
+      client.sendEnd()
+    }
     consumeIfSent()
   }
 

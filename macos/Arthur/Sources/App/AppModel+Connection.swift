@@ -9,8 +9,16 @@ import UniformTypeIdentifiers
 extension AppModel {
   func watchFocus() {
     guard !previewCanvas else { return }
-    INFocusStatusCenter.default.requestAuthorization { _ in
-      DispatchQueue.main.async { [weak self] in self?.publishFocus() }
+    let center = INFocusStatusCenter.default
+    switch center.authorizationStatus {
+    case .notDetermined:
+      // This prompt comes back on every launch if it is called after the
+      // user has already answered. Ask only while the choice is still open.
+      center.requestAuthorization { _ in
+        DispatchQueue.main.async { [weak self] in self?.publishFocus() }
+      }
+    default:
+      publishFocus()
     }
   }
 

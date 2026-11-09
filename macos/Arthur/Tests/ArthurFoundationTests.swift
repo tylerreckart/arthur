@@ -103,4 +103,87 @@ final class ArthurFoundationTests: XCTestCase {
       "The weather is fine. It warms up later"
     )
   }
+
+  func testNewsPayloadStripsEncodedMarkup() {
+    let news = NewsPayload(.object([
+      "items": .array([
+        .object([
+          "title": .string("Harbor fog lifts before noon - Gazette"),
+          "source": .string("Gazette"),
+          "url": .string("https://gazette.example/story"),
+          "summary": .string(
+            "&lt;ol&gt;&lt;li&gt;&lt;a href=&quot;https://news.google.com/rss/articles/abc&quot;&gt;Harbor fog lifts before noon&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font&gt;Gazette&lt;/font&gt;&lt;/li&gt;&lt;/ol&gt;"
+          ),
+        ]),
+        .object([
+          "title": .string("Night train adds a car"),
+          "source": .string("Rail Notes"),
+          "summary": .string("&lt;p&gt;The extra car runs after the last departure.&lt;/p&gt;"),
+        ]),
+      ]),
+    ]))
+    XCTAssertEqual(news.items.count, 2)
+    XCTAssertEqual(news.items[0].title, "Harbor fog lifts before noon")
+    XCTAssertEqual(news.items[0].summary, "")
+    XCTAssertEqual(news.items[0].source, "Gazette")
+    XCTAssertEqual(news.items[1].summary, "The extra car runs after the last departure.")
+    XCTAssertFalse(news.items[1].summary.contains("<"))
+  }
+
+  func testVoiceLineStaysUnderASettledReply() {
+    let lines = [
+      DiscussionLine(fromYou: true, text: "What's in the news?"),
+      DiscussionLine(
+        fromYou: false,
+        text: "Here are the top headlines.",
+        turnId: "turn:previous"
+      ),
+    ]
+    let index = VoiceTranscriptOrder.insertionIndex(
+      count: lines.count,
+      isYou: { lines[$0].fromYou },
+      turnId: { lines[$0].turnId },
+      turnIsLive: true,
+      liveKeys: [""]
+    )
+    XCTAssertEqual(index, lines.count)
+
+    let wrongTurn = VoiceTranscriptOrder.insertionIndex(
+      count: lines.count,
+      isYou: { lines[$0].fromYou },
+      turnId: { lines[$0].turnId },
+      turnIsLive: true,
+      liveKeys: ["turn:next"]
+    )
+    XCTAssertEqual(wrongTurn, lines.count)
+  }
+
+  func testVoiceLineSitsAboveTheInFlightReply() {
+    let lines = [
+      DiscussionLine(
+        fromYou: false,
+        text: "Here are the top headlines.",
+        turnId: "turn:previous"
+      ),
+      DiscussionLine(fromYou: false, text: "Markets open higher.", turnId: "turn:next"),
+      DiscussionLine(fromYou: false, text: "Futures are up.", turnId: "turn:next"),
+    ]
+    let index = VoiceTranscriptOrder.insertionIndex(
+      count: lines.count,
+      isYou: { lines[$0].fromYou },
+      turnId: { lines[$0].turnId },
+      turnIsLive: true,
+      liveKeys: ["turn:next"]
+    )
+    XCTAssertEqual(index, 1)
+
+    let idle = VoiceTranscriptOrder.insertionIndex(
+      count: lines.count,
+      isYou: { lines[$0].fromYou },
+      turnId: { lines[$0].turnId },
+      turnIsLive: false,
+      liveKeys: ["turn:next"]
+    )
+    XCTAssertEqual(idle, lines.count)
+  }
 }

@@ -113,7 +113,13 @@ final class IntercomClient: NSObject, URLSessionWebSocketDelegate {
     send(.string(text), failure: "send")
   }
 
-  func sendEnd() { sendJSON(["type": "end"]) }
+  func sendEnd(context: DeskContext? = nil) {
+    var object: [String: Any] = ["type": "end"]
+    if let context, !context.isEmpty {
+      object["context"] = context.wire
+    }
+    sendJSON(object)
+  }
   func sendContext(_ context: DeskContext) {
     guard !context.isEmpty else { return }
     sendJSON(["type": "context", "context": context.wire])

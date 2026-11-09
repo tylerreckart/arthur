@@ -292,17 +292,33 @@ struct ContentView: View {
     }
     let ghost = model.hearingText.trimmingCharacters(in: .whitespacesAndNewlines)
     if !ghost.isEmpty {
-      if var last = clusters.last, last.fromYou, last.speakerName.isEmpty {
-        last.texts.append(ghost)
-        last.liveLast = true
-        clusters[clusters.count - 1] = last
+      // Same rule as the committed voice line: above this turn's reply only.
+      // A settled Arthur cluster keeps its own turn id and stays above.
+      let index = VoiceTranscriptOrder.insertionIndex(
+        count: clusters.count,
+        isYou: { clusters[$0].fromYou },
+        turnId: { clusters[$0].turnId },
+        turnIsLive: model.arthurTurnIsLive,
+        liveKeys: [model.liveArthurTurnId]
+      )
+      let canMerge = index > 0
+        && clusters[index - 1].fromYou
+        && clusters[index - 1].speakerName.isEmpty
+      if canMerge {
+        clusters[index - 1].texts.append(ghost)
+        clusters[index - 1].liveLast = true
       } else {
-        clusters.append(TranscriptCluster(
+        let ghostCluster = TranscriptCluster(
           id: model.hearingLineId,
           fromYou: true,
           texts: [ghost],
           liveLast: true
-        ))
+        )
+        if index >= clusters.count {
+          clusters.append(ghostCluster)
+        } else {
+          clusters.insert(ghostCluster, at: index)
+        }
       }
     }
     let streaming = model.streamingReply

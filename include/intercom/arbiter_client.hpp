@@ -19,6 +19,9 @@ struct ArbiterStreamCallbacks {
   std::function<void(const std::string& delta)> on_text_delta;
   // Master (depth 0) tool_call — name only; do not speak it.
   std::function<void(const std::string& tool)> on_tool_call;
+  // How many delegated or JIT streams are open. Fires when the count
+  // changes, including back to 0 once the last child closes.
+  std::function<void(int open_workers)> on_workers;
   // Terminal done content (full reply) and ok flag.
   std::function<void(bool ok, const std::string& content, const std::string& error)> on_done;
 };

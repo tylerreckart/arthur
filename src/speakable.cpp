@@ -1,5 +1,6 @@
 #include "intercom/speakable.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <string>
 #include <string_view>
@@ -847,6 +848,28 @@ std::string ensure_spoken_stop(std::string s) {
 
 bool is_hspace(char c) { return c == ' ' || c == '\t' || c == '\r'; }
 
+// Arbiter emits "→ delegating: …" as a depth-0 text line after it parses
+// /agent or /parallel. Voice docs: that line is routing chrome, not speech.
+// `complete` is false while the line has no newline yet.
+bool looks_like_delegation(std::string_view raw, bool complete) {
+  while (!raw.empty() && is_hspace(raw.front())) raw.remove_prefix(1);
+  if (raw.empty()) return false;
+  const std::string_view uni = "\xE2\x86\x92 delegating:";
+  const std::string_view ascii = "-> delegating:";
+  const std::string_view mark = raw.front() == '-' ? ascii : uni;
+  if (raw.front() != '-' && static_cast<unsigned char>(raw.front()) != 0xE2) {
+    return false;
+  }
+  if (raw.size() < mark.size()) {
+    if (mark.substr(0, raw.size()) != raw) return false;
+    if (!complete) return true;
+    // Flush: drop a partial marker, not a stray dash.
+    if (raw.front() == '-') return raw.size() >= ascii.size() || raw.size() >= 2;
+    return raw.size() >= 3;
+  }
+  return raw.substr(0, mark.size()) == mark;
+}
+
 std::string lower_copy(std::string_view s) {
   std::string out(s);
   for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -1202,6 +1225,21 @@ std::string take_spoken(std::string* pending, bool flush) {
     // Newlines pass through: blank-line runs carry paragraph breaks that
     // protect_paragraph_breaks turns into a display marker; single
     // newlines flatten to a space later.
+    const bool line_start = i == 0 || s[i - 1] == '\n';
+    if (line_start) {
+      const std::size_t limit = line_limit_of(s, i);
+      const bool complete = limit < s.size() || flush;
+      const std::size_t line_end = complete && limit < s.size() ? limit : s.size();
+      if (looks_like_delegation(s.substr(i, line_end - i), complete)) {
+        if (!complete) {
+          pending->erase(0, i);
+          return out;
+        }
+        i = limit < s.size() ? limit : s.size();
+        if (i < s.size() && s[i] == '\n') ++i;
+        continue;
+      }
+    }
     const std::size_t end = tool_span_end(s, i, flush);
     if (end != std::string_view::npos) {
       i = end;
@@ -1293,6 +1331,17 @@ std::string tighten_punctuation(std::string_view s) {
 }
 
 }  // namespace
+
+void DelegationRoster::start(int stream_id, int depth) {
+  if (depth <= 0 || stream_id < 0) return;
+  if (std::find(ids_.begin(), ids_.end(), stream_id) != ids_.end()) return;
+  ids_.push_back(stream_id);
+}
+
+void DelegationRoster::end(int stream_id, int depth) {
+  if (depth == 0) return;
+  ids_.erase(std::remove(ids_.begin(), ids_.end(), stream_id), ids_.end());
+}
 
 std::string ToolSpeechGate::push(std::string_view delta) {
   held_.append(delta.data(), delta.size());

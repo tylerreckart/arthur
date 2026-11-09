@@ -59,6 +59,36 @@ struct DiscussionLine: Identifiable, Equatable, Codable {
   }
 }
 
+/// Where a new user line belongs in the transcript.
+///
+/// `heard` usually arrives while the next turn is already live and the
+/// previous Arthur reply is still the last line. A later `turn` frame can
+/// also repeat the question after this turn's `said` lines. Only that
+/// in-flight reply — lines whose `turnId` is the bound reply key — sits
+/// below the question. A settled reply keeps its own key and stays above.
+enum VoiceTranscriptOrder {
+  static func insertionIndex(
+    count: Int,
+    isYou: (Int) -> Bool,
+    turnId: (Int) -> String,
+    turnIsLive: Bool,
+    liveKeys: some Sequence<String>
+  ) -> Int {
+    guard turnIsLive, count > 0 else { return count }
+    let keys = Set(liveKeys.filter { !$0.isEmpty })
+    guard !keys.isEmpty else { return count }
+    var index = count
+    while index > 0 {
+      let prior = index - 1
+      if isYou(prior) { break }
+      let key = turnId(prior)
+      guard !key.isEmpty, keys.contains(key) else { break }
+      index = prior
+    }
+    return index
+  }
+}
+
 /// Stitch early-flush / sentence-TTS fragments back into spoken prose.
 ///
 /// Intercom emits one `said` per flushed TTS chunk. `early_flush_words`
@@ -247,6 +277,9 @@ enum WorkState: Equatable {
     let t = tool.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     switch t {
     case "search": return "Looking something up."
+    case "delegate", "agent": return "Getting a second look."
+    case "parallel": return "Looking into a few things at once."
+    case "synthesis": return "Pulling that together."
     case "fetch": return "Reading a page."
     case "browse": return "Looking at a page."
     case "mem": return "Checking what I already know."

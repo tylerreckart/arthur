@@ -18,7 +18,9 @@ extension AppModel {
       if let image {
         stagedShot = image
         stagedToken += 1
-        if holding { publishTurnContext() }
+        // A listen may already have published desk context without this shot.
+        // Push again so the open turn, and the next one, both carry the pixels.
+        publishTurnContext()
       } else if stagedShot == nil {
         screenStaged = false
         LookChrome.hide()
@@ -34,7 +36,7 @@ extension AppModel {
     screenStaged = false
     LookChrome.hide()
     stagedToken += 1
-    if holding { publishTurnContext() }
+    publishTurnContext()
   }
 
   func removeStaged(_ id: UUID) {

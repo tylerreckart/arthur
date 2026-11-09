@@ -10,6 +10,8 @@ extension AppModel {
   /// Voice (and late `turn`) path. Typed sends already appended in `sendDraft`.
   /// `heard` lands first and `turn` repeats the same line after the reply, so
   /// a second append used to place the question under Arthur's answer.
+  /// The splice is only for lines bound to this reply. A settled reply stays
+  /// above the next question even while playback or the next turn is live.
   func commitVoiceTranscript(_ text: String) {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
@@ -40,8 +42,15 @@ extension AppModel {
     }
     let line = DiscussionLine(
       fromYou: true, text: trimmed, id: hearingLineId, speakerName: pendingSpeaker)
-    if let arthurIdx = discussion.indices.last, !discussion[arthurIdx].fromYou, arthurTurnIsLive {
-      discussion.insert(line, at: arthurIdx)
+    let index = VoiceTranscriptOrder.insertionIndex(
+      count: discussion.count,
+      isYou: { discussion[$0].fromYou },
+      turnId: { discussion[$0].turnId },
+      turnIsLive: arthurTurnIsLive,
+      liveKeys: [arthurReplyKey]
+    )
+    if index < discussion.count {
+      discussion.insert(line, at: index)
       persistTranscript()
     } else {
       appendDiscussion(fromYou: true, text: trimmed, id: hearingLineId, speakerName: pendingSpeaker)

@@ -34,6 +34,11 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
   private var beadTimer: Timer?
   private var cardPinned = false
   private var cardFollowing = false
+  /// User closed the card. Auto-follow stays down until they open it, or a
+  /// new utterance / speak-back begins. The current one must not pop it back.
+  private var followPaused = false
+  private var followUtterance = false
+  private var followSpeakBack: UUID?
   private var dismissWork: DispatchWorkItem?
   private var dripWork: DispatchWorkItem?
   private var outsideMonitors: [Any] = []
@@ -443,12 +448,26 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
       model.holding || model.phase == .listening || model.phase == .thinking || model.phase == .speaking
     )
     let incoming = model.speakBack?.live == true
+    let speakBackID = incoming ? model.speakBack?.id : nil
+    // A rising edge is a new utterance or speak-back. The one the user just
+    // closed must not present the card again on the next level or token tick.
+    if utteranceActive && !followUtterance {
+      followPaused = false
+    }
+    if let speakBackID, speakBackID != followSpeakBack {
+      followPaused = false
+    }
+    followUtterance = utteranceActive
+    if let speakBackID {
+      followSpeakBack = speakBackID
+    }
 
     if mainKey && cardFollowing && !cardPinned && droplet.onScreen {
       dismissDroplet()
     }
 
-    if !mainWindowIsKey && (utteranceActive || incoming) {
+    let autoShow = !followPaused && !mainWindowIsKey && (utteranceActive || incoming)
+    if autoShow {
       cardFollowing = true
       if droplet.onScreen && !droplet.session.closing {
         cancelDismiss()
@@ -475,6 +494,22 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     return true
   }
 
+  /// Close control, drag-to-dismiss, outside click, and the menu-bar toggle.
+  /// Keeps the card down through the rest of this utterance or speak-back.
+  private func userDismissDroplet() {
+    guard droplet.onScreen else { return }
+    followPaused = true
+    if let model {
+      followUtterance = model.turnModality == .utterance && (
+        model.holding || model.phase == .listening || model.phase == .thinking || model.phase == .speaking
+      )
+      if model.speakBack?.live == true, let id = model.speakBack?.id {
+        followSpeakBack = id
+      }
+    }
+    dismissDroplet()
+  }
+
   private var mainWindowIsKey: Bool {
     NSApp.windows.contains { window in
       window.isKeyWindow && window.isVisible && !(window is NSPanel) && window.level == .normal
@@ -491,7 +526,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
 
   private func toggle(anchor: NSRect) {
     if droplet.onScreen && !droplet.session.closing {
-      dismissDroplet()
+      userDismissDroplet()
       return
     }
     present(anchor: anchor, drip: false, pinned: true, follow: false)
@@ -503,6 +538,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     pinned: Bool,
     follow: Bool
   ) {
+    followPaused = false
     if let model {
       droplet.update(DropletContent.capture(model))
     }
@@ -533,7 +569,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
       self?.revealMainWindow()
       self?.dismissDroplet()
     }
-    droplet.session.actions.dismiss = { [weak self] in self?.dismissDroplet() }
+    droplet.session.actions.dismiss = { [weak self] in self?.userDismissDroplet() }
     droplet.session.actions.approve = { [weak self] in self?.model?.resolvePendingWrite() }
     droplet.session.actions.look = { [weak self] in self?.model?.lookAtScreen() }
     droplet.session.actions.openActivity = { [weak self] in
@@ -602,7 +638,7 @@ final class DeskAccessory: NSObject, NSMenuDelegate {
     guard card.width > 20 else { return }
     if card.insetBy(dx: -12, dy: -18).contains(mouse) { return }
     if model?.holding == true || model?.phase == .listening { return }
-    dismissDroplet()
+    userDismissDroplet()
   }
 }
 

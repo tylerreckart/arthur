@@ -314,6 +314,37 @@ int main() {
   auto empty_news = intercom::news_from_rss(std::string_view{"<rss></rss>"});
   CHECK(!empty_news.ok);
 
+  // Google News encodes the description as HTML entities. The card should
+  // get the headline, not the <ol><li><a> markup, and should drop a blurb
+  // that only repeats that headline.
+  const char* encoded = R"(<?xml version="1.0"?>
+<rss><channel>
+  <item>
+    <title>Harbor fog lifts before noon - Gazette</title>
+    <link>https://news.google.com/rss/articles/abc</link>
+    <pubDate>Tue, 22 Sep 2026 12:00:00 GMT</pubDate>
+    <description>&lt;ol&gt;&lt;li&gt;&lt;a href=&quot;https://news.google.com/rss/articles/abc&quot;&gt;Harbor fog lifts before noon&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font color=&quot;#6f6f6f&quot;&gt;Gazette&lt;/font&gt;&lt;/li&gt;&lt;/ol&gt;</description>
+    <source url="https://gazette.example">Gazette</source>
+  </item>
+  <item>
+    <title>Night train adds a car</title>
+    <link>https://railnotes.example/story</link>
+    <description>&lt;p&gt;The extra car runs after the last departure.&lt;/p&gt;</description>
+    <source url="https://railnotes.example">Rail Notes</source>
+  </item>
+</channel></rss>)";
+  auto parsed = intercom::news_from_rss(std::string_view{encoded});
+  CHECK(parsed.ok);
+  const auto parsed_wire = intercom::surface_to_json(parsed.surface);
+  CHECK(parsed_wire["payload"]["items"].size() == 2);
+  const auto& first = parsed_wire["payload"]["items"][0];
+  CHECK(first.value("title", "") == "Harbor fog lifts before noon");
+  CHECK(first.value("source", "") == "Gazette");
+  CHECK(!first.contains("summary"));
+  const auto& second = parsed_wire["payload"]["items"][1];
+  CHECK(second.value("summary", "") == "The extra car runs after the last departure.");
+  CHECK(second.value("summary", "").find('<') == std::string::npos);
+
   const char* yahoo = R"({
     "quoteResponse": {
       "result": [

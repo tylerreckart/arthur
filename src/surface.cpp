@@ -730,7 +730,48 @@ std::string xml_text(std::string_view block, std::string_view tag) {
       inner = inner.substr(cdata.size(), cend - cdata.size());
     }
   }
-  return trim(decode_entities(strip_html(inner)));
+  // Google News stores the description as &lt;ol&gt;... Decode before
+  // stripping, or the card shows the tags.
+  return strip_html(decode_entities(inner));
+}
+
+bool summary_is_useful(const std::string& summary, const std::string& title,
+                       const std::string& source) {
+  if (summary.empty()) return false;
+  std::string lower = summary;
+  for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (lower.find('<') != std::string::npos) return false;
+  if (lower.find("http://") != std::string::npos || lower.find("https://") != std::string::npos) {
+    return false;
+  }
+  auto fold = [](std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+  };
+  std::string rest = lower;
+  const std::string title_l = fold(title);
+  if (!title_l.empty()) {
+    std::size_t pos = 0;
+    while ((pos = rest.find(title_l)) != std::string::npos) rest.erase(pos, title_l.size());
+  }
+  const std::string source_l = fold(source);
+  if (!source_l.empty()) {
+    std::size_t pos = 0;
+    while ((pos = rest.find(source_l)) != std::string::npos) rest.erase(pos, source_l.size());
+  }
+  for (unsigned char c : rest) {
+    if (std::isalnum(c)) return true;
+  }
+  return false;
+}
+
+void strip_matching_source(std::string* title, const std::string& source) {
+  if (!title || source.empty()) return;
+  const std::string suffix = " - " + source;
+  if (title->size() > suffix.size() &&
+      title->compare(title->size() - suffix.size(), suffix.size(), suffix) == 0) {
+    *title = trim(title->substr(0, title->size() - suffix.size()));
+  }
 }
 
 std::string xml_attr(std::string_view block, std::string_view tag, std::string_view attr) {
@@ -838,10 +879,12 @@ NewsExtract news_from_rss(std::string_view rss_xml, std::string_view topic, int 
     std::string source = xml_text(item, "source");
     if (source.empty()) source = xml_text(item, "author");
     if (source.empty()) source = split_source_from_title(&title);
+    strip_matching_source(&title, source);
     if (title.empty()) continue;
 
     std::string summary = xml_text(item, "description");
     if (summary.empty()) summary = xml_text(item, "summary");
+    if (!summary_is_useful(summary, title, source)) summary.clear();
     std::string published = xml_text(item, "pubDate");
     if (published.empty()) published = xml_text(item, "published");
     if (published.empty()) published = xml_text(item, "updated");

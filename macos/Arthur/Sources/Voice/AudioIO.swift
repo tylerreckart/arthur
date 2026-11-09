@@ -87,9 +87,21 @@ final class AudioIO: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     return AVCaptureDevice.default(for: .audio)
   }
 
+  /// Asks for the microphone only while the choice is still open.
+  /// `requestAccess` shows the system prompt again on macOS even after the
+  /// user has already allowed it, so an authorized status must not call it.
   func requestMic(_ done: @escaping (Bool) -> Void) {
-    AVCaptureDevice.requestAccess(for: .audio) { ok in
-      DispatchQueue.main.async { done(ok) }
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized:
+      DispatchQueue.main.async { done(true) }
+    case .notDetermined:
+      AVCaptureDevice.requestAccess(for: .audio) { ok in
+        DispatchQueue.main.async { done(ok) }
+      }
+    case .denied, .restricted:
+      DispatchQueue.main.async { done(false) }
+    @unknown default:
+      DispatchQueue.main.async { done(false) }
     }
   }
 

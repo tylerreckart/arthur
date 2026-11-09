@@ -87,6 +87,23 @@ enum ArthurPreviews {
     return content
   }
 
+  static var longReplyDroplet: DropletContent {
+    var content = DropletContent.empty
+    content.stage = .replying
+    content.you = "Give me the top headlines."
+    content.subtitle = "Speaking"
+    content.canCancel = true
+    content.lookLabel = "Look"
+    content.reply = """
+    Here are the top headlines. The first is Congress returns to a long week, \
+    with a deadline on the spending bill and a fight over the leadership races. \
+    The second is a rare rebuke from inside the party, and a demand for a sharper \
+    response. The third is the night train adding a late Friday car so the harbor \
+    crowd can get home after the last scheduled departure.
+    """
+    return content
+  }
+
   static var weatherSurface: ChatSurface {
     ChatSurface(
       kindRaw: SurfaceKind.weather.rawValue,

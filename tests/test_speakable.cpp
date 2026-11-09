@@ -106,6 +106,39 @@ int main() {
   CHECK_EQ(para, "First topic done.\n\nSecond topic here.");
   CHECK_EQ(intercom::to_speakable("one line\nnext line"), "one line next line.");
 
+  // Routing chrome from a /parallel fan-out is not speech, even when the
+  // arrow arrives split across deltas.
+  const std::string delegated = intercom::to_speakable(
+      "One moment.\n\xE2\x86\x92 delegating: /parallel (2 children)\n"
+      "Paris and Berlin.");
+  CHECK(!contains(delegated, "delegating"));
+  CHECK(!contains(delegated, "parallel"));
+  CHECK(contains(delegated, "One moment."));
+  CHECK(contains(delegated, "Paris and Berlin."));
+
+  intercom::ToolSpeechGate route;
+  CHECK_EQ(route.push("Right.\n\xE2\x86"), "Right.\n");
+  CHECK_EQ(route.push("\x92 delegating: /agent scout tides\nThe tide is in."),
+           "The tide is in.");
+  CHECK_EQ(route.flush(), "");
+
+  intercom::DelegationRoster roster;
+  roster.start(0, 0);
+  CHECK(roster.open() == 0);
+  roster.start(1, 1);
+  roster.start(2, 1);
+  roster.start(1, 1);
+  CHECK(roster.open() == 2);
+  roster.end(1, 1);
+  CHECK(roster.open() == 1);
+  roster.end(0, 0);
+  CHECK(roster.open() == 1);
+  roster.end(2, 1);
+  CHECK(roster.open() == 0);
+  roster.start(3, 2);
+  roster.end(3, -1);
+  CHECK(roster.open() == 0);
+
   if (g_fails != 0) {
     std::cerr << g_fails << " failure(s)\n";
     return 1;

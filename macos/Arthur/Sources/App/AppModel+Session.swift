@@ -211,7 +211,8 @@ extension AppModel {
       if let image = file.image { context.images.append(image) }
     }
     if let stagedShot {
-      context.images.append(stagedShot)
+      // Ahead of dropped files, so the two-image cap cannot discard the shot.
+      context.images.insert(stagedShot, at: 0)
       context.sources.append(DeskContext.Source(
         name: "screen",
         text: "A screenshot is attached. They tapped Look. Answer from the image. Do not say you can see the screen live."

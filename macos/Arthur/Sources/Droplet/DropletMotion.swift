@@ -127,12 +127,15 @@ struct DropletContent: Equatable {
 
     let lastArthur = model.discussion.last(where: { !$0.fromYou })
     let streaming = model.streamingReply
+    let committed = model.liveTurnCommittedText
     let replyLive = stage != .listening && !streaming.isEmpty
     let reply: String
     if stage == .listening {
       reply = ""
     } else if replyLive {
-      reply = tail(streaming, 1200)
+      reply = streaming
+    } else if !committed.isEmpty, stage == .replying || stage == .thinking {
+      reply = committed
     } else if stage == .thinking {
       reply = ""
     } else {
@@ -196,7 +199,7 @@ struct DropletContent: Equatable {
       title: title,
       subtitle: subtitle,
       you: clip(you, 280),
-      reply: replyLive ? reply : clip(reply, 700),
+      reply: bound(reply, 2_400),
       noteTitle: card?.title ?? "",
       noteBody: card?.summary ?? "",
       approveLabel: model.pendingWriteLabel,
@@ -215,15 +218,17 @@ struct DropletContent: Equatable {
     )
   }
 
-  /// Latest words, so a long live reply does not lay out from the first sentence.
-  private static func tail(_ text: String, _ limit: Int) -> String {
+  /// Hard stop for a reply that would otherwise lay out without end.
+  /// The droplet reveals it word by word, so this is only a backstop.
+  private static func bound(_ text: String, _ limit: Int) -> String {
     guard text.count > limit else { return text }
-    let start = text.index(text.endIndex, offsetBy: -limit)
-    let clipped = text[start...]
-    guard let breakAt = clipped.firstIndex(where: { $0 == " " || $0 == "\n" }) else {
-      return String(clipped)
+    let end = text.index(text.startIndex, offsetBy: limit)
+    let head = text[..<end]
+    if let breakAt = head.lastIndex(where: { $0 == " " || $0 == "\n" }),
+       text.distance(from: head.startIndex, to: breakAt) > limit / 2 {
+      return String(head[..<breakAt]).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
     }
-    return String(clipped[clipped.index(after: breakAt)...])
+    return String(head).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
   }
 
   private static func clip(_ text: String, _ limit: Int) -> String {
